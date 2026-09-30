@@ -81,6 +81,9 @@ export async function triageRun(o: TriageOptions) {
   o.log('Grouping findings by root cause…');
   const groups = await groupFindings(findings, { intel, repo: info.repo_path, model: config.model, useLlm: o.review !== false, log: o.log });
 
+  // Re-triaging a run must not lose human decisions or fix records made since the last triage.
+  carryOver(o.runDir, findings, o.log);
+
   // History tags (new / recurring / regressed).
   for (const f of findings) f.history_tag = memory.track(info.run_id, f);
 
@@ -92,6 +95,30 @@ export async function triageRun(o: TriageOptions) {
   o.log(`Triage done: ${JSON.stringify(counts)}`);
   o.log(`Report: ${html}`);
   o.log(`Summary: ${md}`);
+}
+
+const KEEP_STATUS = new Set(['confirmed', 'false_positive', 'fixing', 'fixed']);
+
+function carryOver(runDir: string, findings: Finding[], log: (m: string) => void) {
+  let prev: Finding[] = [];
+  try {
+    const ff = readFindings(runDir);
+    prev = ff ? allFindings(ff) : [];
+  } catch {
+    return;
+  }
+  let n = 0;
+  for (const f of findings) {
+    const p = prev.find((x) => x.fingerprint === f.fingerprint) ?? prev.find((x) => x.id === f.id);
+    if (!p) continue;
+    if (p.fix) f.fix = p.fix;
+    if (p.label_note) f.label_note = p.label_note;
+    if (KEEP_STATUS.has(p.status)) {
+      f.status = p.status;
+      n++;
+    }
+  }
+  if (n) log(`Kept ${n} status/label/fix record(s) from the previous triage`);
 }
 
 function assignIds(clusters: Cluster[], memory: Memory): Map<string, string> {
