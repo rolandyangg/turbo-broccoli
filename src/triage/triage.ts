@@ -223,7 +223,7 @@ async function triageCluster(
       steps_original: rep.trace,
     },
     evidence_kind: 'static',
-    screenshots: rel(o.runDir, shots),
+    screenshots: { ...rel(o.runDir, shots), explorer: rep.screenshot ? relative(o.runDir, rep.screenshot) : null },
     source_hints: o.sources ? o.sources.hints({ selector: rep.element.selector, text: rep.element.text, type: rep.type }).map(({ file, line, reason }) => ({ file, line, reason })) : [],
   });
 
@@ -258,7 +258,7 @@ async function triageCluster(
         v = (await recordVideo(minimal, { ...vOpts, params: { paceMs: check.paceMs ?? 1400, holdMs: check.holdMs ?? 3000, settleMs: check.settleMs ?? 3000, slowMo: 150 } }).catch(() => v)) ?? v;
       }
     }
-    if (v) f.video = { ...rel(o.runDir, { mp4: v.mp4, gif: v.gif, webm: v.webm, filmstrip: v.filmstrip, trace: v.trace }), bug_at_ms: v.bug_at_ms };
+    if (v) f.video = { ...rel(o.runDir, { mp4: v.mp4, gif: v.gif, webm: v.webm, filmstrip: v.filmstrip, trace: v.trace }), bug_at_ms: v.bug_at_ms, chapters: v.chapters };
   }
 
   // 6. Executable repro.

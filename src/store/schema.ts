@@ -145,8 +145,10 @@ export const Finding = z.object({
       annotated: z.string().nullable().default(null),
       crop: z.string().nullable().default(null),
       full: z.string().nullable().default(null),
+      /** The explorer agent's own annotated screenshot from the moment it recorded the finding. */
+      explorer: z.string().nullable().default(null),
     })
-    .default(() => ({ annotated: null, crop: null, full: null })),
+    .default(() => ({ annotated: null, crop: null, full: null, explorer: null })),
   video: z
     .object({
       mp4: z.string().nullable(),
@@ -155,6 +157,8 @@ export const Finding = z.object({
       filmstrip: z.string().nullable(),
       trace: z.string().nullable(),
       bug_at_ms: z.number().nullable(),
+      /** Timeline annotations: one per repro step plus the bug moment (ms from video start). */
+      chapters: z.array(z.object({ t_ms: z.number(), step_index: z.number().nullable(), label: z.string(), kind: z.enum(['step', 'bug', 'load']).default('step') })).default([]),
     })
     .nullable()
     .default(null),

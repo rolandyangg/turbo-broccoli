@@ -20,6 +20,7 @@ export interface VideoResult {
   filmstrip: string | null;
   trace: string | null;
   bug_at_ms: number | null;
+  chapters: { t_ms: number; step_index: number | null; label: string; kind: 'step' | 'bug' | 'load' }[];
   frames: string[]; // per-step stills (inputs to the filmstrip)
   bugFrame: string | null;
 }
@@ -45,6 +46,8 @@ export async function recordVideo(
   mkdirSync(tmp, { recursive: true });
   const frames: string[] = [];
   const early: Promise<string | null>[] = [];
+  const chapters: VideoResult['chapters'] = [];
+  const since = (d: import('../replay/driver.js').Driver) => Math.max(0, Date.now() - (d.contextCreatedAt || t0));
   let t0 = 0;
   const caption = (d: import('../replay/driver.js').Driver, text: string) => d.page.evaluate((t) => (window as any).__bugbash?.caption(t), text).catch(() => {});
 
@@ -54,10 +57,11 @@ export async function recordVideo(
     slowMo: p.slowMo,
     beforeStep: async (d, step, i) => {
       if (i === 0) {
-        t0 = Date.now();
+        t0 = d.contextCreatedAt || Date.now();
         await d.context.tracing.start({ screenshots: true, snapshots: true }).catch(() => {});
         // Grab a still the moment each page is parsed, before late content shifts it (shows the "before" state).
         d.page.on('domcontentloaded', () => {
+          chapters.push({ t_ms: since(d), step_index: null, label: 'Page loaded', kind: 'load' });
           const f = join(tmp, `frame-${String(frames.length).padStart(3, '0')}-load.png`);
           early.push(
             d.page
@@ -69,6 +73,7 @@ export async function recordVideo(
         });
       }
       await caption(d, `Step ${i + 1}/${steps.length}: ${describeStep(step)}`);
+      chapters.push({ t_ms: since(d), step_index: i, label: `Step ${i + 1}: ${describeStep(step)}`, kind: 'step' });
       if ('selector' in step && step.selector) await d.page.evaluate((s) => (window as any).__bugbash?.ring(s), step.selector).catch(() => {});
       await d.page.waitForTimeout(p.paceMs / 2);
     },
@@ -103,7 +108,8 @@ export async function recordVideo(
         [o.selector, o.relatedSelector, o.title.slice(0, 60)] as const,
       )
       .catch(() => false);
-    bugAt = t0 ? Date.now() - t0 : null;
+    bugAt = since(driver);
+    chapters.push({ t_ms: bugAt, step_index: null, label: `BUG: ${o.title}`, kind: 'bug' });
     bugFrame = join(tmp, 'frame-bug.png');
     await driver.page.screenshot({ path: bugFrame }).catch(() => (bugFrame = null));
     if (bugFrame) frames.push(bugFrame);
@@ -119,7 +125,7 @@ export async function recordVideo(
     webm = `${base}.webm`;
     renameSync(webmTmp, webm);
   }
-  const result: VideoResult = { webm, mp4: null, gif: null, filmstrip: null, trace: existsSync(join(o.runDir, 'traces', `${o.id}.zip`)) ? join(o.runDir, 'traces', `${o.id}.zip`) : null, bug_at_ms: bugAt, frames, bugFrame };
+  const result: VideoResult = { webm, mp4: null, gif: null, filmstrip: null, trace: existsSync(join(o.runDir, 'traces', `${o.id}.zip`)) ? join(o.runDir, 'traces', `${o.id}.zip`) : null, bug_at_ms: bugAt, chapters: chapters.sort((a, b) => a.t_ms - b.t_ms), frames, bugFrame };
   if (webm) {
     const mp4 = `${base}.mp4`;
     if ((await ff(['-y', '-i', webm, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', '-movflags', '+faststart', mp4])).ok) result.mp4 = mp4;

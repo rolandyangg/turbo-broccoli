@@ -31,6 +31,8 @@ export class Driver {
   viewport: Viewport;
   variant: Variant;
   consoleErrors: string[] = [];
+  /** When the current context was created (video recording starts here). */
+  contextCreatedAt = 0;
   private ownsBrowser = false;
 
   constructor(readonly opts: DriverOptions) {
@@ -64,6 +66,7 @@ export class Driver {
       recordVideo: this.opts.recordVideoDir ? { dir: this.opts.recordVideoDir, size: this.viewport } : undefined,
       ignoreHTTPSErrors: true,
     });
+    this.contextCreatedAt = Date.now();
     await installDetectors(this.context);
     await this.guard.attach(this.context);
     await this.context.route('**/*', async (route) => {
