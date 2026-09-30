@@ -122,3 +122,26 @@ describe('structural root-cause fallback', () => {
     expect(groups.find((g) => g.findings.length === 2)!.findings[0].siblings).toEqual(['BB-2']);
   });
 });
+
+describe('job reporter', () => {
+  it('writes status + events and finishes', async () => {
+    const { JobReporter, listJobs, describeAgentEvent } = await import('../src/jobs/events.js');
+    const { mkdtempSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const root = mkdtempSync(join(tmpdir(), 'bb-jobs-'));
+    const r = new JobReporter(root, 'fix-1', 'fix', { finding_ids: ['BB-0001'] });
+    r.event('worktree', 'Created branch', 'success', { branch: 'bugbash/x' });
+    r.update({ branch: 'bugbash/x' });
+    r.event('attempt:1', 'Edit …/src/a.css', 'agent');
+    r.finish('succeeded', { verified: true, summary: 'ok' });
+    const [j] = listJobs(root);
+    expect(j.state).toBe('succeeded');
+    expect(j.branch).toBe('bugbash/x');
+    expect(j.stage).toBe('done'); // agent events never change the stage
+    const events = readFileSync(join(root, 'fix-1', 'events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(events.map((e) => e.stage)).toEqual(['worktree', 'attempt:1', 'done']);
+    const d = describeAgentEvent({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: '/repo/src/styles/app.css' } }, { type: 'text', text: 'Fixed it.' }] } });
+    expect(d.map((x) => x.msg)).toEqual(['Edit …/styles/app.css', 'Fixed it.']);
+  });
+});

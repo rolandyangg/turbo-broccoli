@@ -26,6 +26,7 @@ export interface CampaignOptions {
   log: (msg: string) => void;
   /** Skip the lead agent and run a fixed default plan (for debugging / cheap runs). */
   noLead?: boolean;
+  onProgress?: (state: { jobs: { id: string; status: string }[]; decisions: string[] }) => void;
 }
 
 export interface ExplorerJob {
@@ -91,6 +92,25 @@ export class Campaign {
     return this.o.config;
   }
 
+  /** Live campaign state for UIs: rewritten on every change. */
+  persist(phase: 'running' | 'finished' = 'running') {
+    const left = this.budgetLeft();
+    const state = {
+      phase,
+      updated_at: new Date().toISOString(),
+      started_at: new Date(this.startedAt).toISOString(),
+      stop_reason: this.stopReason,
+      decisions: this.decisions,
+      budget: { sessions_total: this.cfg.budgetSessions, sessions_left: left.sessions, minutes_left: Math.round(left.timeMs / 60000), parallel: this.cfg.parallel },
+      unique_findings: this.seenFps.size,
+      jobs: this.jobs.map((j) => ({ id: j.id, kind: j.kind, goal: j.goal, persona: j.persona, browser: j.browser, pages: j.pages, status: j.status, started_at: j.startedAt ? new Date(j.startedAt).toISOString() : null, ended_at: j.endedAt ? new Date(j.endedAt).toISOString() : null, new_findings: j.newFindings ?? null, total_findings: j.totalFindings ?? null, tool_calls: j.result?.toolCalls ?? null, summary: j.result?.summary ?? null, error: j.result?.error ?? null })),
+    };
+    try {
+      writeFileSync(join(this.o.runDir, 'campaign.json'), JSON.stringify(state, null, 2));
+    } catch {}
+    this.o.onProgress?.(state);
+  }
+
   private budgetLeft() {
     const spawned = this.jobs.length;
     const timeLeft = this.cfg.timeLimitMs - (Date.now() - this.startedAt);
@@ -120,6 +140,7 @@ export class Campaign {
       status: 'queued',
     };
     this.jobs.push(job);
+    this.persist();
     this.o.log(`▶ ${job.id} [${job.browser}${job.persona ? '/' + job.persona : ''}] ${job.goal.slice(0, 100)}`);
     this.pump();
     return job;
@@ -132,6 +153,7 @@ export class Campaign {
       this.running++;
       next.status = 'running';
       next.startedAt = Date.now();
+      this.persist();
       this.runExplorer(next)
         .catch((e) => {
           next.status = 'failed';
@@ -142,6 +164,7 @@ export class Campaign {
           next.endedAt = Date.now();
           this.accountFindings(next);
           this.o.log(`■ ${next.id} ${next.status} — ${next.newFindings ?? 0} new / ${next.totalFindings ?? 0} findings, ${next.result?.toolCalls ?? 0} tool calls, ${Math.round((next.result?.durationMs ?? 0) / 1000)}s`);
+          this.persist();
           this.waiters.splice(0).forEach((w) => w());
           this.pump();
         });
@@ -333,6 +356,7 @@ export class Campaign {
       } catch (e) {
         out = { error: String(e) };
       }
+      if (req.url === '/note' || req.url === '/stop') this.persist();
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out));
     });
     await new Promise<void>((r) => this.server!.listen(port, '127.0.0.1', () => r()));
@@ -342,6 +366,12 @@ export class Campaign {
   // ---------------- entry point ----------------
 
   async run(): Promise<CampaignResult> {
+    const r = await this.runInner();
+    this.persist('finished');
+    return r;
+  }
+
+  private async runInner(): Promise<CampaignResult> {
     if (this.o.noLead) {
       this.defaultPlan();
       await this.awaitAll();

@@ -15,6 +15,7 @@ export interface ExploreOptions {
   noLead?: boolean;
   codeIntel?: boolean;
   log: (m: string) => void;
+  onRun?: (runDir: string, runId: string) => void;
 }
 
 export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; runId: string; workspace: string }> {
@@ -43,6 +44,7 @@ export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; r
     stages: { explore: { at: new Date().toISOString(), note: intel ? 'white-box (code intel)' : 'black-box' } },
   };
   writeRun(runDir, info);
+  o.onRun?.(runDir, runId);
   log(`Run ${runId} → ${runDir}`);
   log(intel ? `Code intel: ${intel.breakpoints.length} breakpoints, ${intel.risky.length} risky rules, ${intel.components.length} shared components, ${intel.hypotheses.length} hypothesis seeds` : 'Black-box mode (no source).');
 

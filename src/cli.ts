@@ -10,6 +10,23 @@ import { Memory } from './memory/siteMemory.js';
 import { fitCalibration, saveCalibration } from './memory/calibration.js';
 import { BrowserName, FindingStatus, type RootCauseGroup } from './store/schema.js';
 import { writeReport } from './store/report.js';
+import { workspaceFor } from './store/store.js';
+import { JobReporter, newJobId } from './jobs/events.js';
+
+/** Creates a job reporter and a logger that writes to both stderr and the job's event stream. */
+function jobLogger(root: string, id: string | undefined, kind: 'explore' | 'triage', init: Record<string, unknown>) {
+  const rep = new JobReporter(join(root, 'jobs'), id ?? newJobId(kind), kind, init);
+  const stageOf = (m: string) => (m.startsWith('▶') ? 'session-start' : m.startsWith('■') ? 'session-end' : /^Triage|^\s+\[\d+\/\d+\]|Grouping|Report:|Summary:/.test(m) ? 'triage' : kind);
+  const logf = (m: string) => {
+    console.error(`[bugbash] ${m}`);
+    rep.event(stageOf(m), m.trim(), /error|failed/i.test(m) ? 'warn' : m.startsWith('■') ? 'success' : 'info');
+  };
+  process.on('SIGTERM', () => {
+    rep.finish('cancelled', { error: 'cancelled' });
+    process.exit(143);
+  });
+  return { rep, logf };
+}
 
 const log = (m: string) => console.error(`[bugbash] ${m}`);
 const int = (v: string) => parseInt(v, 10);
@@ -68,16 +85,22 @@ const exploreOpts = (c: Command) =>
 
 exploreOpts(program.command('explore').description('Agentically bug-bash a site (lead agent + explorer agents across sizes, browsers, personas)').argument('<target>', 'URL, local static folder, or local repo with a dev/start script'))
   .option('--then-triage', 'Run triage right after exploring')
+  .option('--job <id>', 'Job id for progress events (used by the web app)')
   .action(async (targetArg: string, o) => {
     const target = await resolveTarget(targetArg, { repo: o.repo, devCommand: o.devCommand, devPort: o.devPort, log });
+    const ws = workspaceFor(target.repoPath, o.out);
+    const { rep, logf } = jobLogger(ws, o.job, 'explore', { options: { target: targetArg, repo: o.repo ?? null, thenTriage: !!o.thenTriage, browsers: o.browsers ?? null, budgetSessions: o.budgetSessions ?? null, noLead: o.lead === false, codeIntel: o.codeIntel !== false } });
     try {
-      const { runDir, runId } = await exploreRun({ targetArg, target, out: o.out, overrides: overrides(o), noLead: o.lead === false, codeIntel: o.codeIntel, log });
+      const { runDir } = await exploreRun({ targetArg, target, out: ws, overrides: overrides(o), noLead: o.lead === false, codeIntel: o.codeIntel, log: logf, onRun: (runDir) => rep.update({ run_dir: runDir }) });
       rememberRun(runDir);
       if (o.thenTriage) {
         const { triageRun } = await import('./triage/triage.js');
-        await triageRun({ runDir, baseUrl: target.baseUrl, log });
-      } else log(`Next: bugbash triage --run ${runDir}`);
-      void runId;
+        await triageRun({ runDir, baseUrl: target.baseUrl, log: logf });
+      } else logf(`Next: bugbash triage --run ${runDir}`);
+      rep.finish('succeeded', { summary: o.thenTriage ? 'Explored and triaged' : 'Explored' });
+    } catch (e) {
+      rep.finish('failed', { error: (e as Error).message });
+      throw e;
     } finally {
       await target.stop();
     }
@@ -93,14 +116,20 @@ program
   .option('--no-review', 'Skip the independent LLM review and LLM root-cause grouping')
   .option('--repro-runs <n>', 'Replays per finding for the reproduction rate', int, 3)
   .option('--concurrency <n>', 'Findings triaged in parallel', int, 3)
+  .option('--job <id>', 'Job id for progress events (used by the web app)')
   .action(async (o) => {
     const runDir = findRunDir(o);
     rememberRun(runDir);
     const info = readRun(runDir);
-    const target = await resolveTarget(o.target ?? (info.target_kind === 'url' ? info.base_url : info.repo_path ?? info.target), { repo: info.repo_path, log });
+    const { rep, logf } = jobLogger(runDir, o.job, 'triage', { run_dir: runDir, options: { video: o.video !== false, review: o.review !== false } });
+    const target = await resolveTarget(o.target ?? (info.target_kind === 'url' ? info.base_url : info.repo_path ?? info.target), { repo: info.repo_path, log: logf });
     try {
       const { triageRun } = await import('./triage/triage.js');
-      await triageRun({ runDir, baseUrl: target.baseUrl, log, video: o.video !== false, review: o.review !== false, reproRuns: o.reproRuns, concurrency: o.concurrency });
+      await triageRun({ runDir, baseUrl: target.baseUrl, log: logf, video: o.video !== false, review: o.review !== false, reproRuns: o.reproRuns, concurrency: o.concurrency });
+      rep.finish('succeeded', { summary: 'Triage complete' });
+    } catch (e) {
+      rep.finish('failed', { error: (e as Error).message });
+      throw e;
     } finally {
       await target.stop();
     }
@@ -118,10 +147,11 @@ program
   .option('--max-attempts <n>', 'Fix/verify attempts', int, 3)
   .option('--keep-worktree', 'Keep the git worktree after finishing')
   .option('--no-pr-assets', 'Do not commit before/after images for the PR description')
+  .option('--job <id>', 'Job id for progress events (used by the web app)')
   .action(async (ids: string[], o) => {
     const runDir = findRunDir(o);
     const { fixFindings } = await import('./fix/fixGroup.js');
-    await fixFindings({ runDir, ids: ids.map((x) => x.toUpperCase()), pr: !!o.pr, draft: !!o.draft, base: o.base, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, prAssets: o.prAssets !== false, log });
+    await fixFindings({ runDir, ids: ids.map((x) => x.toUpperCase()), pr: !!o.pr, draft: !!o.draft, base: o.base, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, prAssets: o.prAssets !== false, log, jobId: o.job });
   });
 
 program
@@ -168,6 +198,7 @@ program
   .option('--note <text>', 'Why')
   .option('--no-pattern', 'For false_positive: do not create a suppression pattern')
   .option('--pattern-scope <scope>', 'false_positive pattern scope: element (default) | component | type-on-page', 'element')
+  .option('--json', 'Print the updated finding as JSON')
   .action((id: string, status: string, o) => {
     const runDir = findRunDir(o);
     const info = readRun(runDir);
@@ -201,7 +232,8 @@ program
     }
     writeFindings(runDir, { run_id: ff.run_id, target: ff.target, generated_at: ff.generated_at, groups: ff.groups });
     writeReport(runDir);
-    log(`${f.id} → ${st}`);
+    if (o.json) console.log(JSON.stringify(f));
+    else log(`${f.id} → ${st}`);
   });
 
 program
@@ -212,6 +244,7 @@ program
   .option('--run <id|path>')
   .option('--out <dir>')
   .option('--summary <text>', 'Summary for a new group')
+  .option('--json', 'Print the updated finding as JSON')
   .action((id: string, group: string, o) => {
     const runDir = findRunDir(o);
     const ff = readFindings(runDir)!;
@@ -231,7 +264,8 @@ program
     for (const g of groups) for (const f of g.findings) f.siblings = g.findings.filter((x) => x.id !== f.id).map((x) => x.id);
     writeFindings(runDir, { run_id: ff.run_id, target: ff.target, generated_at: ff.generated_at, groups });
     writeReport(runDir);
-    log(`${hit.finding.id} → ${target.id}`);
+    if (o.json) console.log(JSON.stringify(hit.finding));
+    else log(`${hit.finding.id} → ${target.id}`);
   });
 
 program

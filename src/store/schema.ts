@@ -172,9 +172,11 @@ export const Finding = z.object({
   fix: z
     .object({
       branch: z.string(),
+      base: z.string().nullable().default(null),
       pr_url: z.string().nullable(),
       verified: z.boolean(),
       fixed_by: z.string().nullable().default(null), // finding/group id whose fix resolved this
+      job_id: z.string().nullable().default(null),
       at: z.string(),
     })
     .nullable()

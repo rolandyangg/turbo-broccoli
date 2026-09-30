@@ -10,6 +10,7 @@ import { BrowserPool } from '../triage/replay.js';
 import { verifyFinding, captureAfter, pageSnapshot, type VerifyResult } from './verify.js';
 import { Memory } from '../memory/siteMemory.js';
 import { writeReport } from '../store/report.js';
+import { JobReporter, newJobId, describeAgentEvent, type JobEvent } from '../jobs/events.js';
 
 export interface FixOptions {
   runDir: string;
@@ -21,6 +22,7 @@ export interface FixOptions {
   keepWorktree: boolean;
   prAssets: boolean;
   log: (m: string) => void;
+  jobId?: string | null;
 }
 
 const git = (cwd: string, args: string[]) => execa('git', args, { cwd, reject: false });
@@ -36,6 +38,35 @@ const slug = (s: string) =>
     .slice(0, 40);
 
 export async function fixFindings(o: FixOptions) {
+  const rep = new JobReporter(join(o.runDir, 'jobs'), o.jobId ?? newJobId('fix'), 'fix', {
+    run_dir: o.runDir,
+    finding_ids: o.ids,
+    scope: o.ids.join(','),
+    options: { pr: o.pr, draft: o.draft, base: o.base ?? null, maxAttempts: o.maxAttempts, prAssets: o.prAssets },
+  });
+  const say = (stage: string, msg: string, level: JobEvent['level'] = 'info', data?: Record<string, unknown>) => {
+    if (level !== 'agent') o.log(msg);
+    rep.event(stage, msg, level, data);
+  };
+  process.on('SIGTERM', () => {
+    rep.finish('cancelled', { error: 'cancelled' });
+    process.exit(143);
+  });
+  try {
+    const r = await fixInner(o, rep, say);
+    rep.finish('succeeded', { verified: r.verified, pr_url: r.prUrl, also_fixed: r.alsoFixed, summary: r.verified ? 'Fixed and verified' : 'Committed, but not fully verified' });
+    return r;
+  } catch (e) {
+    const msg = (e as Error).message;
+    rep.finish('failed', { error: msg });
+    throw e;
+  }
+}
+
+type Say = (stage: string, msg: string, level?: JobEvent['level'], data?: Record<string, unknown>) => void;
+
+async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
+  say('resolve', `Resolving scope ${o.ids.join(', ')}`);
   const info = readRun(o.runDir);
   const config = Config.parse(info.config);
   const ff = readFindings(o.runDir);
@@ -70,14 +101,18 @@ export async function fixFindings(o: FixOptions) {
   const worktree = join(dirname(gitRoot), `${basename(gitRoot)}-bugbash-worktrees`, branch.replace(/\//g, '__'));
   const appDir = join(worktree, relative(gitRoot, repo));
 
-  o.log(`Fixing ${selected.map((f) => f.id).join(', ')} (${scopeIsGroup ? 'whole group' : 'selected findings'}) on branch ${branch}`);
+  rep.update({ finding_ids: selected.map((f) => f.id), scope: scopeLabel, branch, base: baseBranch, worktree });
+  say('worktree', `Fixing ${selected.map((f) => f.id).join(', ')} (${scopeIsGroup ? 'whole group' : 'selected findings'}) on branch ${branch} from ${baseBranch}`, 'info', { branch, base: baseBranch, worktree, findings: selected.map((f) => f.id), group_scope: scopeIsGroup });
   if (existsSync(worktree)) throw new Error(`Worktree already exists: ${worktree} (remove it or use a different scope)`);
+  if ((await git(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`])).exitCode === 0) throw new Error(`Branch ${branch} already exists (delete it or fix a different scope)`);
   const wt = await git(gitRoot, ['worktree', 'add', '-b', branch, worktree, baseBranch]);
   if (wt.exitCode !== 0) throw new Error(`git worktree add failed: ${wt.stderr}`);
+  say('worktree', `Created branch ${branch} in worktree`, 'success', { branch, worktree });
+  markFixing(o.runDir, selected.map((f) => f.id), { branch, base: baseBranch, job_id: rep.status.id, scope: scopeLabel });
   // Reuse dependencies so the dev server can start in the worktree.
   if (existsSync(join(repo, 'node_modules')) && !existsSync(join(appDir, 'node_modules'))) symlinkSync(join(repo, 'node_modules'), join(appDir, 'node_modules'), 'dir');
 
-  const target = await resolveTarget(appDir, { devCommand: config.devCommand, devPort: null, log: o.log });
+  const target = await resolveTarget(appDir, { devCommand: config.devCommand, devPort: null, log: (m) => say('server', m) });
   const pool = new BrowserPool();
   const vo = { baseUrl: target.baseUrl, guardrails: config.guardrails, pool };
   const groupMembers = [...new Set([...groups.values()].flatMap((g) => g.findings))].filter((f) => !selected.includes(f));
@@ -90,7 +125,7 @@ export async function fixFindings(o: FixOptions) {
     // ---- baseline: confirm the bug is present in the worktree ----
     const before: VerifyResult[] = [];
     for (const f of selected) before.push(await verifyFinding(f, vo));
-    for (const b of before) o.log(`  baseline ${b.id}: ${b.present === null ? 'not auto-verifiable (visual)' : b.present ? 'present ✓' : 'NOT present (already fixed or not reproducible here)'}`);
+    for (const b of before) say('baseline', `Baseline ${b.id}: ${b.present === null ? 'not auto-verifiable (visual)' : b.present ? 'present ✓' : 'NOT present (already fixed or not reproducible here)'}`, b.present === false ? 'warn' : 'info', { result: b });
     const baselineSnap = new Map<string, Awaited<ReturnType<typeof pageSnapshot>>>();
     for (const p of touchedPages) baselineSnap.set(p, await pageSnapshot(p, vo));
 
@@ -101,8 +136,11 @@ export async function fixFindings(o: FixOptions) {
     let agentSummary = '';
     let attempt = 0;
     for (attempt = 1; attempt <= o.maxAttempts; attempt++) {
-      o.log(`  attempt ${attempt}/${o.maxAttempts}: running fix agent…`);
+      say(`attempt:${attempt}`, `Attempt ${attempt}/${o.maxAttempts}: fix agent is working…`, 'info', { attempt, feedback: feedback ? feedback.slice(0, 2000) : null });
       const r = await runClaude({
+        onEvent: (e) => {
+          for (const d of describeAgentEvent(e)) say(`attempt:${attempt}`, d.msg, 'agent', d.data);
+        },
         prompt: fixPrompt(selected, [...groups.values()], groupMembers, scopeIsGroup, o.runDir, feedback),
         systemPrompt: FIX_SYSTEM,
         tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write'],
@@ -114,7 +152,8 @@ export async function fixFindings(o: FixOptions) {
         transcriptPath: join(assetsDir, `agent-attempt-${attempt}.jsonl`),
       });
       agentSummary = r.text;
-      if (!r.ok) o.log(`  fix agent error: ${r.error}`);
+      if (!r.ok) say(`attempt:${attempt}`, `Fix agent error: ${r.error}`, 'warn');
+      else say(`attempt:${attempt}`, 'Fix agent finished', 'info', { summary: r.text.slice(0, 3000), tool_calls: r.toolCalls, duration_ms: r.durationMs });
       await new Promise((res) => setTimeout(res, 1500)); // let dev servers hot-reload
       after = [];
       for (const f of selected) after.push(await verifyFinding(f, vo));
@@ -125,7 +164,8 @@ export async function fixFindings(o: FixOptions) {
       }
       const still = after.filter((a) => a.present);
       const diff = (await git(worktree, ['diff', '--stat'])).stdout.trim();
-      o.log(`  verify: ${after.map((a) => `${a.id}=${a.present === null ? 'visual' : a.present ? 'STILL PRESENT' : 'fixed'}`).join(' ')}; regressions: ${regressions.length}; diff: ${diff.split('\n').pop() ?? 'none'}`);
+      const ok = !!diff && !still.length && !regressions.length;
+      say(`verify:${attempt}`, `Verify: ${after.map((a) => `${a.id}=${a.present === null ? 'visual' : a.present ? 'STILL PRESENT' : 'fixed'}`).join(' ')}; regressions: ${regressions.length}; diff: ${diff.split('\n').pop() || 'none'}`, ok ? 'success' : 'warn', { after, regressions, diff_stat: diff });
       if (!diff) feedback = 'No files were changed. Make the fix.';
       else if (still.length || regressions.length)
         feedback = [
@@ -145,9 +185,11 @@ export async function fixFindings(o: FixOptions) {
       const r = await verifyFinding(m, vo);
       if (r.present === false) alsoFixed.push(m.id);
     }
+    if (groupMembers.length) say('also-fixed', alsoFixed.length ? `Also resolves ${alsoFixed.join(', ')}` : 'No other findings in the group were resolved', 'info', { also_fixed: alsoFixed });
 
     // ---- evidence ----
     for (const f of selected) await captureAfter(f, join(assetsDir, `${f.id}-after.png`), vo).catch(() => {});
+    say('evidence', 'Captured after-fix screenshots', 'info', { after_shots: selected.map((f) => relative(o.runDir, join(assetsDir, `${f.id}-after.png`))) });
 
     // ---- commit ----
     const title = scopeIsGroup ? groups.get(o.ids[0])!.summary : selected.length === 1 ? selected[0].title : `${selected.length} UI fixes: ${selected.map((f) => f.id).join(', ')}`;
@@ -155,7 +197,8 @@ export async function fixFindings(o: FixOptions) {
     await git(worktree, ['add', '-A', '--', '.', ':(exclude)node_modules']);
     const c = await git(worktree, ['commit', '-m', commitMsg]);
     if (c.exitCode !== 0) throw new Error(`git commit failed: ${c.stderr || c.stdout}`);
-    o.log(`  committed on ${branch}`);
+    const sha = (await git(worktree, ['rev-parse', 'HEAD'])).stdout.trim();
+    say('commit', `Committed ${sha.slice(0, 8)} on ${branch}`, 'success', { sha, message: commitMsg.split('\n')[0] });
 
     // ---- PR ----
     let prUrl: string | null = null;
@@ -175,6 +218,7 @@ export async function fixFindings(o: FixOptions) {
         const nwo = (await execa('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'], { cwd: worktree, reject: false })).stdout.trim();
         if (nwo) assetBase = `https://github.com/${nwo}/raw/${branch}/${rel}`;
       }
+      say('push', `Pushing ${branch} to origin`);
       const push = await git(worktree, ['push', '-u', 'origin', branch]);
       if (push.exitCode !== 0) throw new Error(`git push failed: ${push.stderr}`);
       const body = prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, assetBase, attempts: attempt });
@@ -183,10 +227,11 @@ export async function fixFindings(o: FixOptions) {
       const pr = await execa('gh', ['pr', 'create', '--base', baseBranch, '--head', branch, '--title', `fix(ui): ${clip(title, 90)}`, '--body-file', bodyFile, ...(o.draft ? ['--draft'] : [])], { cwd: worktree, reject: false });
       if (pr.exitCode !== 0) throw new Error(`gh pr create failed: ${pr.stderr}`);
       prUrl = pr.stdout.trim().split('\n').pop() ?? null;
-      o.log(`  PR: ${prUrl}`);
+      rep.update({ pr_url: prUrl });
+      say('pr', `Opened ${o.draft ? 'draft ' : ''}PR ${prUrl}`, 'success', { pr_url: prUrl });
     } else {
       writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, assetBase: null, attempts: attempt }));
-      o.log(`  Not pushed (no --pr). PR description draft: ${join(assetsDir, 'pr-body.md')}`);
+      say('commit', `Not pushed (no PR requested). PR description draft saved.`, 'info', { pr_body: relative(o.runDir, join(assetsDir, 'pr-body.md')) });
     }
 
     // ---- record per-finding fix status ----
@@ -197,21 +242,50 @@ export async function fixFindings(o: FixOptions) {
       const isAlso = alsoFixed.includes(f.id);
       if (!isSel && !isAlso) continue;
       f.status = 'fixing';
-      f.fix = { branch, pr_url: prUrl, verified: isSel ? verified : true, fixed_by: isSel ? scopeLabel : `${scopeLabel} (side effect)`, at: now };
+      f.fix = { branch, base: baseBranch, pr_url: prUrl, verified: isSel ? verified : true, fixed_by: isSel ? scopeLabel : `${scopeLabel} (side effect)`, job_id: rep.status.id, at: now };
       memory.setBugStatus(f.fingerprint, 'fixing', info.run_id, f.id);
     }
     writeFindings(o.runDir, { run_id: fresh.run_id, target: fresh.target, generated_at: fresh.generated_at, groups: fresh.groups });
     writeReport(o.runDir);
-    o.log(`Done: ${verified ? 'verified ✓' : 'NOT fully verified ✗'}${alsoFixed.length ? `; also fixed ${alsoFixed.join(', ')}` : ''}`);
+    say('record', `Done: ${verified ? 'verified ✓' : 'NOT fully verified ✗'}${alsoFixed.length ? `; also fixed ${alsoFixed.join(', ')}` : ''}`, verified ? 'success' : 'warn');
     return { branch, prUrl, verified, alsoFixed, worktree };
+  } catch (e) {
+    restoreStatus(o.runDir, selected, rep.status.id);
+    throw e;
   } finally {
     await pool.close();
     await target.stop();
     if (!o.keepWorktree) {
       await git(gitRoot, ['worktree', 'remove', '--force', worktree]);
-      o.log(`  worktree removed (branch ${branch} kept)`);
-    } else o.log(`  worktree kept at ${worktree}`);
+      rep.update({ worktree: null });
+      say('cleanup', `Worktree removed (branch ${branch} kept)`);
+    } else say('cleanup', `Worktree kept at ${worktree}`);
   }
+}
+
+/** Marks findings as being fixed right away so every viewer sees the job. */
+function markFixing(runDir: string, ids: string[], fix: { branch: string; base: string; job_id: string; scope: string }) {
+  const ff = readFindings(runDir);
+  if (!ff) return;
+  for (const f of allFindings(ff)) {
+    if (!ids.includes(f.id)) continue;
+    f.status = 'fixing';
+    f.fix = { branch: fix.branch, base: fix.base, pr_url: null, verified: false, fixed_by: fix.scope, job_id: fix.job_id, at: new Date().toISOString() };
+  }
+  writeFindings(runDir, { run_id: ff.run_id, target: ff.target, generated_at: ff.generated_at, groups: ff.groups });
+}
+
+/** On failure, put findings back to their pre-fix status (the job record keeps the failure). */
+function restoreStatus(runDir: string, original: Finding[], jobId: string) {
+  const ff = readFindings(runDir);
+  if (!ff) return;
+  for (const f of allFindings(ff)) {
+    const o = original.find((x) => x.id === f.id);
+    if (!o || f.fix?.job_id !== jobId) continue;
+    f.status = o.status;
+    f.fix = o.fix;
+  }
+  writeFindings(runDir, { run_id: ff.run_id, target: ff.target, generated_at: ff.generated_at, groups: ff.groups });
 }
 
 const FIX_SYSTEM = `You fix UI layout defects in a web codebase. You are in a git worktree on a dedicated branch.
