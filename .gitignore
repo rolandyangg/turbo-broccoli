@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.bugbash/runs/
+.bugbash/tmp/
+*.log
+.bugbash/
+.bugbash-bench/
+bench/results/
+test-results/

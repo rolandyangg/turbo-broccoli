@@ -1,0 +1,282 @@
+import { existsSync, mkdirSync, copyFileSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs';
+import { join, basename, dirname, relative } from 'node:path';
+import { execa } from 'execa';
+import { Config } from '../config.js';
+import type { Finding, RootCauseGroup } from '../store/schema.js';
+import { readRun, readFindings, writeFindings, findById, allFindings } from '../store/store.js';
+import { resolveTarget } from '../target/resolve.js';
+import { runClaude } from '../llm/claude.js';
+import { BrowserPool } from '../triage/replay.js';
+import { verifyFinding, captureAfter, pageSnapshot, type VerifyResult } from './verify.js';
+import { Memory } from '../memory/siteMemory.js';
+import { writeReport } from '../store/report.js';
+
+export interface FixOptions {
+  runDir: string;
+  ids: string[];
+  pr: boolean;
+  draft: boolean;
+  base?: string | null;
+  maxAttempts: number;
+  keepWorktree: boolean;
+  prAssets: boolean;
+  log: (m: string) => void;
+}
+
+const git = (cwd: string, args: string[]) => execa('git', args, { cwd, reject: false });
+
+/** Shortens at a word boundary. */
+const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, s.lastIndexOf(' ', n - 1) > n * 0.6 ? s.lastIndexOf(' ', n - 1) : n - 1).trimEnd() + '…');
+
+const slug = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 40);
+
+export async function fixFindings(o: FixOptions) {
+  const info = readRun(o.runDir);
+  const config = Config.parse(info.config);
+  const ff = readFindings(o.runDir);
+  if (!ff) throw new Error('No findings.json in this run. Run `bugbash triage` first.');
+  if (!info.repo_path) throw new Error('This run has no local repository (target was a URL without --repo); cannot fix.');
+  const repo = info.repo_path;
+
+  // ---- resolve scope: individual findings and/or whole groups ----
+  const selected: Finding[] = [];
+  const groups = new Map<string, RootCauseGroup>();
+  for (const id of o.ids) {
+    const g = ff.groups.find((x) => x.id === id);
+    if (g) {
+      g.findings.forEach((f) => selected.push(f));
+      groups.set(g.id, g);
+      continue;
+    }
+    const hit = findById(ff, id);
+    if (!hit) throw new Error(`Unknown finding or group id: ${id}`);
+    selected.push(hit.finding);
+    groups.set(hit.group.id, hit.group);
+  }
+  const scopeIsGroup = o.ids.length === 1 && ff.groups.some((g) => g.id === o.ids[0]);
+  const scopeLabel = scopeIsGroup ? o.ids[0] : selected.map((f) => f.id).join('+');
+  const top = git(repo, ['rev-parse', '--show-toplevel']);
+  const gitRoot = (await top).stdout.trim();
+  if (!gitRoot) throw new Error(`${repo} is not inside a git repository.`);
+  const status = (await git(gitRoot, ['status', '--porcelain'])).stdout.split('\n').filter((l) => l.trim() && !l.slice(3).startsWith('.bugbash'));
+  if (status.length) throw new Error(`Working tree is not clean (commit or stash first):\n${status.slice(0, 10).join('\n')}`);
+  const baseBranch = o.base ?? ((await git(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim() || 'main');
+  const branch = `bugbash/${scopeLabel.toLowerCase()}-${slug(scopeIsGroup ? groups.get(o.ids[0])!.summary : selected[0].title)}`;
+  const worktree = join(dirname(gitRoot), `${basename(gitRoot)}-bugbash-worktrees`, branch.replace(/\//g, '__'));
+  const appDir = join(worktree, relative(gitRoot, repo));
+
+  o.log(`Fixing ${selected.map((f) => f.id).join(', ')} (${scopeIsGroup ? 'whole group' : 'selected findings'}) on branch ${branch}`);
+  if (existsSync(worktree)) throw new Error(`Worktree already exists: ${worktree} (remove it or use a different scope)`);
+  const wt = await git(gitRoot, ['worktree', 'add', '-b', branch, worktree, baseBranch]);
+  if (wt.exitCode !== 0) throw new Error(`git worktree add failed: ${wt.stderr}`);
+  // Reuse dependencies so the dev server can start in the worktree.
+  if (existsSync(join(repo, 'node_modules')) && !existsSync(join(appDir, 'node_modules'))) symlinkSync(join(repo, 'node_modules'), join(appDir, 'node_modules'), 'dir');
+
+  const target = await resolveTarget(appDir, { devCommand: config.devCommand, devPort: null, log: o.log });
+  const pool = new BrowserPool();
+  const vo = { baseUrl: target.baseUrl, guardrails: config.guardrails, pool };
+  const groupMembers = [...new Set([...groups.values()].flatMap((g) => g.findings))].filter((f) => !selected.includes(f));
+  const touchedPages = [...new Set(selected.map((f) => f.page))];
+  const memory = new Memory(info.workspace);
+  const assetsDir = join(o.runDir, 'fixes', branch.replace(/\//g, '__'));
+  mkdirSync(assetsDir, { recursive: true });
+
+  try {
+    // ---- baseline: confirm the bug is present in the worktree ----
+    const before: VerifyResult[] = [];
+    for (const f of selected) before.push(await verifyFinding(f, vo));
+    for (const b of before) o.log(`  baseline ${b.id}: ${b.present === null ? 'not auto-verifiable (visual)' : b.present ? 'present ✓' : 'NOT present (already fixed or not reproducible here)'}`);
+    const baselineSnap = new Map<string, Awaited<ReturnType<typeof pageSnapshot>>>();
+    for (const p of touchedPages) baselineSnap.set(p, await pageSnapshot(p, vo));
+
+    // ---- fix loop ----
+    let feedback = '';
+    let after: VerifyResult[] = [];
+    let regressions: string[] = [];
+    let agentSummary = '';
+    let attempt = 0;
+    for (attempt = 1; attempt <= o.maxAttempts; attempt++) {
+      o.log(`  attempt ${attempt}/${o.maxAttempts}: running fix agent…`);
+      const r = await runClaude({
+        prompt: fixPrompt(selected, [...groups.values()], groupMembers, scopeIsGroup, o.runDir, feedback),
+        systemPrompt: FIX_SYSTEM,
+        tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write'],
+        allowedTools: ['Read', 'Grep', 'Glob', 'Edit', 'Write'],
+        cwd: worktree,
+        addDirs: [o.runDir],
+        model: config.model,
+        timeoutMs: 20 * 60_000,
+        transcriptPath: join(assetsDir, `agent-attempt-${attempt}.jsonl`),
+      });
+      agentSummary = r.text;
+      if (!r.ok) o.log(`  fix agent error: ${r.error}`);
+      await new Promise((res) => setTimeout(res, 1500)); // let dev servers hot-reload
+      after = [];
+      for (const f of selected) after.push(await verifyFinding(f, vo));
+      regressions = [];
+      for (const p of touchedPages) {
+        const snap = await pageSnapshot(p, vo);
+        for (const [k, c] of snap) if (!baselineSnap.get(p)!.has(k)) regressions.push(`${p} @${k.split('|')[0]}px: new ${c.type} on ${c.selector} — ${c.message}`);
+      }
+      const still = after.filter((a) => a.present);
+      const diff = (await git(worktree, ['diff', '--stat'])).stdout.trim();
+      o.log(`  verify: ${after.map((a) => `${a.id}=${a.present === null ? 'visual' : a.present ? 'STILL PRESENT' : 'fixed'}`).join(' ')}; regressions: ${regressions.length}; diff: ${diff.split('\n').pop() ?? 'none'}`);
+      if (!diff) feedback = 'No files were changed. Make the fix.';
+      else if (still.length || regressions.length)
+        feedback = [
+          still.length ? `Still present after your change:\n${still.map((s) => `- ${s.id}: ${s.checks.filter((c) => c.present).map((c) => `${c.browser} ${c.width}x${c.height}`).join(', ')}`).join('\n')}` : '',
+          regressions.length ? `Your change introduced new layout problems:\n${regressions.slice(0, 10).map((r) => `- ${r}`).join('\n')}` : '',
+          `Current diff:\n${(await git(worktree, ['diff'])).stdout.slice(0, 6000)}`,
+        ].filter(Boolean).join('\n\n');
+      else break;
+    }
+    const verified = after.length > 0 && after.every((a) => a.present !== true) && regressions.length === 0;
+    const diff = (await git(worktree, ['diff', '--stat'])).stdout.trim();
+    if (!diff) throw new Error('Fix agent made no changes; nothing to commit.');
+
+    // ---- other findings in the group that this fix also resolved ----
+    const alsoFixed: string[] = [];
+    for (const m of groupMembers) {
+      const r = await verifyFinding(m, vo);
+      if (r.present === false) alsoFixed.push(m.id);
+    }
+
+    // ---- evidence ----
+    for (const f of selected) await captureAfter(f, join(assetsDir, `${f.id}-after.png`), vo).catch(() => {});
+
+    // ---- commit ----
+    const title = scopeIsGroup ? groups.get(o.ids[0])!.summary : selected.length === 1 ? selected[0].title : `${selected.length} UI fixes: ${selected.map((f) => f.id).join(', ')}`;
+    const commitMsg = `fix(ui): ${clip(title, 64)}\n\nFixes ${selected.map((f) => f.id).join(', ')}${alsoFixed.length ? ` (also resolves ${alsoFixed.join(', ')})` : ''} found by bugbash run ${info.run_id}.\n${verified ? 'Verified: repro checks pass at all affected viewports/browsers; no new layout defects on touched pages.' : 'NOT fully verified — see PR description.'}\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`;
+    await git(worktree, ['add', '-A', '--', '.', ':(exclude)node_modules']);
+    const c = await git(worktree, ['commit', '-m', commitMsg]);
+    if (c.exitCode !== 0) throw new Error(`git commit failed: ${c.stderr || c.stdout}`);
+    o.log(`  committed on ${branch}`);
+
+    // ---- PR ----
+    let prUrl: string | null = null;
+    if (o.pr) {
+      let assetBase: string | null = null;
+      if (o.prAssets) {
+        const rel = join('.bugbash', 'pr-assets', branch.replace(/\//g, '__'));
+        mkdirSync(join(worktree, rel), { recursive: true });
+        for (const f of selected) {
+          const b = join(o.runDir, f.screenshots.annotated ?? '');
+          if (f.screenshots.annotated && existsSync(b)) copyFileSync(b, join(worktree, rel, `${f.id}-before.png`));
+          if (existsSync(join(assetsDir, `${f.id}-after.png`))) copyFileSync(join(assetsDir, `${f.id}-after.png`), join(worktree, rel, `${f.id}-after.png`));
+          if (f.video?.gif && existsSync(join(o.runDir, f.video.gif))) copyFileSync(join(o.runDir, f.video.gif), join(worktree, rel, `${f.id}-before.gif`));
+        }
+        await git(worktree, ['add', '-f', rel]);
+        await git(worktree, ['commit', '-m', `chore(bugbash): before/after evidence for PR review\n\nSafe to drop before merging.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`]);
+        const nwo = (await execa('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'], { cwd: worktree, reject: false })).stdout.trim();
+        if (nwo) assetBase = `https://github.com/${nwo}/raw/${branch}/${rel}`;
+      }
+      const push = await git(worktree, ['push', '-u', 'origin', branch]);
+      if (push.exitCode !== 0) throw new Error(`git push failed: ${push.stderr}`);
+      const body = prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, assetBase, attempts: attempt });
+      const bodyFile = join(assetsDir, 'pr-body.md');
+      writeFileSync(bodyFile, body);
+      const pr = await execa('gh', ['pr', 'create', '--base', baseBranch, '--head', branch, '--title', `fix(ui): ${clip(title, 90)}`, '--body-file', bodyFile, ...(o.draft ? ['--draft'] : [])], { cwd: worktree, reject: false });
+      if (pr.exitCode !== 0) throw new Error(`gh pr create failed: ${pr.stderr}`);
+      prUrl = pr.stdout.trim().split('\n').pop() ?? null;
+      o.log(`  PR: ${prUrl}`);
+    } else {
+      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, assetBase: null, attempts: attempt }));
+      o.log(`  Not pushed (no --pr). PR description draft: ${join(assetsDir, 'pr-body.md')}`);
+    }
+
+    // ---- record per-finding fix status ----
+    const fresh = readFindings(o.runDir)!;
+    const now = new Date().toISOString();
+    for (const f of allFindings(fresh)) {
+      const isSel = selected.some((s) => s.id === f.id);
+      const isAlso = alsoFixed.includes(f.id);
+      if (!isSel && !isAlso) continue;
+      f.status = 'fixing';
+      f.fix = { branch, pr_url: prUrl, verified: isSel ? verified : true, fixed_by: isSel ? scopeLabel : `${scopeLabel} (side effect)`, at: now };
+      memory.setBugStatus(f.fingerprint, 'fixing', info.run_id, f.id);
+    }
+    writeFindings(o.runDir, { run_id: fresh.run_id, target: fresh.target, generated_at: fresh.generated_at, groups: fresh.groups });
+    writeReport(o.runDir);
+    o.log(`Done: ${verified ? 'verified ✓' : 'NOT fully verified ✗'}${alsoFixed.length ? `; also fixed ${alsoFixed.join(', ')}` : ''}`);
+    return { branch, prUrl, verified, alsoFixed, worktree };
+  } finally {
+    await pool.close();
+    await target.stop();
+    if (!o.keepWorktree) {
+      await git(gitRoot, ['worktree', 'remove', '--force', worktree]);
+      o.log(`  worktree removed (branch ${branch} kept)`);
+    } else o.log(`  worktree kept at ${worktree}`);
+  }
+}
+
+const FIX_SYSTEM = `You fix UI layout defects in a web codebase. You are in a git worktree on a dedicated branch.
+Rules:
+- Make the smallest, safest change that fixes the defect(s) in scope at every affected viewport and browser. Prefer robust CSS (min-height instead of height, allow wrapping, flex-wrap, min-width: 0, overflow-wrap: anywhere, max-width: 100%, responsive spacing) over magic numbers.
+- Don't change unrelated code, formatting, dependencies, or tests. Don't touch findings outside your scope, even when they share a root cause (unless the scope is the whole group).
+- Look at the screenshots/videos (Read tool) and the source hints before editing. Confirm the rule/markup that causes it.
+- Don't run git. Don't create new files unless required.
+- Finish with a short summary: root cause, what you changed (file:line), and why it fixes every affected width/browser.`;
+
+function fixPrompt(selected: Finding[], groups: RootCauseGroup[], others: Finding[], wholeGroup: boolean, runDir: string, feedback: string) {
+  const brief = (f: Finding) => ({
+    id: f.id,
+    title: f.title,
+    type: f.type,
+    severity: f.severity,
+    page: f.page,
+    browsers: f.browsers,
+    viewports: f.viewports.map((v) => `${v.width}x${v.height}`),
+    environment: f.reproduction.environment,
+    element: f.element,
+    metrics: f.metrics,
+    expected: f.reproduction.expected,
+    actual: f.reproduction.actual,
+    steps: f.reproduction.steps_human,
+    likely_cause: f.likely_cause,
+    fix_hint: f.fix_hint,
+    source_hints: f.source_hints,
+    evidence: [f.screenshots.annotated, f.screenshots.crop, f.video?.filmstrip].filter(Boolean).map((p) => join(runDir, p!)),
+  });
+  return [
+    `# Scope: ${wholeGroup ? 'fix the WHOLE root-cause group' : `fix ONLY ${selected.map((f) => f.id).join(', ')}`}`,
+    `Findings to fix:\n${JSON.stringify(selected.map(brief), null, 1)}`,
+    `Root-cause group context (for understanding; ${wholeGroup ? 'all in scope' : 'fix only the findings above'}):\n${JSON.stringify(groups.map((g) => ({ id: g.id, summary: g.summary, component: g.component, css_rule: g.css_rule, files: g.files, fix_plan: g.fix_plan })), null, 1)}`,
+    others.length ? `Other findings in the same group (NOT in scope; mention in your summary if your fix likely affects them):\n${others.map((f) => `- ${f.id}: ${f.title}`).join('\n')}` : '',
+    feedback ? `\n# Feedback from verification of your previous attempt\n${feedback}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: string[]; before: VerifyResult[]; after: VerifyResult[]; regressions: string[]; verified: boolean; agentSummary: string; runId: string; assetBase: string | null; attempts: number }) {
+  const lines: string[] = [];
+  lines.push(`## Summary`, '', d.agentSummary.trim().slice(0, 3000) || '(no summary)', '');
+  lines.push(`## Findings fixed`, '');
+  for (const f of d.selected) {
+    const b = d.before.find((x) => x.id === f.id);
+    const a = d.after.find((x) => x.id === f.id);
+    lines.push(`### ${f.id} — ${f.title}`, `- ${f.type}, ${f.severity}, on \`${f.page}\` (${f.browsers.join(', ')}; ${f.viewports.map((v) => v.width).join(', ')}px)`, `- Expected: ${f.reproduction.expected}`, `- Actual (before): ${f.reproduction.actual}`);
+    lines.push(`- Verification: before ${b?.present === null ? 'visual-only' : b?.present ? 'present' : 'absent'} → after ${a?.present === null ? 'visual-only (please check screenshots)' : a?.present ? '**still present**' : 'fixed'}${a?.checks.length ? ` (${a.checks.map((c) => `${c.browser} ${c.width}px ${c.present ? '✗' : '✓'}`).join(', ')})` : ''}`);
+    lines.push('', '<details><summary>Reproduction steps</summary>', '', ...f.reproduction.steps_human.map((s, i) => `${i + 1}. ${s}`), '', '</details>', '');
+    if (d.assetBase) {
+      const gif = f.video?.gif ? `<img src="${d.assetBase}/${f.id}-before.gif" width="420">` : `<img src="${d.assetBase}/${f.id}-before.png" width="420">`;
+      lines.push(`| Before | After |`, `|---|---|`, `| ${gif} | <img src="${d.assetBase}/${f.id}-after.png" width="420"> |`, '');
+    }
+  }
+  if (d.alsoFixed.length) lines.push(`## Also resolved (same root cause)`, '', d.alsoFixed.map((x) => `- ${x}`).join('\n'), '');
+  const g = d.groups.map((x) => `- ${x.id}: ${x.summary}${x.fix_plan ? ` — plan: ${x.fix_plan}` : ''}`).join('\n');
+  lines.push(`## Root-cause group`, '', g, '');
+  lines.push(`## Verification`, '', d.verified ? `✅ Repro checks pass at every affected viewport/browser and the touched pages have no new layout defects (${d.attempts} attempt${d.attempts > 1 ? 's' : ''}).` : `⚠️ Not fully verified.${d.regressions.length ? `\nNew layout candidates on touched pages:\n${d.regressions.map((r) => `- ${r}`).join('\n')}` : ''}`, '');
+  if (d.assetBase) lines.push(`_Evidence images are committed under \`.bugbash/pr-assets/\` in a separate commit — drop it before merging if you prefer._`, '');
+  lines.push(`Found and fixed by bugbash (run \`${d.runId}\`).`, '', '🤖 Generated with [Claude Code](https://claude.com/claude-code)');
+  return lines.join('\n');
+}
+
+export function readText(p: string) {
+  return readFileSync(p, 'utf8');
+}

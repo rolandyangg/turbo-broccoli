@@ -1,0 +1,102 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, symlinkSync, unlinkSync, lstatSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { FindingsFile, SCHEMA_VERSION, type Finding, type RootCauseGroup } from './schema.js';
+
+export function workspaceFor(repoPath: string | null, out?: string | null): string {
+  const ws = resolve(out ?? (repoPath ? join(repoPath, '.bugbash') : '.bugbash'));
+  mkdirSync(join(ws, 'runs'), { recursive: true });
+  const gi = join(ws, '.gitignore');
+  if (!existsSync(gi)) writeFileSync(gi, 'runs/\ntmp/\n');
+  return ws;
+}
+
+export function newRunId(): string {
+  return new Date().toISOString().replace(/[:.]/g, '-').replace(/-\d{3}Z$/, 'Z');
+}
+
+export function createRunDir(ws: string, runId: string): string {
+  const dir = join(ws, 'runs', runId);
+  for (const d of ['', 'shots', 'videos', 'traces', 'repros', 'sessions', 'transcripts']) mkdirSync(join(dir, d), { recursive: true });
+  const latest = join(ws, 'latest');
+  try {
+    if (existsSync(latest) || lstatSync(latest, { throwIfNoEntry: false })) unlinkSync(latest);
+  } catch {}
+  try {
+    symlinkSync(join('runs', runId), latest);
+  } catch {
+    writeFileSync(latest, runId);
+  }
+  return dir;
+}
+
+export function listRuns(ws: string): string[] {
+  const d = join(ws, 'runs');
+  return existsSync(d) ? readdirSync(d).filter((x) => existsSync(join(d, x, 'run.json'))).sort() : [];
+}
+
+export function resolveRunDir(ws: string, run?: string | null): string {
+  if (run) {
+    const direct = resolve(run);
+    if (existsSync(join(direct, 'run.json'))) return direct;
+    const d = join(ws, 'runs', run);
+    if (existsSync(d)) return d;
+    throw new Error(`Run not found: ${run}`);
+  }
+  const runs = listRuns(ws);
+  if (!runs.length) throw new Error(`No runs in ${ws}. Run \`bugbash explore <target>\` first.`);
+  return join(ws, 'runs', runs[runs.length - 1]);
+}
+
+export interface RunInfo {
+  run_id: string;
+  target: string;
+  base_url: string;
+  target_kind: string;
+  repo_path: string | null;
+  workspace: string;
+  started_at: string;
+  ended_at: string | null;
+  head_commit: string | null;
+  config: unknown;
+  stop_reason: string | null;
+  lead_decisions: string[];
+  jobs: unknown[];
+  stages: Record<string, { at: string; note?: string }>;
+}
+
+export function readRun(runDir: string): RunInfo {
+  return JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8'));
+}
+export function writeRun(runDir: string, info: RunInfo) {
+  writeFileSync(join(runDir, 'run.json'), JSON.stringify(info, null, 2));
+}
+
+export function readFindings(runDir: string): FindingsFile | null {
+  const f = join(runDir, 'findings.json');
+  if (!existsSync(f)) return null;
+  return FindingsFile.parse(JSON.parse(readFileSync(f, 'utf8')));
+}
+
+export function allFindings(ff: FindingsFile): Finding[] {
+  return ff.groups.flatMap((g) => g.findings);
+}
+
+export function rollup(g: RootCauseGroup): RootCauseGroup {
+  const r: Record<string, number> = {};
+  for (const f of g.findings) r[f.status] = (r[f.status] ?? 0) + 1;
+  g.status_rollup = r;
+  return g;
+}
+
+/** Writes the nested findings.json and the flat findings.flat.jsonl side by side. */
+export function writeFindings(runDir: string, ff: Omit<FindingsFile, 'schemaVersion'>) {
+  const data = FindingsFile.parse({ schemaVersion: SCHEMA_VERSION, ...ff, groups: ff.groups.map(rollup) });
+  writeFileSync(join(runDir, 'findings.json'), JSON.stringify(data, null, 2));
+  writeFileSync(join(runDir, 'findings.flat.jsonl'), allFindings(data).map((f) => JSON.stringify(f)).join('\n') + '\n');
+  return data;
+}
+
+export function findById(ff: FindingsFile, id: string): { finding: Finding; group: RootCauseGroup } | null {
+  for (const g of ff.groups) for (const f of g.findings) if (f.id === id) return { finding: f, group: g };
+  return null;
+}

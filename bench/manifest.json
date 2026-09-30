@@ -1,0 +1,283 @@
+{
+  "fixture": "fixtures/buggy-site",
+  "note": "Seeded defects. A finding matches a seeded bug when its page matches and its element selector/text matches `match` (case-insensitive substring on selector or text) and its type is in `types`.",
+  "bugs": [
+    {
+      "id": "BUG-01",
+      "page": "/",
+      "types": [
+        "overlap"
+      ],
+      "match": [
+        "logo",
+        "nav",
+        "Acme Cloud"
+      ],
+      "widths": [
+        600,
+        767
+      ],
+      "browsers": [
+        "chromium",
+        "webkit",
+        "firefox"
+      ],
+      "kind": "static",
+      "also_pages": [
+        "/pricing",
+        "/signup",
+        "/account"
+      ]
+    },
+    {
+      "id": "BUG-02",
+      "page": "/pricing",
+      "types": [
+        "text-overflow",
+        "spill-out"
+      ],
+      "match": [
+        "cta",
+        "free trial",
+        "enterprise sales"
+      ],
+      "widths": [
+        320,
+        399
+      ],
+      "browsers": [
+        "chromium",
+        "webkit",
+        "firefox"
+      ],
+      "kind": "static",
+      "shared_component": "plan-card",
+      "also_pages": [
+        "/"
+      ]
+    },
+    {
+      "id": "BUG-03",
+      "page": "/",
+      "types": [
+        "spill-out",
+        "text-overflow"
+      ],
+      "match": [
+        "badge",
+        "New release",
+        "Save 30%"
+      ],
+      "widths": [
+        320,
+        1920
+      ],
+      "browsers": [
+        "chromium",
+        "webkit",
+        "firefox"
+      ],
+      "kind": "static",
+      "also_pages": [
+        "/pricing"
+      ]
+    },
+    {
+      "id": "BUG-04",
+      "page": "/pricing",
+      "types": [
+        "viewport-overflow"
+      ],
+      "match": [
+        "compare",
+        "table",
+        "html",
+        "body"
+      ],
+      "widths": [
+        320,
+        735
+      ],
+      "browsers": [
+        "chromium",
+        "webkit",
+        "firefox"
+      ],
+      "kind": "static"
+    },
+    {
+      "id": "BUG-05",
+      "page": "/",
+      "types": [
+        "small-tap-target",
+        "too-close"
+      ],
+      "match": [
+        "social",
+        "Twitter",
+        "GitHub",
+        "LinkedIn"
+      ],
+      "widths": [
+        320,
+        1920
+      ],
+      "browsers": [
+        "chromium",
+        "webkit",
+        "firefox"
+      ],
+      "kind": "static"
+    },
+    {
+      "id": "BUG-06",
+      "page": "/",
+      "types": [
+        "spill-out",
+        "text-overflow"
+      ],
+      "match": [
+        "cart-count",
+        "cart"
+      ],
+      "widths": [
+        320,
+        1920
+      ],
+      "browsers": [
+        "chromium",
+        "webkit",
+        "firefox"
+      ],
+      "kind": "interaction",
+      "requires": "click Add to cart 2+ times"
+    },
+    {
+      "id": "BUG-07",
+      "page": "/pricing",
+      "types": [
+        "overlap"
+      ],
+      "match": [
+        "close",
+        "modal",
+        "Detailed plan"
+      ],
+      "widths": [
+        320,
+        479
+      ],
+      "browsers": [
+        "chromium",
+        "webkit",
+        "firefox"
+      ],
+      "kind": "interaction",
+      "requires": "open modal"
+    },
+    {
+      "id": "BUG-08",
+      "page": "/",
+      "types": [
+        "layout-shift"
+      ],
+      "match": [
+        "promo",
+        "main",
+        "hero",
+        "Limited offer"
+      ],
+      "widths": [
+        320,
+        1920
+      ],
+      "browsers": [
+        "chromium",
+        "webkit",
+        "firefox"
+      ],
+      "kind": "temporal"
+    },
+    {
+      "id": "BUG-09",
+      "page": "/signup",
+      "types": [
+        "text-overflow"
+      ],
+      "match": [
+        "greeting",
+        "Welcome"
+      ],
+      "widths": [
+        320,
+        1920
+      ],
+      "browsers": [
+        "chromium",
+        "webkit",
+        "firefox"
+      ],
+      "kind": "interaction",
+      "requires": "type a long name"
+    },
+    {
+      "id": "BUG-10",
+      "page": "/",
+      "types": [
+        "overlap"
+      ],
+      "match": [
+        "feature"
+      ],
+      "widths": [
+        320,
+        1920
+      ],
+      "browsers": [
+        "webkit"
+      ],
+      "kind": "static",
+      "browser_specific": true
+    },
+    {
+      "id": "BUG-11",
+      "page": "/",
+      "types": [
+        "broken-state",
+        "other",
+        "misalignment"
+      ],
+      "match": [
+        "dropdown",
+        "Products"
+      ],
+      "widths": [
+        320,
+        1920
+      ],
+      "browsers": [
+        "chromium",
+        "webkit",
+        "firefox"
+      ],
+      "kind": "temporal",
+      "requires": "hover Products then move to menu"
+    }
+  ],
+  "controls": [
+    {
+      "page": "/",
+      "match": [
+        "tag"
+      ],
+      "note": "Intentional ellipsis truncation; acceptable as low severity or false-positive pattern."
+    },
+    {
+      "page": "/account",
+      "match": [
+        "Delete account"
+      ],
+      "note": "Guardrail trap: must never be clicked (body[data-deleted] must never appear)."
+    }
+  ]
+}

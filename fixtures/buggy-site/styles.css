@@ -1,0 +1,84 @@
+/* Buggy fixture site. Seeded defects are marked with BUG-xx comments and listed in bench/manifest.json. */
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: #1d1d1f; background: #fff; }
+a { color: #0a58ca; }
+.container { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+
+/* Header. BUG-01: between 600px and 767px the nav is absolutely positioned and overlaps the logo text. */
+.site-header { position: relative; display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #ddd; min-height: 56px; }
+.logo { font-weight: 700; font-size: 20px; white-space: nowrap; }
+.nav { display: flex; gap: 16px; }
+.nav a { text-decoration: none; padding: 8px 4px; }
+@media (min-width: 600px) and (max-width: 767px) {
+  .nav { position: absolute; left: 40px; top: 16px; }
+}
+@media (max-width: 599px) {
+  .nav { display: none; }
+  .menu-toggle { display: inline-block; }
+}
+.menu-toggle { display: none; min-width: 44px; min-height: 44px; }
+.mobile-menu { display: none; flex-direction: column; padding: 8px 16px; border-bottom: 1px solid #ddd; }
+.mobile-menu.open { display: flex; }
+.mobile-menu a { padding: 10px 0; }
+
+/* Hero */
+.hero { padding: 40px 0; }
+.hero h1 { font-size: clamp(28px, 5vw, 48px); margin: 0 0 12px; }
+
+/* Plan card: shared component used on / and /pricing.
+   BUG-02: below 400px the CTA has a fixed height with overflow hidden, so long labels are clipped. */
+.plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.plan-card { border: 1px solid #ccc; border-radius: 12px; padding: 16px; }
+.plan-card h3 { margin: 0 0 8px; }
+.plan-card .cta { display: block; width: 100%; padding: 10px 12px; font-size: 16px; border: 0; border-radius: 8px; background: #0a58ca; color: #fff; }
+@media (max-width: 399px) {
+  .plan-card .cta { height: 40px; overflow: hidden; }
+}
+
+/* BUG-03: fixed-width badge with nowrap; longer text spills out of the pill. */
+.badge { display: inline-block; width: 64px; white-space: nowrap; background: #ffe08a; border-radius: 999px; padding: 2px 8px; font-size: 12px; }
+
+/* Control: intentional ellipsis truncation (should be treated as low-severity / FP-pattern candidate). */
+.tag { display: inline-block; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; background: #eee; border-radius: 4px; padding: 2px 6px; }
+
+/* BUG-04: comparison table forces horizontal page scroll on phones. */
+.compare { width: 720px; border-collapse: collapse; margin-top: 24px; }
+.compare td, .compare th { border: 1px solid #ddd; padding: 8px; }
+
+/* Footer. BUG-05: social icons are 16px targets with a 1px gap. */
+.site-footer { margin-top: 48px; padding: 24px 16px; border-top: 1px solid #ddd; }
+.social { display: flex; gap: 1px; }
+.social a { display: inline-block; width: 16px; height: 16px; background: #555; border-radius: 3px; }
+
+/* Cart. BUG-06: the count bubble is a fixed 16px circle; 2+ digit counts spill out. */
+.cart { position: relative; display: inline-block; padding: 8px 12px; min-height: 44px; }
+.cart-count { position: absolute; top: 0; right: -4px; width: 16px; height: 16px; border-radius: 50%; background: #d00; color: #fff; font-size: 12px; line-height: 16px; text-align: center; white-space: nowrap; }
+
+/* Modal. BUG-07: close button is absolutely positioned over the title on narrow screens. */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: none; align-items: center; justify-content: center; }
+.modal-backdrop.open { display: flex; }
+.modal { position: relative; background: #fff; border-radius: 12px; padding: 20px; width: min(520px, 92vw); }
+.modal h2 { margin: 0 0 8px; font-size: 22px; }
+.modal .close { position: absolute; top: 18px; right: 16px; min-width: 88px; min-height: 32px; }
+@media (min-width: 480px) { .modal h2 { padding-right: 100px; } }
+
+/* Late banner. BUG-08 (temporal): inserted after load, pushes content down (layout shift). */
+.promo { background: #111; color: #fff; padding: 14px 16px; }
+
+/* Signup. BUG-09: greeting preview is fixed width + nowrap + overflow hidden, so long names clip. */
+.form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; max-width: 420px; }
+.form-row input { padding: 10px; font-size: 16px; }
+.greeting { width: 220px; white-space: nowrap; overflow: hidden; border: 1px dashed #aaa; padding: 8px; }
+.btn { min-height: 44px; padding: 10px 16px; font-size: 16px; }
+.danger { background: #b00020; color: #fff; border: 0; border-radius: 8px; }
+
+/* BUG-10 (WebKit-only, simulated via UA class): feature cards overlap because of a negative margin. */
+.features { display: flex; flex-wrap: wrap; gap: 12px; }
+.feature { flex: 1 1 200px; border: 1px solid #ddd; padding: 12px; border-radius: 8px; background: #fafafa; }
+.is-webkit .feature + .feature { margin-left: -40px; }
+
+/* Dropdown. BUG-11 (temporal): menu hides when the pointer crosses the 12px gap, so it flickers. */
+.dropdown { position: relative; display: inline-block; }
+.dropdown-menu { display: none; position: absolute; top: calc(100% + 12px); left: 0; background: #fff; border: 1px solid #ccc; padding: 8px; min-width: 180px; }
+.dropdown:hover .dropdown-menu { display: block; }
+.dropdown-menu a { display: block; padding: 8px 4px; }

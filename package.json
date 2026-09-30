@@ -1,0 +1,39 @@
+{
+  "name": "bugbash",
+  "version": "0.1.0",
+  "description": "Agentic UI bug-bash: explore, triage and fix layout defects with Claude + Playwright",
+  "type": "module",
+  "bin": {
+    "bugbash": "./bin/bugbash.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "bugbash": "tsx src/cli.ts",
+    "fixture": "tsx src/cli.ts serve fixtures/buggy-site"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@faker-js/faker": "^10.6.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "commander": "^15.0.0",
+    "execa": "^10.0.1",
+    "get-port": "^7.2.0",
+    "p-limit": "^7.3.3",
+    "playwright": "^1.63.0",
+    "postcss": "^8.5.28",
+    "serve-handler": "^6.1.7",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.6.3",
+    "@types/serve-handler": "^6.1.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  }
+}
