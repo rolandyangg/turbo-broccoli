@@ -11,7 +11,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "bugbash": "tsx src/cli.ts",
-    "fixture": "tsx src/cli.ts serve fixtures/buggy-site"
+    "fixture": "tsx src/cli.ts serve fixtures/buggy-site",
+    "web": "npm --prefix web run dev",
+    "web:install": "npm --prefix web install",
+    "web:build": "npm --prefix web run build",
+    "web:start": "npm --prefix web run start",
+    "web:test": "npm --prefix web test"
   },
   "engines": {
     "node": ">=22"

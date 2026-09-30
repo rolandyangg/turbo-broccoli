@@ -1,0 +1,157 @@
+/* Design tokens: palette and type from greptile.com. Dark is the default theme; light and "system" are
+   selectable (data-theme on <html>, set before first paint in index.html). */
+:root {
+  color-scheme: light;
+  --ink: #3d3b4f;
+  --ink-2: #555368;
+  --muted: #6a6a78;
+  --faint: #9a9aa6;
+  --bg: #eeeeee;
+  --panel: #e9e9eb;
+  --panel-2: #e3e3e6;
+  --bar: #dedee2;
+  --bar-hover: #d4d4da;
+  --line: #b9b9c0;
+  --line-soft: #d2d2d8;
+  --white: #f7f7f7; /* card surface */
+  --on-ink: #f7f7f7; /* text on ink-coloured fills */
+  --green: #28e99f;
+  --green-ink: #0d7a53;
+  --mint: #c5ffd6;
+  --mint-2: #a8f7c4;
+  --dot: #3d3b4f24;
+  --guide: #3d3b4f0a;
+  --hatch: #3d3b4f26;
+  --hatch-soft: #3d3b4f0d;
+  --expected-bg: #e3fbe9;
+  --actual-bg: #ffe5e4;
+  --warn-bg: #ffd9a8;
+  --code-bg: #2b2a38;
+  --code-ink: #e9e9f0;
+  --diff-add: #dcfce7;
+  --diff-del: #fee2e2;
+  --diff-hunk: #eef0ff;
+  --diff-hunk-ink: #5b64d8;
+  --diff-bg: #fbfbfb;
+  --bolt: #9b9ba6;
+  --overlay: #2b2a38b3;
+  --bug-marker: #b3243a;
+
+  /* Severity: one-hue ordinal ramp (validated: monotone, visible steps, light end >= 2:1 on --white).
+     Used only for marks (dots, bars, markers) and always shipped with a text label. */
+  --sev-critical: #7d0f22;
+  --sev-major: #b8243b;
+  --sev-minor: #de5467;
+  --sev-cosmetic: #ea8894;
+  /* Single-series data marks (bars/columns). */
+  --data: #555368;
+  --data-hover: #3d3b4f;
+
+  --ok: #12a36a;
+  --warn: #c7811a;
+  --err: #d8344a;
+
+  --font-display: 'Anybody', 'Anybody Fallback', system-ui, sans-serif;
+  --font-body: 'DM Sans', 'DM Sans Fallback', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Space Mono', 'Space Mono Fallback', ui-monospace, Menlo, monospace;
+
+  --radius: 0px;
+  --gutter: clamp(16px, 3vw, 32px);
+  --maxw: 1380px;
+  --shadow: 2px 3px 8px #5553681f;
+}
+
+/* Dark: its own steps, not an automatic flip (severity ramp re-validated against --white #1f1e29). */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --ink: #e8e7f0;
+  --ink-2: #c4c3d2;
+  --muted: #9a99ac;
+  --faint: #6d6c80;
+  --bg: #16151d;
+  --panel: #1c1b25;
+  --panel-2: #23222e;
+  --bar: #292836;
+  --bar-hover: #34333f;
+  --line: #4a4959;
+  --line-soft: #302f3b;
+  --white: #1f1e29;
+  --on-ink: #16151d;
+  --green-ink: #5ff2b8;
+  --mint: #123d2e;
+  --mint-2: #185239;
+  --dot: #ffffff17;
+  --guide: #ffffff07;
+  --hatch: #ffffff1c;
+  --hatch-soft: #ffffff0a;
+  --expected-bg: #13342a;
+  --actual-bg: #3b1c24;
+  --warn-bg: #4a3310;
+  --code-bg: #0f0e15;
+  --code-ink: #e9e9f0;
+  --diff-add: #11331f;
+  --diff-del: #3d171b;
+  --diff-hunk: #22264a;
+  --diff-hunk-ink: #a9b1ff;
+  --diff-bg: #17161f;
+  --bolt: #5d5c6e;
+  --overlay: #08070dcc;
+  --sev-critical: #ffa3ae;
+  --sev-major: #f5627a;
+  --sev-minor: #d23c55;
+  --sev-cosmetic: #a8354b;
+  --data: #28e99f;
+  --data-hover: #6ff5c2;
+  --ok: #3ddc97;
+  --warn: #f0b04a;
+  --err: #ff6b7d;
+  --shadow: 2px 3px 12px #0000008c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme='system'] {
+    color-scheme: dark;
+    --ink: #e8e7f0;
+    --ink-2: #c4c3d2;
+    --muted: #9a99ac;
+    --faint: #6d6c80;
+    --bg: #16151d;
+    --panel: #1c1b25;
+    --panel-2: #23222e;
+    --bar: #292836;
+    --bar-hover: #34333f;
+    --line: #4a4959;
+    --line-soft: #302f3b;
+    --white: #1f1e29;
+    --on-ink: #16151d;
+    --green-ink: #5ff2b8;
+    --mint: #123d2e;
+    --mint-2: #185239;
+    --dot: #ffffff17;
+    --guide: #ffffff07;
+    --hatch: #ffffff1c;
+    --hatch-soft: #ffffff0a;
+    --expected-bg: #13342a;
+    --actual-bg: #3b1c24;
+    --warn-bg: #4a3310;
+    --code-bg: #0f0e15;
+    --code-ink: #e9e9f0;
+    --diff-add: #11331f;
+    --diff-del: #3d171b;
+    --diff-hunk: #22264a;
+    --diff-hunk-ink: #a9b1ff;
+    --diff-bg: #17161f;
+    --bolt: #5d5c6e;
+    --overlay: #08070dcc;
+    --sev-critical: #ffa3ae;
+    --sev-major: #f5627a;
+    --sev-minor: #d23c55;
+    --sev-cosmetic: #a8354b;
+    --data: #28e99f;
+    --data-hover: #6ff5c2;
+    --ok: #3ddc97;
+    --warn: #f0b04a;
+    --err: #ff6b7d;
+    --shadow: 2px 3px 12px #0000008c;
+  }
+}

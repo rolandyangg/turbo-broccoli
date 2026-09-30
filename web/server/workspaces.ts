@@ -1,0 +1,84 @@
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { registeredWorkspaces, registerWorkspace, listRuns } from '../../src/store/store.ts';
+
+/** Workspaces come from the CLI's registry (~/.bugbash/workspaces.json), --workspace args and BUGBASH_WORKSPACES. */
+const extra = new Set<string>();
+
+export function addWorkspace(path: string) {
+  const ws = resolve(path);
+  if (!existsSync(join(ws, 'runs'))) throw new Error(`${ws} is not a bugbash workspace (no runs/ folder)`);
+  extra.add(ws);
+  registerWorkspace(ws);
+  return ws;
+}
+
+export function initWorkspaces(argv: string[]) {
+  for (let i = 0; i < argv.length; i++) if (argv[i] === '--workspace' && argv[i + 1]) extra.add(resolve(argv[++i]));
+  for (const w of (process.env.BUGBASH_WORKSPACES ?? '').split(':').filter(Boolean)) extra.add(resolve(w));
+  const local = resolve('.bugbash');
+  if (existsSync(join(local, 'runs'))) extra.add(local);
+}
+
+export const wsId = (path: string) => createHash('sha1').update(path).digest('hex').slice(0, 10);
+
+export interface Workspace {
+  id: string;
+  path: string;
+  runs: string[];
+}
+
+export function workspaces(): Workspace[] {
+  const all = [...new Set([...registeredWorkspaces(), ...extra])].filter((w) => existsSync(join(w, 'runs')));
+  return all.map((path) => ({ id: wsId(path), path, runs: listRuns(path) }));
+}
+
+export function workspaceById(id: string): Workspace {
+  const w = workspaces().find((x) => x.id === id);
+  if (!w) throw new HttpError(404, `Unknown workspace ${id}`);
+  return w;
+}
+
+export function runDirOf(wsIdParam: string, runId: string): string {
+  const w = workspaceById(wsIdParam);
+  if (!/^[\w.-]+$/.test(runId)) throw new HttpError(400, 'Bad run id');
+  const dir = join(w.path, 'runs', runId);
+  if (!existsSync(join(dir, 'run.json'))) throw new HttpError(404, `Unknown run ${runId}`);
+  return dir;
+}
+
+/** Finds which workspace/run a run directory belongs to (for links from job records). */
+export function locateRunDir(runDir: string | null): { ws: string; run: string } | null {
+  if (!runDir) return null;
+  for (const w of workspaces()) {
+    const prefix = join(w.path, 'runs') + '/';
+    if (runDir.startsWith(prefix)) return { ws: w.id, run: runDir.slice(prefix.length).split('/')[0] };
+  }
+  return null;
+}
+
+export class HttpError extends Error {
+  constructor(
+    public status: 400 | 403 | 404 | 409 | 500,
+    msg: string,
+  ) {
+    super(msg);
+  }
+}
+
+export function readJsonSafe<T>(file: string, fallback: T): T {
+  try {
+    return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function mtime(file: string): number {
+  try {
+    return statSync(file).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
