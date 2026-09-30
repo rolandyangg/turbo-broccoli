@@ -87,6 +87,47 @@ Memory across runs (`<workspace>/memory/`): `site.json`, `known_bugs.json` (find
 
 The key fields of a `Finding` (schema in `src/store/schema.ts`): `id`, `root_cause_id`, `type`, `title`, `description`, `severity`, `confidence` + `confidence_breakdown`, `status`, `found_by{persona,strategy,hypothesis}`, `page`, `browsers`, `viewports`, `element{selector,text,bbox}`, `metrics`, `reproduction{rate, environment, steps_human, expected, actual, steps_minimal, steps_original, spec}`, `evidence_kind`, `screenshots`, `video`, `source_hints`, `fix_hint`, `fix{branch, pr_url, verified}`.
 
+## Web app (`web/`)
+
+**TurboBrocolli** is a local dashboard, run viewer and fix control room, kept separate from the agent code. It has a Greptile-style UI (dashed boxes, Anybody/DM Sans/Space Mono), is dark by default with a light/system toggle, and is built with Vite + React on a small Hono API that reads run folders from disk.
+
+```bash
+npm run web:install        # once
+npm run web                # http://127.0.0.1:4317  (API on :4318)
+npm run web:build && npm run web:start   # production build, one server on :4317
+```
+
+It finds every workspace automatically: the CLI records each one in `~/.bugbash/workspaces.json`. You can also add one with `BUGBASH_WORKSPACES=/a/.bugbash:/b/.bugbash npm run web` or the "Add a workspace" box on the Runs page.
+
+**What you can do**
+- **Dashboard (home):** the current state across targets, taken from each target's latest triaged run. It shows:
+  - KPI tiles;
+  - active bugs per run, stacked by severity;
+  - severity breakdown and the fix pipeline;
+  - the most severe open bugs;
+  - recent jobs;
+  - bug types, pages and browsers.
+
+  Every chart has hover tooltips and a table view.
+- **Runs:** every run from every workspace, with counts and live status.
+- **Run:**
+  - root-cause sections, each with a "Fix whole group" button;
+  - bug cards you can multi-select for a "Fix selected (n)" action;
+  - filters: status, severity, type, browser, persona, confidence, search;
+  - tabs for lead-agent decisions and explorer sessions, coverage, hypotheses, code intel, and jobs.
+- **Bug:** every field of the finding:
+  - evidence: annotated, close-up and full-page screenshots, the explorer's own shot, and a filmstrip;
+  - video with an **annotated timeline**: step markers, a red BUG marker, the current step shown beside the player, jump-to-bug, speed and frame stepping. Clicking a repro step jumps the video to it;
+  - expected/actual, minimal and original traces, the repro spec, and a Playwright trace download;
+  - source hints, measurements, the confidence breakdown, found-by, triage notes, and the explorer transcript that led to the finding;
+  - the raw JSON.
+- **Fix:** starts `bugbash fix` as a background job on a new branch. You follow it live: a stage timeline, the agent's actions, and per-browser/width verify results. A branch panel shows commits, changed files, the diff, and PR status and checks.
+  - Opening a PR requires an explicit "this pushes to origin" confirmation.
+- **Label and regroup:** confirm, mark false positive (with a suppression scope), or move a finding to another group.
+- **New bug bash / re-triage:** launch explore (with optional triage) and watch explorer sessions live.
+
+Jobs run as detached CLI processes. Their status and events are written to disk (`~/.bugbash/web-jobs/`, or `<run>/jobs/` for CLI-started jobs), so they survive page reloads and server restarts. The server binds to 127.0.0.1 only, and it serves run files with a path-traversal guard and HTTP Range support for video seeking.
+
 ## Development
 
 ```bash

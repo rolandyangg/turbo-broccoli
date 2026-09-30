@@ -35,3 +35,6 @@ Moving a finding between groups: `./bin/bugbash.js regroup BB-0012 RC-005` (or `
 - It requires a clean git tree in the target repo.
 - **Ask before adding `--pr`**, because it pushes a branch and opens a GitHub PR. Suggest `--draft`. Mention that before/after images are committed under `.bugbash/pr-assets/` in a separate commit unless `--no-pr-assets` is used.
 - Report the result: whether it was verified, the branch, the PR URL, and any other findings the fix also resolved.
+
+## Web app
+For browsing results, pointing the user to the UI is often better than pasting results. `npm run web` serves http://127.0.0.1:4317, where they can view every bug with its screenshots, annotated video and repro steps, start fixes and watch them live. Start it in the background if they ask to see results visually.
