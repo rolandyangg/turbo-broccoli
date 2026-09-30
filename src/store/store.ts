@@ -1,13 +1,34 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, symlinkSync, unlinkSync, lstatSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { homedir } from 'node:os';
 import { FindingsFile, SCHEMA_VERSION, type Finding, type RootCauseGroup } from './schema.js';
 
 export function workspaceFor(repoPath: string | null, out?: string | null): string {
   const ws = resolve(out ?? (repoPath ? join(repoPath, '.bugbash') : '.bugbash'));
   mkdirSync(join(ws, 'runs'), { recursive: true });
   const gi = join(ws, '.gitignore');
-  if (!existsSync(gi)) writeFileSync(gi, 'runs/\ntmp/\n');
+  if (!existsSync(gi)) writeFileSync(gi, 'runs/\ntmp/\njobs/\n');
+  registerWorkspace(ws);
   return ws;
+}
+
+export const REGISTRY = join(homedir(), '.bugbash', 'workspaces.json');
+
+/** Remembers every workspace so viewers (the web app) can find all runs on this machine. */
+export function registerWorkspace(ws: string) {
+  try {
+    mkdirSync(dirname(REGISTRY), { recursive: true });
+    const list: string[] = existsSync(REGISTRY) ? JSON.parse(readFileSync(REGISTRY, 'utf8')) : [];
+    if (!list.includes(ws)) writeFileSync(REGISTRY, JSON.stringify([...list, ws], null, 2));
+  } catch {}
+}
+
+export function registeredWorkspaces(): string[] {
+  try {
+    return existsSync(REGISTRY) ? (JSON.parse(readFileSync(REGISTRY, 'utf8')) as string[]).filter((w) => existsSync(w)) : [];
+  } catch {
+    return [];
+  }
 }
 
 export function newRunId(): string {
