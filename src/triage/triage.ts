@@ -5,7 +5,7 @@ import { Config } from '../config.js';
 import { Finding, RawFinding, type RootCauseGroup, type Step } from '../store/schema.js';
 import { readRun, writeRun, writeFindings, readFindings, allFindings } from '../store/store.js';
 import { clusterFindings, type Cluster } from './cluster.js';
-import { BrowserPool, replay, replayAndCheck, minimize, checkPresence, DETECTABLE, type DefectSpec } from './replay.js';
+import { BrowserPool, replay, replayAndCheck as replayAndCheckRaw, minimize, checkPresence, DETECTABLE, type DefectSpec } from './replay.js';
 import { annotateDefect } from './annotate.js';
 import { recordVideo } from './video.js';
 import { describeStep, normalizeSteps, suffixFromLastGoto, finalEnvironment } from './steps.js';
@@ -29,6 +29,23 @@ export interface TriageOptions {
 }
 
 const TEMPORAL_TYPES = new Set(['layout-shift', 'broken-state']);
+
+/** Per-finding triage telemetry, written to triage-stats.json for the observability dashboard. */
+export interface TriageFindingStat {
+  id: string;
+  type: string;
+  ms: number;
+  replays: number;
+  minimize_tries: number;
+  steps_original: number;
+  steps_minimal: number;
+  presence: 'present' | 'absent' | 'unverifiable';
+  rate: string | null;
+  video: boolean;
+  video_rerecorded: boolean;
+  reviewer: 'defect' | 'not_defect' | 'unavailable' | 'skipped';
+  status: string;
+}
 
 function readJsonl<T>(file: string, parse: (x: unknown) => T): T[] {
   if (!existsSync(file)) return [];
@@ -66,10 +83,11 @@ export async function triageRun(o: TriageOptions) {
   const limit = pLimit(o.concurrency ?? 3);
   let done = 0;
 
+  const stats: TriageFindingStat[] = [];
   const findings = await Promise.all(
     clusters.map((c) =>
       limit(async () => {
-        const f = await triageCluster(c, ids.get(c.fingerprint)!, { ...o, config, pool, sources, calibration, memory });
+        const f = await triageCluster(c, ids.get(c.fingerprint)!, { ...o, config, pool, sources, calibration, memory, stats });
         o.log(`  [${++done}/${clusters.length}] ${f.id} ${f.status} conf=${f.confidence} ${f.reproduction.rate ?? 'n/a'} ${f.evidence_kind}${f.video ? ' +video' : ''} — ${f.title.slice(0, 70)}`);
         return f;
       }),
@@ -79,7 +97,8 @@ export async function triageRun(o: TriageOptions) {
 
   // Root-cause grouping (advisory): every finding stays an individual record.
   o.log('Grouping findings by root cause…');
-  const groups = await groupFindings(findings, { intel, repo: info.repo_path, model: config.model, useLlm: o.review !== false, log: o.log });
+  const groupingOutcome = { value: 'structural' as 'llm' | 'structural' | 'skipped' };
+  const groups = await groupFindings(findings, { intel, repo: info.repo_path, model: config.model, useLlm: o.review !== false, log: o.log, runDir: o.runDir, onMethod: (m) => (groupingOutcome.value = m) });
 
   // Re-triaging a run must not lose human decisions or fix records made since the last triage.
   carryOver(o.runDir, findings, o.log);
@@ -88,6 +107,10 @@ export async function triageRun(o: TriageOptions) {
   for (const f of findings) f.history_tag = memory.track(info.run_id, f);
 
   const ff = writeFindings(o.runDir, { run_id: info.run_id, target: info.target, generated_at: new Date().toISOString(), groups });
+  writeFileSync(
+    join(o.runDir, 'triage-stats.json'),
+    JSON.stringify({ started_at: new Date(t0).toISOString(), ended_at: new Date().toISOString(), ms: Date.now() - t0, raw_findings: raw.length, clusters: clusters.length, groups: groups.length, grouping: groupingOutcome.value, findings: stats }, null, 2),
+  );
   info.stages.triage = { at: new Date().toISOString(), note: `${findings.length} findings in ${groups.length} groups, ${Math.round((Date.now() - t0) / 1000)}s` };
   writeRun(o.runDir, info);
   const { html, md } = writeReport(o.runDir);
@@ -135,8 +158,17 @@ function assignIds(clusters: Cluster[], memory: Memory): Map<string, string> {
 async function triageCluster(
   c: Cluster,
   id: string,
-  o: TriageOptions & { config: Config; pool: BrowserPool; sources: SourceIndex | null; calibration: ReturnType<typeof loadCalibration>; memory: Memory },
+  o: TriageOptions & { config: Config; pool: BrowserPool; sources: SourceIndex | null; calibration: ReturnType<typeof loadCalibration>; memory: Memory; stats: TriageFindingStat[] },
 ): Promise<Finding> {
+  const startedAt = Date.now();
+  let replays = 0;
+  let minimizeTries = 0;
+  let videoRerecorded = false;
+  const replayAndCheck: typeof replayAndCheckRaw = (...a) => {
+    replays++;
+    return replayAndCheckRaw(...a);
+  };
+  const tdir = join(o.runDir, 'transcripts', 'triage');
   const rep = c.representative;
   const spec: DefectSpec = { type: rep.type, selector: rep.element.selector, relatedSelector: c.relatedSelector, signature: rep.element.signature };
   const rOpts = { baseUrl: o.baseUrl, browser: rep.environment.browser, initialViewport: rep.environment.viewport, guardrails: o.config.guardrails, pool: o.pool };
@@ -190,6 +222,8 @@ async function triageCluster(
   const runs = o.reproRuns ?? 3;
   if (presence === 'present') {
     const m = await minimize(steps, spec, rOpts).catch(() => ({ steps, tries: 0 }));
+    minimizeTries = m.tries;
+    replays += m.tries;
     minimal = m.steps;
     notes.push(`minimized ${steps.length} → ${minimal.length} steps in ${m.tries} replays`);
     let hits = 0;
@@ -257,7 +291,7 @@ async function triageCluster(
   // 4. Independent review.
   let verdict: ReviewVerdict | null = null;
   if (o.review !== false) {
-    verdict = await reviewFinding(f, { runDir: o.runDir, model: o.config.model, images: [shots.annotated, shots.crop, ...(rep.screenshot ? [rep.screenshot] : [])], replayNote: presence === 'present' ? `detector re-confirmed the defect in ${rate} fresh replays` : presence === 'absent' ? 'the recorded steps did NOT reproduce it in a fresh browser' : 'not automatically verifiable; judge from the images' }).catch(() => null);
+    verdict = await reviewFinding(f, { runDir: o.runDir, model: o.config.model, transcriptPath: join(tdir, `review-${id}.jsonl`), images: [shots.annotated, shots.crop, ...(rep.screenshot ? [rep.screenshot] : [])], replayNote: presence === 'present' ? `detector re-confirmed the defect in ${rate} fresh replays` : presence === 'absent' ? 'the recorded steps did NOT reproduce it in a fresh browser' : 'not automatically verifiable; judge from the images' }).catch(() => null);
     if (verdict) {
       f.confidence_breakdown.reviewer = verdict.is_defect ? verdict.confidence : Math.min(verdict.confidence, 1 - verdict.confidence);
       f.severity = verdict.severity as Finding['severity'];
@@ -279,9 +313,10 @@ async function triageCluster(
     const vOpts = { ...rOpts, pool: undefined, id, runDir: o.runDir, title: f.title, selector: spec.selector, relatedSelector: spec.relatedSelector };
     let v = await recordVideo(minimal, vOpts).catch((e) => (notes.push(`video failed: ${e}`), null));
     if (v && o.review !== false) {
-      const check = await reviewVideo({ runDir: o.runDir, title: f.title, filmstrip: v.filmstrip, bugFrame: v.bugFrame, model: o.config.model }).catch(() => null);
+      const check = await reviewVideo({ runDir: o.runDir, title: f.title, filmstrip: v.filmstrip, bugFrame: v.bugFrame, model: o.config.model, transcriptPath: join(tdir, `video-${id}.jsonl`) }).catch(() => null);
       if (check && !check.visible) {
         notes.push(`video re-recorded: ${check.note}`);
+        videoRerecorded = true;
         v = (await recordVideo(minimal, { ...vOpts, params: { paceMs: check.paceMs ?? 1400, holdMs: check.holdMs ?? 3000, settleMs: check.settleMs ?? 3000, slowMo: 150 } }).catch(() => v)) ?? v;
       }
     }
@@ -300,6 +335,21 @@ async function triageCluster(
   } else if (presence === 'absent') f.status = 'flaky';
   else if (f.confidence < o.config.confidenceThreshold) f.status = 'low_confidence';
   else f.status = 'new';
+  o.stats.push({
+    id,
+    type: f.type,
+    ms: Date.now() - startedAt,
+    replays,
+    minimize_tries: minimizeTries,
+    steps_original: normalizeSteps(rep.trace).length,
+    steps_minimal: minimal.length,
+    presence,
+    rate,
+    video: !!f.video,
+    video_rerecorded: videoRerecorded,
+    reviewer: o.review === false ? 'skipped' : verdict ? (verdict.is_defect ? 'defect' : 'not_defect') : 'unavailable',
+    status: f.status,
+  });
   return f;
 }
 
@@ -307,14 +357,14 @@ function rel<T extends Record<string, string | null>>(runDir: string, o: T): T {
   return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v ? relative(runDir, v) : null])) as T;
 }
 
-export async function groupFindings(findings: Finding[], o: { intel: CodeIntel | null; repo: string | null; model: string | null; useLlm: boolean; log?: (m: string) => void }): Promise<RootCauseGroup[]> {
+export async function groupFindings(findings: Finding[], o: { intel: CodeIntel | null; repo: string | null; model: string | null; useLlm: boolean; log?: (m: string) => void; runDir?: string; onMethod?: (m: 'llm' | 'structural' | 'skipped') => void }): Promise<RootCauseGroup[]> {
   const byId = new Map(findings.map((f) => [f.id, f]));
   const groups: RootCauseGroup[] = [];
   const used = new Set<string>();
   let proposals: Awaited<ReturnType<typeof proposeRootCauses>> = null;
   if (o.useLlm && findings.length > 1) {
     for (let attempt = 1; attempt <= 2 && !proposals; attempt++) {
-      proposals = await proposeRootCauses(findings, { repo: o.repo, intelSummary: summarizeIntel(o.intel), model: o.model }).catch((e) => {
+      proposals = await proposeRootCauses(findings, { repo: o.repo, intelSummary: summarizeIntel(o.intel), model: o.model, transcriptPath: o.runDir ? join(o.runDir, 'transcripts', 'triage', `grouping-${attempt}.jsonl`) : undefined }).catch((e) => {
         o.log?.(`root-cause grouping attempt ${attempt} failed: ${String(e).slice(0, 200)}`);
         return null;
       });
@@ -328,6 +378,7 @@ export async function groupFindings(findings: Finding[], o: { intel: CodeIntel |
     members.forEach((id) => used.add(id));
     groups.push({ id: `RC-${String(++n).padStart(3, '0')}`, summary: p.summary, component: p.component ?? null, css_rule: p.css_rule ?? null, files: p.files ?? [], fix_plan: p.fix_plan, confidence: Math.max(0, Math.min(1, p.confidence ?? 0.5)), status_rollup: {}, findings: members.map((id) => byId.get(id)!) });
   }
+  o.onMethod?.(!o.useLlm || findings.length < 2 ? 'skipped' : proposals ? 'llm' : 'structural');
   // Fallback / leftovers: group by component signature leaf, else singleton.
   const rest = findings.filter((f) => !used.has(f.id));
   const bySig = new Map<string, Finding[]>();

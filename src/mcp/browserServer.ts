@@ -56,7 +56,19 @@ const serial = <T>(fn: () => Promise<T>): Promise<T> => {
 };
 
 function wrap<A>(name: string, fn: (args: A) => Promise<string | ToolResult> | string | ToolResult) {
-  return (args: A): Promise<ToolResult> => serial(() => run(name, fn, args));
+  return (args: A): Promise<ToolResult> => serial(() => timed(name, fn, args));
+}
+
+/** Runs a tool and records its duration and outcome in the session log (agent observability). */
+async function timed<A>(name: string, fn: (args: A) => Promise<string | ToolResult> | string | ToolResult, args: A): Promise<ToolResult> {
+  const t0 = Date.now();
+  const res = await run(name, fn, args);
+  const text = res.content.find((c) => c.type === 'text')?.text ?? '';
+  const blocked = /is not available to your persona/.test(text) ? 'persona' : /is turned off for this run|isn't selected for this run/.test(text) ? 'selection' : /^BLOCKED by guardrails/.test(text) ? 'guardrail' : /BUDGET EXHAUSTED|Session over/.test(text) ? 'budget' : undefined;
+  try {
+    session.logTool({ name, ms: Date.now() - t0, ok: !res.isError && !blocked, ...(res.isError && !blocked ? { error: text.slice(0, 160) } : {}), ...(blocked ? { blocked } : {}) });
+  } catch {}
+  return res;
 }
 
 async function run<A>(name: string, fn: (args: A) => Promise<string | ToolResult> | string | ToolResult, args: A): Promise<ToolResult> {

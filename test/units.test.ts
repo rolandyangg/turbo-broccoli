@@ -230,3 +230,22 @@ describe('pickConfig', () => {
     expect(pickConfig({ nope: 1 }).ok).toBe(false);
   });
 });
+
+describe('tool-call telemetry', () => {
+  it('appends one tool line per call to the session log', async () => {
+    const { mkdtempSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { BrowserSession } = await import('../src/mcp/session.js');
+    const { Config } = await import('../src/config.js');
+    const runDir = mkdtempSync(join(tmpdir(), 'bb-tool-'));
+    const s = new BrowserSession({ runDir, session: 's-001', baseUrl: 'http://127.0.0.1:1', browser: 'chromium', persona: null, config: Config.parse({}) });
+    s.logTool({ name: 'click', ms: 42, ok: true });
+    s.logTool({ name: 'resize', ms: 1, ok: false, error: 'refused', blocked: 'selection' });
+    const lines = readFileSync(join(runDir, 'sessions', 's-001.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ kind: 'tool', name: 'click', ms: 42, ok: true });
+    expect(lines[1]).toMatchObject({ kind: 'tool', name: 'resize', ok: false, blocked: 'selection' });
+    expect(typeof lines[0].at).toBe('string');
+  });
+});

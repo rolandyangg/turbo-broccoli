@@ -91,6 +91,11 @@ export class BrowserSession {
     if (this.opts.device) await this.setDevice(this.opts.device).catch(() => {});
   }
 
+  /** Tool-call telemetry (name, duration, outcome) for observability. */
+  logTool(entry: { name: string; ms: number; ok: boolean; error?: string; blocked?: string }) {
+    this.log({ kind: 'tool', ...entry });
+  }
+
   private log(entry: Record<string, unknown>) {
     appendFileSync(join(this.opts.runDir, 'sessions', `${this.opts.session}.jsonl`), JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n');
   }

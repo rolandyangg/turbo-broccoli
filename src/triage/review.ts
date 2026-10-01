@@ -43,7 +43,7 @@ Severity: critical (blocks a task or makes key content unreadable/unreachable), 
 needs_video: true if the defect is about change over time (flicker, layout shift, a transition, hover/timing/race behaviour) so a still image can't show it.
 Write expected/actual as one sentence each. fix_hint: the most likely CSS/markup change. Output JSON only.`;
 
-export async function reviewFinding(f: Finding, o: { runDir: string; model?: string | null; images: string[]; replayNote: string }): Promise<ReviewVerdict | null> {
+export async function reviewFinding(f: Finding, o: { runDir: string; model?: string | null; images: string[]; replayNote: string; transcriptPath?: string }): Promise<ReviewVerdict | null> {
   const prompt = [
     `Reported defect ${f.id}`,
     `type: ${f.type}  severity (reporter): ${f.severity}  reporter confidence: ${f.confidence_breakdown.explorer}`,
@@ -56,13 +56,13 @@ export async function reviewFinding(f: Finding, o: { runDir: string; model?: str
     `replay: ${o.replayNote}`,
     `\nView these images with the Read tool before deciding:\n${o.images.map((i) => `- ${i}`).join('\n')}`,
   ].join('\n');
-  const r = await runClaude({ prompt, systemPrompt: REVIEWER_SYSTEM, tools: ['Read'], allowedTools: ['Read'], addDirs: [o.runDir], cwd: o.runDir, jsonSchema: REVIEW_SCHEMA, model: o.model, timeoutMs: 5 * 60_000 });
+  const r = await runClaude({ prompt, systemPrompt: REVIEWER_SYSTEM, tools: ['Read'], allowedTools: ['Read'], addDirs: [o.runDir], cwd: o.runDir, jsonSchema: REVIEW_SCHEMA, model: o.model, timeoutMs: 5 * 60_000, transcriptPath: o.transcriptPath });
   const v = (r.structured ?? tryParseJson(r.text)) as ReviewVerdict | null;
   if (!v || typeof v.is_defect !== 'boolean') return null;
   return { ...v, confidence: clamp(v.confidence) };
 }
 
-export async function reviewVideo(o: { runDir: string; title: string; filmstrip: string | null; bugFrame: string | null; model?: string | null }): Promise<{ visible: boolean; paceMs?: number; holdMs?: number; settleMs?: number; note: string } | null> {
+export async function reviewVideo(o: { runDir: string; title: string; filmstrip: string | null; bugFrame: string | null; model?: string | null; transcriptPath?: string }): Promise<{ visible: boolean; paceMs?: number; holdMs?: number; settleMs?: number; note: string } | null> {
   const imgs = [o.filmstrip, o.bugFrame].filter(Boolean) as string[];
   if (!imgs.length) return null;
   const r = await runClaude({
@@ -73,6 +73,7 @@ export async function reviewVideo(o: { runDir: string; title: string; filmstrip:
     cwd: o.runDir,
     model: o.model,
     timeoutMs: 3 * 60_000,
+    transcriptPath: o.transcriptPath,
     jsonSchema: { type: 'object', properties: { visible: { type: 'boolean' }, paceMs: { type: 'number' }, holdMs: { type: 'number' }, settleMs: { type: 'number' }, note: { type: 'string' } }, required: ['visible', 'note'] },
   });
   return (r.structured ?? tryParseJson(r.text)) as never;
@@ -88,7 +89,7 @@ export interface GroupProposal {
   finding_ids: string[];
 }
 
-export async function proposeRootCauses(findings: Finding[], o: { repo: string | null; intelSummary: string; model?: string | null }): Promise<GroupProposal[] | null> {
+export async function proposeRootCauses(findings: Finding[], o: { repo: string | null; intelSummary: string; model?: string | null; transcriptPath?: string }): Promise<GroupProposal[] | null> {
   const compact = findings.map((f) => ({
     id: f.id,
     type: f.type,
@@ -108,6 +109,7 @@ export async function proposeRootCauses(findings: Finding[], o: { repo: string |
     cwd: o.repo ?? undefined,
     model: o.model,
     timeoutMs: 10 * 60_000,
+    transcriptPath: o.transcriptPath,
     jsonSchema: {
       type: 'object',
       properties: {
