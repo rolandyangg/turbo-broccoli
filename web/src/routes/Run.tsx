@@ -10,11 +10,12 @@ import { JobsTable } from '../components/Jobs.tsx';
 import { DashboardView } from './Dashboard.tsx';
 import { RunName } from '../components/RunName.tsx';
 import { RetroButton } from './Improvements.tsx';
+import { PrList } from '../components/PrList.tsx';
 import { WF_LABEL, isArchived, updateWorkflow, wfStateOf, type WfState } from '../components/Workflow.tsx';
 
 const DISMISSED = ['false_positive', 'suppressed'];
 
-type Tab = 'overview' | 'bugs' | 'fixed' | 'archived' | 'campaign' | 'coverage' | 'hypotheses' | 'intel' | 'jobs';
+type Tab = 'overview' | 'bugs' | 'fixed' | 'prs' | 'archived' | 'campaign' | 'coverage' | 'hypotheses' | 'intel' | 'jobs';
 
 export function Run() {
   const { ws = '', run = '' } = useParams();
@@ -51,6 +52,7 @@ export function Run() {
   const functional = all.filter((x) => ACTIVE.includes(x.status) && categoryOf(x) === 'ux-functional' && !isArchived(x)).length;
   const archivedCount = all.filter(isArchived).length;
   const fixedCount = all.filter(isFixedOrFixing).length;
+  const prCount = new Set(all.map((x) => x.fix?.pr_url).filter(Boolean)).size;
   const wfCount = (st: WfState) => all.filter((x) => base(x) && sortable(x) && wfStateOf(x) === st).length;
   const bulk = async (patch: Parameters<typeof updateWorkflow>[3], msg: string) => {
     try {
@@ -133,6 +135,7 @@ export function Run() {
             { id: 'overview', label: 'Overview' },
             { id: 'bugs', label: `Bugs (${all.length - archivedCount})` },
             { id: 'fixed', label: `Fixed (${fixedCount})` },
+            { id: 'prs', label: `PRs${prCount ? ` (${prCount})` : ''}` },
             { id: 'archived', label: `Archived (${archivedCount})` },
             { id: 'campaign', label: 'Campaign' },
             { id: 'coverage', label: 'Coverage' },
@@ -272,6 +275,7 @@ export function Run() {
 
       {tab === 'overview' && <DashboardView scope={{ ws, run }} />}
       {tab === 'fixed' && <FixedTab all={all} ws={ws} run={run} />}
+      {tab === 'prs' && <PrList scope={{ ws, run }} />}
       {tab === 'campaign' && <CampaignTab data={data} />}
       {tab === 'coverage' && <CoverageTab data={data} />}
       {tab === 'hypotheses' && <HypothesesTab data={data} />}

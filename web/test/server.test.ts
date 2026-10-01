@@ -142,6 +142,12 @@ describe('bugbash web API', () => {
     expect((await (await json('DELETE', '/presets/night-shift')).json()).deleted).toBe(true);
   });
 
+  it('lists pull requests per run and overall (none yet in this workspace)', async () => {
+    const one = await (await get(`/prs?ws=${wsId}&run=${RUN}`)).json();
+    expect(one).toEqual({ prs: [], counts: { total: 0, draft: 0, open: 0, merged: 0, closed: 0, unknown: 0 } });
+    expect((await get('/prs')).status).toBe(200);
+  });
+
   it('validates fix retry / continue requests', async () => {
     const fix = (body: unknown) => app.request(`/api/runs/${wsId}/${RUN}/fix`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     expect((await fix({ ids: ['BB-0001'], mode: 'resume' })).status).toBe(400);

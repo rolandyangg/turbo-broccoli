@@ -22,6 +22,7 @@ import { branchInfo } from './git.ts';
 import { dashboard } from './dashboard.ts';
 import { agentsOverview } from './agentStats.ts';
 import { compareRuns } from './compare.ts';
+import { listPRs } from './prs.ts';
 import { githubStatus, connectGitHub, disconnectGitHub } from './github.ts';
 import { schedulesOverview, previewCron, createSchedule, toggleSchedule, deleteSchedule, runScheduleNow } from './schedules.ts';
 import { publicSettings, saveSettings, inbox, readMany, sendTest } from './notifications.ts';
@@ -152,6 +153,11 @@ app.post('/schedules/:id/run', async (c) => c.json(await runScheduleNow(c.req.pa
 app.delete('/schedules/:id', async (c) => {
   await deleteSchedule(c.req.param('id'));
   return c.json({ ok: true });
+});
+app.get('/prs', async (c) => {
+  const ws = c.req.query('ws');
+  const run = c.req.query('run');
+  return c.json(await listPRs(ws && run ? { ws, run } : null, c.req.query('fresh') === '1'));
 });
 app.get('/compare', (c) => {
   const a = c.req.query('a');

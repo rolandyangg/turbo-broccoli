@@ -1590,3 +1590,67 @@
 .fixed-help + .fixed-list li:first-child {
   padding-top: 8px;
 }
+
+/* Pull requests list */
+.pr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.pr-list > li {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pr-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.pr-title {
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.pr-title:hover {
+  text-decoration: underline;
+}
+.pr-links {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line-soft);
+}
+.pr-links ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pr-links .mono {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 720px) {
+  .pr-links {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 400px) {
+  .nav-links {
+    gap: 4px 12px;
+    flex-wrap: wrap;
+  }
+  .nav-links a {
+    letter-spacing: 0.06em;
+  }
+}
