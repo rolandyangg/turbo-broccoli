@@ -102,7 +102,12 @@ exploreOpts(program.command('explore').description('Agentically bug-bash a site 
   .option('--then-triage', 'Run triage right after exploring')
   .option('--name <name>', 'Display name for the run')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
+  .option('--schedule <id>', 'Set by scheduled runs (launchd): records the result for the Schedules page')
   .action(async (targetArg: string, o) => {
+    const sched = o.schedule ? await import('./schedule/schedule.js') : null;
+    const started = new Date().toISOString();
+    let schedRunDir: string | null = null;
+    sched?.recordLast(o.schedule, { state: 'running', at: started, ended_at: null, run_dir: null, error: null });
     const target = await resolveTarget(targetArg, { repo: o.repo, devCommand: o.devCommand, devPort: o.devPort, log });
     const ws = workspaceFor(target.repoPath, o.out);
     const { rep, logf } = jobLogger(ws, o.job, 'explore', { options: { target: targetArg, repo: o.repo ?? null, thenTriage: !!o.thenTriage, browsers: o.browsers ?? null, budgetSessions: o.budgetSessions ?? null, noLead: o.lead === false, codeIntel: o.codeIntel !== false } });
@@ -125,7 +130,11 @@ exploreOpts(program.command('explore').description('Agentically bug-bash a site 
         codeIntel: o.codeIntel === false ? false : undefined,
         name: o.name,
         log: logf,
-        onRun: (runDir) => rep.update({ run_dir: runDir }),
+        onRun: (runDir) => {
+          rep.update({ run_dir: runDir });
+          schedRunDir = runDir;
+          sched?.recordLast(o.schedule, { state: 'running', at: started, ended_at: null, run_dir: runDir, error: null });
+        },
       });
       rememberRun(runDir);
       if (o.thenTriage) {
@@ -139,8 +148,10 @@ exploreOpts(program.command('explore').description('Agentically bug-bash a site 
       } else logf(`Next: bugbash triage --run ${runDir}`);
       (await import('./notify/events.js')).notifyRunDone(runDir);
       rep.finish('succeeded', { summary: o.thenTriage ? 'Explored and triaged' : 'Explored' });
+      sched?.recordLast(o.schedule, { state: 'succeeded', at: started, ended_at: new Date().toISOString(), run_dir: runDir, error: null });
     } catch (e) {
       rep.finish('failed', { error: (e as Error).message });
+      sched?.recordLast(o.schedule, { state: 'failed', at: started, ended_at: new Date().toISOString(), run_dir: schedRunDir, error: (e as Error).message.slice(0, 500) });
       throw e;
     } finally {
       await target.stop();
@@ -421,6 +432,51 @@ program
     const r = await implementBacklogItem({ ws, id, pr: !!o.pr, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
     console.log(r.verified ? `Implemented on ${r.branch} (typecheck + tests pass)` : `Committed on ${r.branch}, but verification failed`);
   });
+
+const schedule = program.command('schedule').description('Scheduled bug bashes via macOS launchd (run only while the Mac is awake and you are logged in)');
+schedule
+  .command('add')
+  .description('Add a schedule (installs a LaunchAgent)')
+  .requiredOption('--target <target>', 'URL, local static folder, or local repo')
+  .requiredOption('--cron <expr>', 'minute hour day month weekday, e.g. "0 2 * * 1-5" (numbers, lists and ranges; no */n)')
+  .option('--preset <id>', 'Run preset', 'standard')
+  .option('--name <name>', 'Display name')
+  .option('--repo <path>', 'Source repo (white-box + fixes)')
+  .option('--disabled', 'Save without installing')
+  .action(async (o) => {
+    const S = await import('./schedule/schedule.js');
+    const s = await S.addSchedule({ target: o.target, cron: o.cron, preset: o.preset, name: o.name, repo: o.repo, enabled: !o.disabled });
+    console.log(`Added ${s.id}: ${s.name} — ${S.describeCron(s.cron)}${s.enabled ? `, next ${S.nextRun(s.cron)?.toLocaleString()}` : ' (disabled)'}\n${s.enabled ? `LaunchAgent: ${S.plistPath(s.id)}` : ''}`);
+  });
+schedule
+  .command('list')
+  .description('List schedules')
+  .action(async () => {
+    const S = await import('./schedule/schedule.js');
+    const all = S.listSchedules();
+    if (!all.length) console.log('No schedules.');
+    for (const s of all) {
+      const last = S.lastResult(s.id);
+      console.log(`${s.id}  ${s.enabled ? (await S.isLoaded(s.id)) ? 'on ' : 'on (not loaded!)' : 'off'}  ${s.name} — ${S.describeCron(s.cron)} · ${s.preset} · ${s.target}${s.enabled ? ` · next ${S.nextRun(s.cron)?.toLocaleString()}` : ''}${last ? ` · last: ${last.state} ${last.at}` : ''}`);
+    }
+  });
+for (const [cmd, desc] of [
+  ['enable', 'Install the LaunchAgent'],
+  ['disable', 'Uninstall the LaunchAgent (keeps the schedule)'],
+  ['remove', 'Uninstall and delete the schedule'],
+  ['run-now', 'Run it now (detached, same command and log as launchd)'],
+] as const)
+  schedule
+    .command(cmd)
+    .description(desc)
+    .argument('<id>')
+    .action(async (id: string) => {
+      const S = await import('./schedule/schedule.js');
+      if (cmd === 'enable' || cmd === 'disable') await S.setEnabled(id, cmd === 'enable');
+      else if (cmd === 'remove') await S.removeSchedule(id);
+      else console.log(`Started (pid ${S.runNow(id).pid}); log: ${S.logPath(id)}`);
+      if (cmd !== 'run-now') console.log(`${cmd}d ${id}`);
+    });
 
 program
   .command('bench')
