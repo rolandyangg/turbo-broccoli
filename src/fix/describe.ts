@@ -40,7 +40,7 @@ const SCHEMA = {
   required: ['commit_subject', 'summary', 'root_cause', 'changes', 'notes'],
 };
 
-const SYSTEM = `You write the "Technical changes" section of a pull request that fixes UI bugs found by an automated bug bash.
+const SYSTEM = `You write the "Changes" section of a pull request that fixes UI bugs found by an automated bug bash.
 Explain the change for a code reviewer: the root cause in the code, then for each changed file what was changed and why it fixes the bug.
 Be concrete (CSS properties, selectors, values, components, breakpoints). Only describe what the diff actually does; don't invent changes or tests. Keep each item short. Mention real risks only.`;
 
@@ -67,7 +67,7 @@ export async function explainChanges(d: { diff: string; stats: FileStat[]; findi
   return { commit_subject: String(out.commit_subject ?? ''), summary: String(out.summary), root_cause: String(out.root_cause ?? ''), changes: out.changes.filter((c) => c && c.file).map((c) => ({ file: String(c.file), what: String(c.what ?? ''), why: String(c.why ?? '') })), notes: (out.notes ?? []).map(String).filter(Boolean) };
 }
 
-/** Markdown for the PR body: summary + "Technical changes" (root cause, per-file what/why with line counts, notes). */
+/** Markdown for the PR body: summary + "Changes" (root cause, per-file what/why with line counts, notes). */
 export function technicalSection(x: ChangeExplanation | null, stats: FileStat[], agentSummary: string): { summary: string; technical: string } {
   const statOf = (file: string) => stats.find((s) => s.file === file || s.file.endsWith(`/${file}`) || file.endsWith(`/${s.file}`));
   const counts = (s: FileStat | undefined) => (s ? ` (+${s.added} −${s.removed})` : '');

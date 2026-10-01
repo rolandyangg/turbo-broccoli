@@ -421,7 +421,7 @@ function fixPrompt(selected: Finding[], groups: RootCauseGroup[], others: Findin
 function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: string[]; before: VerifyResult[]; after: VerifyResult[]; regressions: string[]; verified: boolean; technical: { summary: string; technical: string }; runId: string; images: Map<string, string> | null; attempts: number }) {
   const lines: string[] = [];
   lines.push(`## Summary`, '', d.technical.summary, '');
-  lines.push(`## Technical changes`, '', d.technical.technical, '');
+  lines.push(`## Changes`, '', d.technical.technical, '');
   lines.push(`## Findings fixed`, '');
   for (const f of d.selected) {
     const b = d.before.find((x) => x.id === f.id);
