@@ -40,7 +40,8 @@ export function ThemeToggle() {
         setTheme(t);
       }}
     >
-      {theme === 'dark' ? '◐ Dark' : theme === 'light' ? '○ Light' : '◑ System'}
+      {theme === 'dark' ? '◐' : theme === 'light' ? '○' : '◑'}
+      <span className="theme-label"> {theme === 'dark' ? 'Dark' : theme === 'light' ? 'Light' : 'System'}</span>
     </button>
   );
 }
