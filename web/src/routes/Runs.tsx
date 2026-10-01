@@ -23,9 +23,14 @@ export function Runs() {
           </div>
           <h1 className="page-title">Runs</h1>
         </div>
-        <Chamfer small onClick={() => setLaunch(true)}>
-          New bug bash
-        </Chamfer>
+        <div className="row">
+          <Link className="btn-ghost" to="/compare">
+            Compare runs
+          </Link>
+          <Chamfer small onClick={() => setLaunch(true)}>
+            New bug bash
+          </Chamfer>
+        </div>
       </div>
       {error && <ErrorBox error={error} />}
       {!data && !error && <Loading what="Loading runs" />}

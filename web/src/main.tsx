@@ -12,6 +12,7 @@ import { Run } from './routes/Run.tsx';
 import { Bug } from './routes/Bug.tsx';
 import { Job, Jobs } from './routes/Job.tsx';
 import { Improvements } from './routes/Improvements.tsx';
+import { Compare } from './routes/Compare.tsx';
 
 const router = createBrowserRouter([
   {
@@ -25,6 +26,7 @@ const router = createBrowserRouter([
       { path: 'jobs', element: <Jobs /> },
       { path: 'jobs/:id', element: <Job /> },
       { path: 'improvements', element: <Improvements /> },
+      { path: 'compare', element: <Compare /> },
     ],
   },
 ]);

@@ -211,4 +211,25 @@ describe('bugbash web API', () => {
     expect((await impl('B-99', {})).status).toBe(404);
     expect((await impl('../x', {})).status).toBe(404);
   });
+
+  it('compares two triaged runs by fingerprint', async () => {
+    const { Finding, SCHEMA_VERSION } = await import('../../src/store/schema.ts');
+    const mk = (id: string, fingerprint: string, extra: Record<string, unknown> = {}) =>
+      Finding.parse({ id, fingerprint, type: 'overlap', title: `Bug ${fingerprint}`, confidence: 0.9, page: '/', element: { selector: '.x', text: null, bbox: null, signature: null }, reproduction: { environment: { browser: 'chromium', viewport: { width: 700, height: 900 }, variant: {} } }, ...extra });
+    const write = (run: string, findings: unknown[]) => {
+      const dir = join(ws, 'runs', run);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'run.json'), JSON.stringify({ run_id: run, target: 'fixtures/x', base_url: 'http://127.0.0.1:1', target_kind: 'static', repo_path: null, workspace: ws, started_at: run.replace(/T(\d\d)-(\d\d)-(\d\d)Z/, 'T$1:$2:$3Z'), ended_at: null, head_commit: null, config: {}, stop_reason: 'test', lead_decisions: [], jobs: [], stages: {} }));
+      writeFileSync(join(dir, 'findings.json'), JSON.stringify({ schemaVersion: SCHEMA_VERSION, run_id: run, target: 'fixtures/x', generated_at: 'now', groups: [{ id: 'RC-001', summary: 'g', component: null, css_rule: null, files: [], fix_plan: '', confidence: 0.5, status_rollup: {}, findings }] }));
+    };
+    write('2026-03-01T00-00-00Z', [mk('BB-0001', 'same', { severity: 'minor' }), mk('BB-0002', 'gone'), mk('BB-0003', 'was-fixed', { status: 'fixed' })]);
+    write('2026-03-02T00-00-00Z', [mk('BB-0001', 'same', { severity: 'major' }), mk('BB-0002', 'brand-new'), mk('BB-0003', 'was-fixed')]);
+    const d = await (await get(`/compare?a=${wsId}/2026-03-01T00-00-00Z&b=${wsId}/2026-03-02T00-00-00Z`)).json();
+    expect(d.counts).toMatchObject({ 'still-open': 1, new: 1, regressed: 1 });
+    expect(d.counts['not-found'] + d.counts['not-tested']).toBe(1);
+    const same = d.entries.find((e: { fingerprint: string }) => e.fingerprint === 'same');
+    expect(same.severity_change).toEqual({ from: 'minor', to: 'major', direction: 'worse' });
+    expect(same.group).toMatchObject({ id: 'RC-001', side: 'b' });
+    expect((await get(`/compare?a=${wsId}/2026-03-01T00-00-00Z`)).status).toBe(400);
+  });
 });

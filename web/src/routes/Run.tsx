@@ -83,6 +83,11 @@ export function Run() {
               {s.triaged ? 'Re-triage' : 'Triage now'}
             </button>
             <RetroButton ws={ws} run={run} triaged={s.triaged} />
+            {s.triaged && (
+              <Link className="btn-ghost" to={`/compare?b=${ws}/${encodeURIComponent(run)}`}>
+                Compare…
+              </Link>
+            )}
           </div>
         </div>
       </div>

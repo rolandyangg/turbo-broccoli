@@ -62,6 +62,11 @@ export function Dashboard() {
                 Open run
               </Link>
             )}
+            {scope && data.scope?.triaged && (
+              <Link className="btn-ghost" to={`/compare?b=${scope.ws}/${encodeURIComponent(scope.run)}`}>
+                Compare…
+              </Link>
+            )}
           </div>
         </div>
       )}

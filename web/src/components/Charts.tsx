@@ -433,3 +433,92 @@ export function Heatmap({ rows, columns, cell, legend }: { rows: string[]; colum
     </div>
   );
 }
+
+/** Two-to-four step lines on one axis (e.g. discovery curves of two runs): legend, end labels, crosshair tooltip. */
+export function MultiLineChart({ series, yLabel, xFormat, height = 240 }: { series: { key: string; label: string; color: string; points: LinePoint[]; stop?: number | null }[]; yLabel: string; xFormat: (x: number) => string; height?: number }) {
+  const [w, setW] = useState(600);
+  const [hover, setHover] = useState<number | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setW(el.clientWidth);
+    const ro = new ResizeObserver(() => setW(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const all = series.flatMap((s) => s.points);
+  const padL = 34,
+    padB = 22,
+    padT = 10,
+    padR = 64;
+  const yMax = Math.max(1, ...all.map((p) => p.y));
+  const xm = Math.max(1, ...all.map((p) => p.x), ...series.map((s) => s.stop ?? 0));
+  const sx = (x: number) => padL + (x / xm) * (w - padL - padR);
+  const sy = (y: number) => padT + (1 - y / yMax) * (height - padT - padB);
+  const end = (s: (typeof series)[number]) => Math.max(s.stop ?? 0, s.points[s.points.length - 1]?.x ?? 0);
+  const pathOf = (s: (typeof series)[number]) => {
+    let d = `M ${sx(0)} ${sy(0)}`;
+    let prev = 0;
+    for (const p of s.points) {
+      d += ` L ${sx(p.x)} ${sy(prev)} L ${sx(p.x)} ${sy(p.y)}`;
+      prev = p.y;
+    }
+    return d + ` L ${sx(end(s))} ${sy(prev)}`;
+  };
+  const valueAt = (s: (typeof series)[number], x: number) => (x > end(s) ? null : ([...s.points].reverse().find((p) => p.x <= x)?.y ?? 0));
+  const hx = hover === null ? null : ((hover - padL) / (w - padL - padR)) * xm;
+  const ticks = [0, Math.round(yMax / 2), yMax];
+  // End labels: nudge apart when two lines end at nearly the same height.
+  const labels = series.map((s) => ({ s, y: sy(s.points[s.points.length - 1]?.y ?? 0) })).sort((a, b) => a.y - b.y);
+  for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i - 1].y < 14) labels[i].y = labels[i - 1].y + 14;
+  if (!all.length) return <p className="muted small">No findings recorded in either run.</p>;
+  return (
+    <div className="cols-wrap">
+      <div className="viz-legend" role="list">
+        {series.map((s) => (
+          <span key={s.key} role="listitem" className="row small" style={{ gap: 6 }}>
+            <i className="stat-mark" style={{ background: s.color }} /> {s.label}
+          </span>
+        ))}
+      </div>
+      <div ref={ref} className="line-wrap" style={{ position: 'relative' }}>
+        <svg width={w} height={height} role="img" aria-label={`${yLabel} over time for ${series.map((s) => s.label).join(' and ')}`} onMouseMove={(e) => setHover(e.nativeEvent.offsetX)} onMouseLeave={() => setHover(null)}>
+          {ticks.map((t) => (
+            <g key={t}>
+              <line x1={padL} x2={w - padR} y1={sy(t)} y2={sy(t)} className="grid-line" />
+              <text x={padL - 6} y={sy(t) + 4} textAnchor="end" className="axis-text">
+                {t}
+              </text>
+            </g>
+          ))}
+          {series.map((s) => (
+            <path key={s.key} d={pathOf(s)} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" />
+          ))}
+          {labels.map(({ s, y }) => (
+            <text key={s.key} x={Math.min(sx(end(s)) + 6, w - padR + 6)} y={y + 4} className="axis-text">
+              {s.label.length > 9 ? s.label.slice(0, 8) + '…' : s.label}
+            </text>
+          ))}
+          <text x={padL} y={height - 4} className="axis-text">
+            {xFormat(0)}
+          </text>
+          <text x={w - padR} y={height - 4} textAnchor="end" className="axis-text">
+            {xFormat(xm)}
+          </text>
+          {hover !== null && hover > padL && hover < w - padR && <line x1={hover} x2={hover} y1={padT} y2={height - padB} className="crosshair" />}
+        </svg>
+        {hx !== null && hover !== null && hover > padL && hover < w - padR && (
+          <div className="viz-tip" style={{ left: Math.min(hover + 12, w - 200), top: 8 }}>
+            <b>{xFormat(hx)}</b>
+            {series.map((s) => (
+              <div key={s.key} className="row" style={{ gap: 6 }}>
+                <i className="stat-mark" style={{ background: s.color }} /> {s.label}: {valueAt(s, hx) ?? 'ended'}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -19,6 +19,7 @@ import { listJobs, getJob, launchJob, cancelJob, readEvents, CLI, REPO_ROOT, WEB
 import { branchInfo } from './git.ts';
 import { dashboard } from './dashboard.ts';
 import { agentsOverview } from './agentStats.ts';
+import { compareRuns } from './compare.ts';
 import { improvementsOverview, decideProposal, launchRetro, launchImplement } from './improvements.ts';
 
 const exec = promisify(execFile);
@@ -126,6 +127,12 @@ app.post('/runs/:ws/:run/fix', async (c) => {
   return c.json(launchJob('fix', args, { run_dir: dir, finding_ids: ids, scope: ids.join(','), options: { pr: !!b.pr, draft: b.draft !== false, base: b.base ?? null } }), 202);
 });
 
+app.get('/compare', (c) => {
+  const a = c.req.query('a');
+  const b = c.req.query('b');
+  if (!a || !b) throw new HttpError(400, 'Pass a=ws/run and b=ws/run');
+  return c.json(compareRuns(a, b));
+});
 app.get('/improvements', (c) => c.json(improvementsOverview()));
 app.post('/improvements/:ws/:run/:id', async (c) => {
   runDirOf(c.req.param('ws'), c.req.param('run')); // validates the run
