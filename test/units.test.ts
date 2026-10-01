@@ -363,3 +363,25 @@ describe('PR technical changes section', () => {
     expect(t.technical).toBe('- `x.css` (+2 −1)');
   });
 });
+
+describe('messages to running agents', () => {
+  it('delivers each new message once per agent at its next tool call, and records who got it', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execFileSync } = await import('node:child_process');
+    const { postMessage, readMessages, inboxFile } = await import('../src/jobs/inbox.js');
+    const dir = mkdtempSync(join(tmpdir(), 'bb-inbox-'));
+    const hook = (agent: string) => execFileSync(process.execPath, [join(process.cwd(), 'src/jobs/inboxHook.mjs')], { input: '{}', env: { ...process.env, BUGBASH_INBOX: inboxFile(dir), BUGBASH_AGENT: agent }, encoding: 'utf8' });
+    expect(hook('s-001')).toBe(''); // nothing yet
+    postMessage(dir, 'Focus on the pricing page');
+    const first = JSON.parse(hook('s-001'));
+    expect(first.hookSpecificOutput.hookEventName).toBe('PostToolUse');
+    expect(first.hookSpecificOutput.additionalContext).toContain('- Focus on the pricing page');
+    expect(hook('s-001')).toBe(''); // already delivered to this agent
+    expect(JSON.parse(hook('lead')).hookSpecificOutput.additionalContext).toContain('pricing page'); // other agents get it too
+    postMessage(dir, 'Also try phones');
+    expect(JSON.parse(hook('s-001')).hookSpecificOutput.additionalContext).not.toContain('pricing page'); // only the new one
+    expect(readMessages(dir).deliveries.map((d) => d.agent)).toEqual(['s-001', 'lead', 's-001']);
+  });
+});

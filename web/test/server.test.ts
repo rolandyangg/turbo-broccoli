@@ -148,6 +148,23 @@ describe('bugbash web API', () => {
     expect((await get('/prs')).status).toBe(200);
   });
 
+  it('passes messages to agents of running jobs only', async () => {
+    const mk = (id: string, state: string) => {
+      const d = join(jobsDir, id);
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'status.json'), JSON.stringify({ id, kind: 'fix', state, stage: 'x', pid: process.pid, run_dir: null, finding_ids: [], scope: null, branch: null, base: null, worktree: null, pr_url: null, verified: null, also_fixed: [], options: {}, started_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', ended_at: state === 'running' ? null : '2026-01-01T00:01:00Z', error: null, summary: null }));
+    };
+    mk('fix-20260101000000-aaaaaa', 'running');
+    mk('fix-20260101000000-bbbbbb', 'succeeded');
+    const send = (id: string, body: unknown) => app.request(`/api/jobs/${id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await send('fix-20260101000000-aaaaaa', { text: 'Fix it in the card, not the header' })).status).toBe(201);
+    expect((await send('fix-20260101000000-aaaaaa', { text: '   ' })).status).toBe(400);
+    expect((await send('fix-20260101000000-bbbbbb', { text: 'hello' })).status).toBe(409);
+    const got = await (await get('/jobs/fix-20260101000000-aaaaaa/messages')).json();
+    expect(got.messages.map((m: { text: string }) => m.text)).toEqual(['Fix it in the card, not the header']);
+    expect(got.deliveries).toEqual([]);
+  });
+
   it('validates fix retry / continue requests', async () => {
     const fix = (body: unknown) => app.request(`/api/runs/${wsId}/${RUN}/fix`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     expect((await fix({ ids: ['BB-0001'], mode: 'resume' })).status).toBe(400);

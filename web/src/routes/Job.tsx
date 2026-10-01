@@ -6,6 +6,7 @@ import { ago, dateTime, duration, targetName } from '../lib/format.ts';
 import { Box, Chamfer, Chip, Dialog, ErrorBox, JsonView, Loading, Arrow, useToast } from '../components/ui.tsx';
 import { BranchPanel, CancelButton, JobStateChip, JobTimeline, JobsTable } from '../components/Jobs.tsx';
 import { FixRunDialog, type FixRunDefaults } from '../components/Actions.tsx';
+import { AgentChat } from '../components/AgentChat.tsx';
 
 export function Job() {
   const { id = '' } = useParams();
@@ -59,6 +60,7 @@ export function Job() {
             )}
             <JobTimeline events={events} status={job} />
           </Box>
+          <AgentChat job={job} events={events} />
           {job.kind === 'explore' && job.run && <LiveSessions ws={job.run.ws} run={job.run.run} live={job.state === 'running'} />}
           {job.log_tail && (
             <details className="box">

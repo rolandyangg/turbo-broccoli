@@ -22,6 +22,7 @@ import { branchInfo } from './git.ts';
 import { dashboard } from './dashboard.ts';
 import { agentsOverview } from './agentStats.ts';
 import { compareRuns } from './compare.ts';
+import { postMessage, readMessages } from '../../src/jobs/inbox.ts';
 import { listPRs } from './prs.ts';
 import { githubStatus, connectGitHub, disconnectGitHub } from './github.ts';
 import { schedulesOverview, previewCron, createSchedule, toggleSchedule, deleteSchedule, runScheduleNow } from './schedules.ts';
@@ -325,6 +326,16 @@ app.get('/jobs/:id', async (c) => {
   return c.json({ ...j, branch_exists });
 });
 app.post('/jobs/:id/cancel', (c) => c.json(cancelJob(c.req.param('id'))));
+app.get('/jobs/:id/messages', (c) => c.json(readMessages(getJob(c.req.param('id')).dir)));
+app.post('/jobs/:id/messages', async (c) => {
+  const j = getJob(c.req.param('id'));
+  if (!(j.state === 'running' && j.alive)) throw new HttpError(409, 'This job has finished; there is no agent to talk to');
+  const b = await c.req.json<{ text?: string }>().catch(() => ({}) as { text?: string });
+  const text = String(b.text ?? '').trim();
+  if (!text) throw new HttpError(400, 'Write a message');
+  if (text.length > 4000) throw new HttpError(400, 'Message is too long (4000 characters max)');
+  return c.json(postMessage(j.dir, text), 201);
+});
 
 /** Server-sent events: every existing event, then new ones as they are appended; plus status snapshots. */
 app.get('/jobs/:id/events', (c) => {

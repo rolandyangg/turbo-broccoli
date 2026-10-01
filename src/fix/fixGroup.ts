@@ -209,6 +209,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         model: config.model,
         timeoutMs: 20 * 60_000,
         transcriptPath: join(assetsDir, `agent-attempt-${attempt}.jsonl`),
+        agentName: 'fix agent',
       });
       agentSummary = r.text;
       if (!r.ok) say(`attempt:${attempt}`, `Fix agent error: ${r.error}`, 'warn');

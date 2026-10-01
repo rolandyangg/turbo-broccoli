@@ -55,6 +55,8 @@ export class JobReporter {
     // A launcher (e.g. the web app) can pin where job files go, so it can find them without knowing the workspace.
     this.dir = join(process.env.BUGBASH_JOB_DIR || jobsRoot, id);
     mkdirSync(this.dir, { recursive: true });
+    // Agents started from this process can receive messages sent to this job (see jobs/inbox.ts).
+    process.env.BUGBASH_INBOX = join(this.dir, 'messages.jsonl');
     const now = new Date().toISOString();
     this.status = {
       id,
