@@ -1501,3 +1501,13 @@
 .pr-link:hover {
   background: var(--panel-2);
 }
+.nav-icon {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 8px;
+}
+.nav-icon.on {
+  border-style: solid;
+  border-color: var(--green-ink);
+  color: var(--ink);
+}
