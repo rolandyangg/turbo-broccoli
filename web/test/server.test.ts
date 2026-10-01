@@ -142,6 +142,15 @@ describe('bugbash web API', () => {
     expect((await (await json('DELETE', '/presets/night-shift')).json()).deleted).toBe(true);
   });
 
+  it('validates fix retry / continue requests', async () => {
+    const fix = (body: unknown) => app.request(`/api/runs/${wsId}/${RUN}/fix`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await fix({ ids: ['BB-0001'], mode: 'resume' })).status).toBe(400);
+    expect((await fix({ ids: ['BB-0001'], mode: 'continue', branch: 'main' })).status).toBe(400); // only bugbash/* branches
+    expect((await fix({ ids: ['BB-0001'], mode: 'continue', branch: 'bugbash/x; rm -rf /' })).status).toBe(400);
+    expect((await fix({ ids: ['BB-0001'], mode: 'retry', pr: true })).status).toBe(400); // pushing still needs confirmation
+    expect((await fix({ ids: ['BB-0001'], mode: 'retry' })).status).toBe(409); // this test run has no repo
+  });
+
   it('validates bug bash launches before starting anything', async () => {
     const json = (body: unknown) => app.request('/api/explore', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
     expect((await json({ target: '' })).status).toBe(400);

@@ -78,7 +78,7 @@ export function FixDialog({ open, onClose, ws, run, ids, title, onStarted }: { o
             <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} /> Open as draft
           </label>
           <label className="check" style={{ color: 'var(--sev-major)' }}>
-            <input type="checkbox" checked={confirmPush} onChange={(e) => setConfirmPush(e.target.checked)} /> I understand this pushes to <code>origin</code> and creates a PR visible to collaborators
+            <input type="checkbox" checked={confirmPush} onChange={(e) => setConfirmPush(e.target.checked)} /> <span>I understand this pushes to <code>origin</code> and creates a PR visible to collaborators</span>
           </label>
         </div>
       )}

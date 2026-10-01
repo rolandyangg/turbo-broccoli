@@ -23,6 +23,14 @@ export interface FixOptions {
   keepWorktree: boolean;
   log: (m: string) => void;
   jobId?: string | null;
+  /**
+   * new: fresh branch (fails if it exists). retry: start over on a fresh branch (name-2, -3, … if taken).
+   * continue: pick up an existing branch where it stopped: re-verify it, run more attempts only if the bug is still
+   * there, commit what's uncommitted, then publish.
+   */
+  mode?: 'new' | 'retry' | 'continue';
+  /** Branch to continue (default: the branch this scope would get). */
+  branch?: string | null;
 }
 
 const git = (cwd: string, args: string[]) => execa('git', args, { cwd, reject: false });
@@ -42,7 +50,7 @@ export async function fixFindings(o: FixOptions) {
     run_dir: o.runDir,
     finding_ids: o.ids,
     scope: o.ids.join(','),
-    options: { pr: o.pr, draft: o.draft, base: o.base ?? null, maxAttempts: o.maxAttempts },
+    options: { pr: o.pr, draft: o.draft, base: o.base ?? null, maxAttempts: o.maxAttempts, mode: o.mode ?? 'new', branch: o.branch ?? null },
   });
   const say = (stage: string, msg: string, level: JobEvent['level'] = 'info', data?: Record<string, unknown>) => {
     if (level !== 'agent') o.log(msg);
@@ -104,17 +112,38 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   const dirty = status.map((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> ').pop()!);
   if (status.length) say('worktree', `Your working tree has uncommitted changes (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? ', …' : ''}). They stay as they are and aren't part of the fix branch.`, 'warn', { uncommitted: dirty.slice(0, 50) });
   const baseBranch = o.base ?? ((await git(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim() || 'main');
-  const branch = `bugbash/${scopeLabel.toLowerCase()}-${slug(scopeIsGroup ? groups.get(o.ids[0])!.summary : selected[0].title)}`;
+  const mode = o.mode ?? 'new';
+  const branchExists = async (b: string) => (await git(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${b}`])).exitCode === 0;
+  const defaultBranch = `bugbash/${scopeLabel.toLowerCase()}-${slug(scopeIsGroup ? groups.get(o.ids[0])!.summary : selected[0].title)}`;
+  let branch = defaultBranch;
+  if (mode === 'continue') {
+    branch = o.branch ?? defaultBranch;
+    if (!(await branchExists(branch))) throw new Error(`Branch ${branch} doesn't exist any more, so there's nothing to continue. Use Retry to start over.`);
+  } else if (mode === 'retry') for (let n = 2; await branchExists(branch); n++) branch = `${defaultBranch}-${n}`;
   const worktree = join(dirname(gitRoot), `${basename(gitRoot)}-bugbash-worktrees`, branch.replace(/\//g, '__'));
   const appDir = join(worktree, relative(gitRoot, repo));
 
   rep.update({ finding_ids: selected.map((f) => f.id), scope: scopeLabel, branch, base: baseBranch, worktree });
   say('worktree', `Fixing ${selected.map((f) => f.id).join(', ')} (${scopeIsGroup ? 'whole group' : 'selected findings'}) on branch ${branch} from ${baseBranch}`, 'info', { branch, base: baseBranch, worktree, findings: selected.map((f) => f.id), group_scope: scopeIsGroup });
-  if (existsSync(worktree)) throw new Error(`Worktree already exists: ${worktree} (remove it or use a different scope)`);
-  if ((await git(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`])).exitCode === 0) throw new Error(`Branch ${branch} already exists (delete it or fix a different scope)`);
-  const wt = await git(gitRoot, ['worktree', 'add', '-b', branch, worktree, baseBranch]);
-  if (wt.exitCode !== 0) throw new Error(`git worktree add failed: ${wt.stderr}`);
-  say('worktree', `Created branch ${branch} in worktree`, 'success', { branch, worktree });
+  let createdWorktree = false;
+  if (mode === 'continue') {
+    if (existsSync(worktree)) say('worktree', `Continuing in the existing worktree for ${branch}`, 'info', { branch, worktree });
+    else {
+      const wt = await git(gitRoot, ['worktree', 'add', worktree, branch]);
+      if (wt.exitCode !== 0) throw new Error(`git worktree add failed: ${wt.stderr}`);
+      createdWorktree = true;
+      say('worktree', `Checked out ${branch} in a worktree to continue`, 'success', { branch, worktree });
+    }
+  } else {
+    if (existsSync(worktree)) throw new Error(`Worktree already exists: ${worktree} (remove it or use a different scope)`);
+    if (await branchExists(branch)) throw new Error(`Branch ${branch} already exists. Use Continue to pick it up, or Retry to start over on a new branch.`);
+    const wt = await git(gitRoot, ['worktree', 'add', '-b', branch, worktree, baseBranch]);
+    if (wt.exitCode !== 0) throw new Error(`git worktree add failed: ${wt.stderr}`);
+    createdWorktree = true;
+    say('worktree', `Created branch ${branch} in worktree`, 'success', { branch, worktree });
+  }
+  // Everything is measured against where the branch left the base (committed + uncommitted work).
+  const baseSha = (await git(gitRoot, ['merge-base', baseBranch, branch])).stdout.trim() || baseBranch;
   markFixing(o.runDir, selected.map((f) => f.id), { branch, base: baseBranch, job_id: rep.status.id, scope: scopeLabel });
   let target: Awaited<ReturnType<typeof resolveTarget>>;
   try {
@@ -122,11 +151,11 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     await provideDependencies(repo, appDir, say);
     target = await resolveTarget(appDir, { devCommand: config.devCommand, devPort: null, log: (m) => say('server', m) });
   } catch (e) {
-    // Setup failed before any work: remove the worktree and the still-empty branch so a retry starts clean.
-    await git(gitRoot, ['worktree', 'remove', '--force', worktree]);
-    await git(gitRoot, ['branch', '-D', branch]);
-    rep.update({ worktree: null });
-    say('cleanup', `Setup failed; removed the worktree and branch ${branch}`, 'warn');
+    // Setup failed before any work: remove what this job created so a retry starts clean (a continued branch is kept).
+    if (createdWorktree) await git(gitRoot, ['worktree', 'remove', '--force', worktree]);
+    if (mode !== 'continue') await git(gitRoot, ['branch', '-D', branch]);
+    rep.update({ worktree: createdWorktree ? null : worktree });
+    say('cleanup', mode === 'continue' ? `Setup failed; ${branch} is kept` : `Setup failed; removed the worktree and branch ${branch}`, 'warn');
     throw e;
   }
   const pool = new BrowserPool();
@@ -141,7 +170,8 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     // ---- baseline: confirm the bug is present in the worktree ----
     const before: VerifyResult[] = [];
     for (const f of selected) before.push(await verifyFinding(f, vo));
-    for (const b of before) say('baseline', `Baseline ${b.id}: ${b.present === null ? 'not auto-verifiable (visual)' : b.present ? 'present ✓' : 'NOT present (already fixed or not reproducible here)'}`, b.present === false ? 'warn' : 'info', { result: b });
+    // In continue mode the "baseline" is the branch as it stands (used to spot regressions from further attempts).
+    if (mode !== 'continue') for (const b of before) say('baseline', `Baseline ${b.id}: ${b.present === null ? 'not auto-verifiable (visual)' : b.present ? 'present ✓' : 'NOT present (already fixed or not reproducible here)'}`, b.present === false ? 'warn' : 'info', { result: b });
     const baselineSnap = new Map<string, Awaited<ReturnType<typeof pageSnapshot>>>();
     for (const p of touchedPages) baselineSnap.set(p, await pageSnapshot(p, vo));
 
@@ -151,7 +181,19 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     let regressions: string[] = [];
     let agentSummary = '';
     let attempt = 0;
-    for (attempt = 1; attempt <= o.maxAttempts; attempt++) {
+    // Continue: check the branch as it stands first; only bring the agent back if the bug is still there.
+    let skipAgent = false;
+    if (mode === 'continue') {
+      for (const f of selected) after.push(await verifyFinding(f, vo));
+      const changed = (await git(worktree, ['diff', '--stat', baseSha])).stdout.trim();
+      const still = after.filter((a) => a.present);
+      say('verify:continue', `Branch as it stands: ${after.map((a) => `${a.id}=${a.present === null ? 'visual' : a.present ? 'STILL PRESENT' : 'fixed'}`).join(' ')}${changed ? '' : '; no changes yet'}`, still.length || !changed ? 'info' : 'success', { after });
+      if (changed && !still.length) {
+        skipAgent = true;
+        agentSummary = (await git(worktree, ['log', '-1', '--format=%B', branch])).stdout.trim();
+      } else if (changed) feedback = `This continues earlier work on the branch. Still present:\n${still.map((x) => `- ${x.id}: ${x.checks.filter((c) => c.present).map((c) => `${c.browser} ${c.width}x${c.height}`).join(', ')}`).join('\n')}\n\nCurrent diff from the base:\n${(await git(worktree, ['diff', baseSha])).stdout.slice(0, 6000)}`;
+    }
+    for (attempt = 1; !skipAgent && attempt <= o.maxAttempts; attempt++) {
       say(`attempt:${attempt}`, `Attempt ${attempt}/${o.maxAttempts}: fix agent is working…`, 'info', { attempt, feedback: feedback ? feedback.slice(0, 2000) : null });
       const r = await runClaude({
         onEvent: (e) => {
@@ -179,7 +221,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         for (const [k, c] of snap) if (!baselineSnap.get(p)!.has(k)) regressions.push(`${p} @${k.split('|')[0]}px: new ${c.type} on ${c.selector} — ${c.message}`);
       }
       const still = after.filter((a) => a.present);
-      const diff = (await git(worktree, ['diff', '--stat'])).stdout.trim();
+      const diff = (await git(worktree, ['diff', '--stat', baseSha])).stdout.trim();
       const ok = !!diff && !still.length && !regressions.length;
       say(`verify:${attempt}`, `Verify: ${after.map((a) => `${a.id}=${a.present === null ? 'visual' : a.present ? 'STILL PRESENT' : 'fixed'}`).join(' ')}; regressions: ${regressions.length}; diff: ${diff.split('\n').pop() || 'none'}`, ok ? 'success' : 'warn', { after, regressions, diff_stat: diff });
       if (!diff) feedback = 'No files were changed. Make the fix.';
@@ -187,12 +229,12 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         feedback = [
           still.length ? `Still present after your change:\n${still.map((s) => `- ${s.id}: ${s.checks.filter((c) => c.present).map((c) => `${c.browser} ${c.width}x${c.height}`).join(', ')}`).join('\n')}` : '',
           regressions.length ? `Your change introduced new layout problems:\n${regressions.slice(0, 10).map((r) => `- ${r}`).join('\n')}` : '',
-          `Current diff:\n${(await git(worktree, ['diff'])).stdout.slice(0, 6000)}`,
+          `Current diff:\n${(await git(worktree, ['diff', baseSha])).stdout.slice(0, 6000)}`,
         ].filter(Boolean).join('\n\n');
       else break;
     }
     const verified = after.length > 0 && after.every((a) => a.present !== true) && regressions.length === 0;
-    const diff = (await git(worktree, ['diff', '--stat'])).stdout.trim();
+    const diff = (await git(worktree, ['diff', '--stat', baseSha])).stdout.trim();
     if (!diff) throw new Error('Fix agent made no changes; nothing to commit.');
 
     // ---- other findings in the group that this fix also resolved ----
@@ -214,11 +256,14 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     // Never commit a bugbash workspace into the target repo, whatever its .gitignore says.
     const staged = (await git(worktree, ['diff', '--cached', '--name-only'])).stdout.split('\n').filter((p) => /(^|\/)\.bugbash\//.test(p));
     if (staged.length) await git(worktree, ['reset', '-q', '--', ...staged]);
-    const c = await git(worktree, ['commit', '-m', commitMsg]);
-    if (c.exitCode !== 0) throw new Error(`git commit failed: ${c.stderr || c.stdout}`);
+    // A continued branch may already have everything committed.
+    if ((await git(worktree, ['diff', '--cached', '--quiet'])).exitCode !== 0) {
+      const c = await git(worktree, ['commit', '-m', commitMsg]);
+      if (c.exitCode !== 0) throw new Error(`git commit failed: ${c.stderr || c.stdout}`);
+    }
     const sha = (await git(worktree, ['rev-parse', 'HEAD'])).stdout.trim();
-    say('commit', `Committed ${sha.slice(0, 8)} on ${branch}`, 'success', { sha, message: commitMsg.split('\n')[0] });
-    const touched = (await git(worktree, ['diff', '--name-only', 'HEAD~1', 'HEAD'])).stdout.split('\n').filter(Boolean);
+    say('commit', `${skipAgent ? 'Fix already committed' : 'Committed'} ${sha.slice(0, 8)} on ${branch}`, 'success', { sha, message: commitMsg.split('\n')[0] });
+    const touched = (await git(worktree, ['diff', '--name-only', baseSha, 'HEAD'])).stdout.split('\n').filter(Boolean);
     const overlap = touched.filter((f) => dirty.includes(f));
     if (overlap.length) say('commit', `Heads up: the fix changes ${overlap.join(', ')}, which you also have uncommitted edits to. Commit or stash those before merging ${branch}.`, 'warn', { overlap });
 
@@ -242,9 +287,13 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         // "RPC failed; HTTP 400" (evidence images easily exceed it): send them in one request instead.
         const push = await git(worktree, ['-c', 'http.postBuffer=524288000', 'push', '-u', 'origin', branch]);
         if (push.exitCode !== 0) throw new Error(`git push failed: ${push.stderr.trim()}`);
-        const pr = await execa('gh', prArgs, { cwd: worktree, reject: false });
-        if (pr.exitCode !== 0) throw new Error(`gh pr create failed: ${pr.stderr.trim()}`);
-        prUrl = pr.stdout.trim().split('\n').pop() ?? null;
+        const existing = (await execa('gh', ['pr', 'view', branch, '--json', 'url,state', '-q', 'select(.state == "OPEN") | .url'], { cwd: worktree, reject: false })).stdout.trim();
+        if (existing) prUrl = existing;
+        else {
+          const pr = await execa('gh', prArgs, { cwd: worktree, reject: false });
+          if (pr.exitCode !== 0) throw new Error(`gh pr create failed: ${pr.stderr.trim()}`);
+          prUrl = pr.stdout.trim().split('\n').pop() ?? null;
+        }
         rep.update({ pr_url: prUrl });
         say('pr', `Opened ${o.draft ? 'draft ' : ''}PR ${prUrl}`, 'success', { pr_url: prUrl });
       } catch (e) {

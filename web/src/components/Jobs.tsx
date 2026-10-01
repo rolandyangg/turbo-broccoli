@@ -192,7 +192,17 @@ export function JobRow({ job }: { job: JobView }) {
         <JobStateChip job={job} />
       </td>
       <td className="mono small">{job.finding_ids.join(', ') || (job.options?.target as string) || '—'}</td>
-      <td className="mono small">{job.branch ?? '—'}</td>
+      <td className="mono small">
+        {job.branch ?? '—'}
+        {job.pr_url && (
+          <>
+            {' · '}
+            <a href={job.pr_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+              PR ↗
+            </a>
+          </>
+        )}
+      </td>
       <td className="small muted">{stageLabel(job.stage)}</td>
       <td className="small muted">
         {ago(job.started_at)} · {duration(job.started_at, job.ended_at)}

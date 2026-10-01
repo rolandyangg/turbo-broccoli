@@ -199,11 +199,14 @@ program
   .option('--base <branch>', 'Base branch (default: current branch)')
   .option('--max-attempts <n>', 'Fix/verify attempts', int, 3)
   .option('--keep-worktree', 'Keep the git worktree after finishing')
+  .option('--retry', 'Start over on a fresh branch (name-2, -3, … if the old one is still there)')
+  .option('--continue [branch]', 'Pick up an existing fix branch where it stopped: re-verify, more attempts only if needed, then commit/publish')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
   .action(async (ids: string[], o) => {
     const runDir = findRunDir(o);
     const { fixFindings } = await import('./fix/fixGroup.js');
-    await fixFindings({ runDir, ids: ids.map((x) => x.toUpperCase()), pr: !!o.pr, draft: !!o.draft, base: o.base, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
+    if (o.retry && o.continue) throw new Error('Pick --retry or --continue');
+    await fixFindings({ mode: o.continue ? 'continue' : o.retry ? 'retry' : 'new', branch: typeof o.continue === 'string' ? o.continue : null, runDir, ids: ids.map((x) => x.toUpperCase()), pr: !!o.pr, draft: !!o.draft, base: o.base, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
   });
 
 program

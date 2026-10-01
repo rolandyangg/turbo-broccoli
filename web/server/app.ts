@@ -113,7 +113,9 @@ app.get('/runs/:ws/:run/files/*', (c) => {
 // ---------- actions ----------
 app.post('/runs/:ws/:run/fix', async (c) => {
   const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
-  const b = await c.req.json<{ ids: string[]; pr?: boolean; draft?: boolean; base?: string; maxAttempts?: number; keepWorktree?: boolean; confirmPush?: boolean }>();
+  const b = await c.req.json<{ ids: string[]; pr?: boolean; draft?: boolean; base?: string; maxAttempts?: number; keepWorktree?: boolean; confirmPush?: boolean; mode?: string; branch?: string }>();
+  if (b.mode !== undefined && !['new', 'retry', 'continue'].includes(b.mode)) throw new HttpError(400, 'mode must be new, retry or continue');
+  if (b.branch !== undefined && !/^bugbash\/[\w./-]+$/.test(b.branch)) throw new HttpError(400, 'Bad branch (must be a bugbash/… branch)');
   const ids = (b.ids ?? []).map((x) => String(x).toUpperCase());
   if (!ids.length || !ids.every((x) => ID.test(x))) throw new HttpError(400, 'ids must be BB-/RC- ids');
   if (b.pr && !b.confirmPush) throw new HttpError(400, 'Opening a PR pushes to GitHub: confirmPush must be true');
@@ -127,7 +129,9 @@ app.post('/runs/:ws/:run/fix', async (c) => {
   if (b.pr && b.draft !== false) args.push('--draft');
   if (b.base) args.push('--base', b.base);
   if (b.keepWorktree) args.push('--keep-worktree');
-  return c.json(launchJob('fix', args, { run_dir: dir, finding_ids: ids, scope: ids.join(','), options: { pr: !!b.pr, draft: b.draft !== false, base: b.base ?? null } }), 202);
+  if (b.mode === 'retry') args.push('--retry');
+  if (b.mode === 'continue') args.push('--continue', ...(b.branch ? [b.branch] : []));
+  return c.json(launchJob('fix', args, { run_dir: dir, finding_ids: ids, scope: ids.join(','), branch: b.mode === 'continue' ? (b.branch ?? null) : null, options: { pr: !!b.pr, draft: b.draft !== false, base: b.base ?? null, mode: b.mode ?? 'new', branch: b.branch ?? null } }), 202);
 });
 
 app.get('/notifications', (c) => c.json(inbox()));
@@ -294,7 +298,18 @@ app.get('/jobs', (c) => {
   const run = c.req.query('run');
   return c.json(listJobs(ws && run ? { runDir: runDirOf(ws, run) } : {}));
 });
-app.get('/jobs/:id', (c) => c.json(getJob(c.req.param('id'))));
+app.get('/jobs/:id', async (c) => {
+  const j = getJob(c.req.param('id'));
+  // For finished fix jobs: does the branch still exist locally (so "Continue" is possible)?
+  let branch_exists: boolean | null = null;
+  if (j.kind === 'fix' && j.branch && j.run_dir && !j.alive) {
+    try {
+      const repo = readRun(j.run_dir).repo_path;
+      if (repo) branch_exists = await exec('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${j.branch}`], { cwd: repo }).then(() => true, () => false);
+    } catch {}
+  }
+  return c.json({ ...j, branch_exists });
+});
 app.post('/jobs/:id/cancel', (c) => c.json(cancelJob(c.req.param('id'))));
 
 /** Server-sent events: every existing event, then new ones as they are appended; plus status snapshots. */

@@ -1,19 +1,20 @@
-import { useEffect } from 'react';
-import { Link, useParams } from 'react-router';
-import { useApi, useJobStream } from '../lib/api.ts';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router';
+import { api, useApi, useJobStream } from '../lib/api.ts';
 import type { JobView, RunDetail, TranscriptItem } from '../lib/types.ts';
 import { ago, dateTime, duration, targetName } from '../lib/format.ts';
-import { Box, Chip, ErrorBox, JsonView, Loading, Arrow } from '../components/ui.tsx';
+import { Box, Chamfer, Chip, Dialog, ErrorBox, JsonView, Loading, Arrow, useToast } from '../components/ui.tsx';
 import { BranchPanel, CancelButton, JobStateChip, JobTimeline, JobsTable } from '../components/Jobs.tsx';
 
 export function Job() {
   const { id = '' } = useParams();
-  const { data: initial, error } = useApi<JobView>(`/jobs/${id}`);
+  const { data: initial, error, reload } = useApi<JobView & { branch_exists?: boolean | null }>(`/jobs/${id}`);
   const { status, events, ended } = useJobStream(id);
-  const job = status ?? initial;
+  const job = status ? { ...initial, ...status, branch_exists: initial?.branch_exists ?? null } : initial;
   useEffect(() => {
     if (ended) document.title = `Job ${job?.state ?? 'done'} · TurboBrocolli`;
-  }, [ended, job?.state]);
+    if (ended) void reload(); // pick up the final PR link and whether the branch is still there
+  }, [ended, job?.state]); // eslint-disable-line react-hooks/exhaustive-deps
   if (error) return <ErrorBox error={error} />;
   if (!job) return <Loading what="Loading job" />;
   const runLink = job.run ? `/runs/${job.run.ws}/${encodeURIComponent(job.run.run)}` : null;
@@ -40,6 +41,7 @@ export function Job() {
           started {dateTime(job.started_at)} ({ago(job.started_at)}) · {duration(job.started_at, job.ended_at)}
           {job.ended_at ? '' : ' so far'}
         </p>
+        {job.kind === 'fix' && <FixOutcome job={job} />}
         {(job.kind === 'retro' || job.kind === 'improve') && (
           <p style={{ margin: '8px 0 0' }}>
             <Link to={job.kind === 'retro' ? '/improvements' : '/improvements?tab=backlog'}>Open Improvements →</Link>
@@ -219,5 +221,111 @@ export function Jobs() {
       </div>
       <div style={{ marginTop: 20 }}>{data ? <JobsTable jobs={data} /> : <Loading what="Loading jobs" />}</div>
     </>
+  );
+}
+
+/**
+ * After a fix job: the pull request (when there is one), and what to do next. Continue picks the branch up where it
+ * stopped (re-verifies, more attempts only if needed, then commits and publishes); Retry starts over on a new branch.
+ */
+function FixOutcome({ job }: { job: JobView & { branch_exists?: boolean | null } }) {
+  const [mode, setMode] = useState<'continue' | 'retry' | null>(null);
+  const running = job.state === 'running' && job.alive;
+  const notPublished = !!job.error && /Not published/.test(job.error);
+  if (running) return null;
+  const canContinue = !!job.branch && job.branch_exists === true && job.run;
+  const showNext = job.run && (job.state !== 'succeeded' || notPublished || job.verified === false || !job.pr_url);
+  return (
+    <div className="stack" style={{ ['--gap' as string]: '10px', marginTop: 14 }}>
+      {job.pr_url && (
+        <a className="pr-link box" href={job.pr_url} target="_blank" rel="noreferrer">
+          <span className="label">Pull request</span>
+          <span className="mono">{job.pr_url.replace(/^https:\/\/github\.com\//, '')}</span>
+          <span className="small">Open on GitHub ↗</span>
+        </a>
+      )}
+      {showNext && (
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          {canContinue && (
+            <Chamfer small tone="green" onClick={() => setMode('continue')}>
+              {notPublished ? 'Continue: push and open the PR' : 'Continue on this branch'}
+            </Chamfer>
+          )}
+          <button className="btn-ghost" onClick={() => setMode('retry')}>
+            Retry from scratch
+          </button>
+          {job.branch && job.branch_exists === false && <span className="small muted">Branch {job.branch} is gone, so only a retry is possible.</span>}
+        </div>
+      )}
+      {mode && <RerunDialog job={job} mode={mode} onClose={() => setMode(null)} />}
+    </div>
+  );
+}
+
+function RerunDialog({ job, mode, onClose }: { job: JobView; mode: 'continue' | 'retry'; onClose: () => void }) {
+  const nav = useNavigate();
+  const toast = useToast();
+  const opts = (job.options ?? {}) as { pr?: boolean; draft?: boolean; base?: string | null; maxAttempts?: number };
+  const [pr, setPr] = useState(!!opts.pr);
+  const [confirmPush, setConfirmPush] = useState(false);
+  const [attempts, setAttempts] = useState(Math.min(5, Math.max(1, opts.maxAttempts ?? 3)));
+  const [busy, setBusy] = useState(false);
+  const ids = job.scope && /^RC-\d+$/i.test(job.scope) ? [job.scope] : job.finding_ids;
+  const start = async () => {
+    setBusy(true);
+    try {
+      const j = await api<JobView>(`/runs/${job.run!.ws}/${encodeURIComponent(job.run!.run)}/fix`, {
+        json: { ids, mode, branch: mode === 'continue' ? job.branch : undefined, pr, draft: opts.draft !== false, base: opts.base ?? undefined, maxAttempts: attempts, confirmPush: pr ? confirmPush : undefined },
+      });
+      toast(mode === 'continue' ? 'Continuing the fix' : 'Retrying the fix');
+      onClose();
+      nav(`/jobs/${j.id}`);
+    } catch (e) {
+      toast((e as Error).message, true);
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={mode === 'continue' ? `Continue ${ids.join(', ')}` : `Retry ${ids.join(', ')}`}
+      footer={
+        <>
+          <button className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <Chamfer tone="green" onClick={start} disabled={busy || (pr && !confirmPush)}>
+            {busy ? 'Starting…' : mode === 'continue' ? 'Continue' : 'Retry'}
+          </Chamfer>
+        </>
+      }
+    >
+      <p className="small muted" style={{ margin: 0 }}>
+        {mode === 'continue' ? (
+          <>
+            Picks up <span className="mono">{job.branch}</span> where it stopped: re-checks the bug on the branch as it is, brings the fix agent back only if it's still there, commits anything uncommitted, then publishes if you ask.
+          </>
+        ) : (
+          <>Starts over from your base branch on a fresh branch{job.branch ? <> (the old <span className="mono">{job.branch}</span> is left as it is)</> : null}.</>
+        )}
+      </p>
+      <label className="field">
+        <span className="label">Max attempts{mode === 'continue' ? ' (if the bug is still there)' : ''}</span>
+        <select className="select" value={attempts} onChange={(e) => setAttempts(Number(e.target.value))}>
+          {[1, 2, 3, 4, 5].map((n) => (
+            <option key={n}>{n}</option>
+          ))}
+        </select>
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={pr} onChange={(e) => setPr(e.target.checked)} /> Push the branch and open a {opts.draft !== false ? 'draft ' : ''}pull request
+      </label>
+      {pr && (
+        <label className="check" style={{ color: 'var(--sev-major)', paddingLeft: 24 }}>
+          <input type="checkbox" checked={confirmPush} onChange={(e) => setConfirmPush(e.target.checked)} /> <span>I understand this pushes to <code>origin</code> and creates a PR visible to collaborators</span>
+        </label>
+      )}
+    </Dialog>
   );
 }
