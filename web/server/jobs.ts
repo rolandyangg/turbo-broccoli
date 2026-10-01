@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { JobEvent, JobKind, JobStatus } from '../../src/jobs/events.ts';
-import { workspaces, HttpError, readJsonSafe, locateRunDir } from './workspaces.ts';
+import { workspaces, HttpError, readJsonSafe, locateRunDir, samePath } from './workspaces.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, '..', '..');
@@ -62,7 +62,7 @@ export function listJobs(filter: { runDir?: string; findingId?: string } = {}): 
       const v = view(join(root, d));
       if (!v) continue;
       seen.add(d);
-      if (filter.runDir && v.run_dir !== filter.runDir) continue;
+      if (filter.runDir && !samePath(v.run_dir, filter.runDir)) continue;
       if (filter.findingId && !v.finding_ids.includes(filter.findingId)) continue;
       out.push(v);
     }

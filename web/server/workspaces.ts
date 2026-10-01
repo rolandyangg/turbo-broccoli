@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { registeredWorkspaces, registerWorkspace, listRuns } from '../../src/store/store.ts';
 
@@ -49,11 +49,31 @@ export function runDirOf(wsIdParam: string, runId: string): string {
 }
 
 /** Finds which workspace/run a run directory belongs to (for links from job records). */
+/** Real on-disk spelling of a path (macOS is case-insensitive and /var is a symlink), cached; unchanged if missing. */
+const canonCache = new Map<string, string>();
+export function canon(p: string): string {
+  let c = canonCache.get(p);
+  if (c === undefined) {
+    try {
+      c = realpathSync.native(p);
+    } catch {
+      c = p;
+    }
+    canonCache.set(p, c);
+  }
+  return c;
+}
+export const samePath = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && (a === b || canon(a) === canon(b));
+
 export function locateRunDir(runDir: string | null): { ws: string; run: string } | null {
   if (!runDir) return null;
+  const real = canon(runDir);
   for (const w of workspaces()) {
-    const prefix = join(w.path, 'runs') + '/';
-    if (runDir.startsWith(prefix)) return { ws: w.id, run: runDir.slice(prefix.length).split('/')[0] };
+    for (const base of [w.path, canon(w.path)]) {
+      const prefix = join(base, 'runs') + '/';
+      const hit = runDir.startsWith(prefix) ? runDir : real.startsWith(prefix) ? real : null;
+      if (hit) return { ws: w.id, run: hit.slice(prefix.length).split('/')[0] };
+    }
   }
   return null;
 }
