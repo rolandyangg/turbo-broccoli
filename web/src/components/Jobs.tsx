@@ -3,7 +3,8 @@ import { Link } from 'react-router';
 import { api, useApi } from '../lib/api.ts';
 import type { BranchInfo, JobEvent, JobView } from '../lib/types.ts';
 import { ago, duration, dateTime } from '../lib/format.ts';
-import { Box, Chip, Check, Cross, CopyButton, Dialog, useToast } from './ui.tsx';
+import { Box, Chamfer, Chip, Check, Cross, CopyButton, Dialog, useToast } from './ui.tsx';
+import { FixRunDialog } from './Actions.tsx';
 
 const FIX_STAGE_LABEL: Record<string, string> = {
   queued: 'Queued',
@@ -12,6 +13,8 @@ const FIX_STAGE_LABEL: Record<string, string> = {
   worktree: 'Create branch & worktree',
   server: 'Start app from branch',
   baseline: 'Confirm bug on branch',
+  'verify:continue': 'Check the branch as it stands',
+  connect: 'Sign in to GitHub',
   'also-fixed': 'Check sibling findings',
   evidence: 'Capture after screenshots',
   commit: 'Commit',
@@ -259,7 +262,8 @@ export function CancelButton({ job, onDone }: { job: JobView; onDone?: () => voi
 }
 
 // ---------- branch ----------
-export function BranchPanel({ ws, run, branch, base, live }: { ws: string; run: string; branch: string; base?: string | null; live?: boolean }) {
+export function BranchPanel({ ws, run, branch, base, live, publish }: { ws: string; run: string; branch: string; base?: string | null; live?: boolean; publish?: { ids: string[] } }) {
+  const [publishing, setPublishing] = useState(false);
   const q = `/branches?ws=${ws}&run=${encodeURIComponent(run)}&branch=${encodeURIComponent(branch)}${base ? `&base=${encodeURIComponent(base)}` : ''}`;
   const { data, error } = useApi<BranchInfo>(q, { pollMs: live ? 4000 : undefined });
   const [showDiff, setShowDiff] = useState(false);
@@ -278,6 +282,9 @@ export function BranchPanel({ ws, run, branch, base, live }: { ws: string; run: 
       }
       chip={data?.pr ? <Chip tone={data.pr.state === 'MERGED' ? 'mint' : data.pr.state === 'OPEN' ? 'green' : 'outline'}>{data.pr.isDraft ? 'draft PR' : `PR ${data.pr.state.toLowerCase()}`}</Chip> : data?.exists ? <Chip tone="ink">local branch</Chip> : <Chip tone="outline">{error ? 'error' : data ? 'not created yet' : '…'}</Chip>}
     >
+      {publishing && publish && (
+        <FixRunDialog ws={ws} run={run} ids={publish.ids} mode="continue" branch={branch} defaults={{ pr: true, draft: true, base: data?.base ?? base ?? null }} title={`Open a pull request for ${branch}`} submitLabel="Open pull request" onClose={() => setPublishing(false)} />
+      )}
       {error && <p className="small" style={{ color: 'var(--err)' }}>{error}</p>}
       {data && !data.exists && <p className="muted small">The branch doesn't exist yet. It's created when the fix job reaches “Create branch &amp; worktree”.</p>}
       {data?.exists && (
@@ -317,9 +324,19 @@ export function BranchPanel({ ws, run, branch, base, live }: { ws: string; run: 
             </div>
           )}
           {!data.pr && (
-            <div className="row small muted">
-              No PR yet. To open one manually: <code>gh pr create --head {branch} --base {data.base} --draft</code>
-              <CopyButton text={`gh pr create --head ${branch} --base ${data.base} --draft --fill`} />
+            <div className="stack" style={{ ['--gap' as string]: '8px' }}>
+              {publish && !live && data.commits.length > 0 && (
+                <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
+                  <Chamfer small tone="green" onClick={() => setPublishing(true)}>
+                    Open pull request…
+                  </Chamfer>
+                  <span className="small muted">Happy with the diff? This re-checks the bug on the branch, then pushes it and opens a draft PR.</span>
+                </div>
+              )}
+              <div className="row small muted">
+                {publish && !live ? 'Or by hand:' : 'No PR yet. To open one manually:'} <code>gh pr create --head {branch} --base {data.base} --draft</code>
+                <CopyButton text={`gh pr create --head ${branch} --base ${data.base} --draft --fill`} />
+              </div>
             </div>
           )}
           <div>

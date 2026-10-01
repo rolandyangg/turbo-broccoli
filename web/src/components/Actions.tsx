@@ -290,3 +290,82 @@ export function PrPicturesNote() {
     </div>
   );
 }
+
+export interface FixRunDefaults {
+  pr?: boolean;
+  draft?: boolean;
+  base?: string | null;
+  maxAttempts?: number;
+}
+
+/**
+ * Start a fix job in continue mode (pick up `branch` where it stopped: re-verify, more attempts only if needed,
+ * commit, then publish) or retry mode (start over on a fresh branch). Pushing always needs fresh confirmation.
+ */
+export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title, submitLabel, onClose }: { ws: string; run: string; ids: string[]; mode: 'continue' | 'retry'; branch?: string | null; defaults?: FixRunDefaults; title?: string; submitLabel?: string; onClose: () => void }) {
+  const nav = useNavigate();
+  const toast = useToast();
+  const opts = defaults;
+  const [pr, setPr] = useState(!!opts.pr);
+  const [confirmPush, setConfirmPush] = useState(false);
+  const [attempts, setAttempts] = useState(Math.min(5, Math.max(1, opts.maxAttempts ?? 3)));
+  const [busy, setBusy] = useState(false);
+  const start = async () => {
+    setBusy(true);
+    try {
+      const j = await api<JobView>(`/runs/${ws}/${encodeURIComponent(run)}/fix`, {
+        json: { ids, mode, branch: mode === 'continue' ? (branch ?? undefined) : undefined, pr, draft: opts.draft !== false, base: opts.base ?? undefined, maxAttempts: attempts, confirmPush: pr ? confirmPush : undefined },
+      });
+      toast(mode === 'continue' ? 'Continuing the fix' : 'Retrying the fix');
+      onClose();
+      nav(`/jobs/${j.id}`);
+    } catch (e) {
+      toast((e as Error).message, true);
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={title ?? (mode === 'continue' ? `Continue ${ids.join(', ')}` : `Retry ${ids.join(', ')}`)}
+      footer={
+        <>
+          <button className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <Chamfer tone="green" onClick={start} disabled={busy || (pr && !confirmPush)}>
+            {busy ? 'Starting…' : pr && submitLabel ? submitLabel : mode === 'continue' ? 'Continue' : 'Retry'}
+          </Chamfer>
+        </>
+      }
+    >
+      <p className="small muted" style={{ margin: 0 }}>
+        {mode === 'continue' ? (
+          <>
+            Picks up <span className="mono">{branch}</span> where it stopped: re-checks the bug on the branch as it is, brings the fix agent back only if it's still there, commits anything uncommitted, then publishes if you ask.
+          </>
+        ) : (
+          <>Starts over from your base branch on a fresh branch{branch ? <> (the old <span className="mono">{branch}</span> is left as it is)</> : null}.</>
+        )}
+      </p>
+      <label className="field">
+        <span className="label">Max attempts{mode === 'continue' ? ' (if the bug is still there)' : ''}</span>
+        <select className="select" value={attempts} onChange={(e) => setAttempts(Number(e.target.value))}>
+          {[1, 2, 3, 4, 5].map((n) => (
+            <option key={n}>{n}</option>
+          ))}
+        </select>
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={pr} onChange={(e) => setPr(e.target.checked)} /> Push the branch and open a {opts.draft !== false ? 'draft ' : ''}pull request
+      </label>
+      {pr && (
+        <label className="check" style={{ color: 'var(--sev-major)', paddingLeft: 24 }}>
+          <input type="checkbox" checked={confirmPush} onChange={(e) => setConfirmPush(e.target.checked)} /> <span>I understand this pushes to <code>origin</code> and creates a PR visible to collaborators</span>
+        </label>
+      )}
+      {pr && <PrPicturesNote />}
+    </Dialog>
+  );
+}

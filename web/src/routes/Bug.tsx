@@ -123,7 +123,32 @@ export function Bug() {
 
           {(runningJob || latestJob) && <FixStatus job={(runningJob ?? latestJob)!} ws={ws} run={run} onDone={reload} />}
 
-          {f.fix && !(runningJob ?? latestJob)?.branch && <BranchPanel ws={ws} run={run} branch={f.fix.branch} base={f.fix.base} />}
+          {f.fix && !(runningJob ?? latestJob)?.branch && <BranchPanel ws={ws} run={run} branch={f.fix.branch} base={f.fix.base} publish={{ ids: [f.id] }} />}
+
+          {data.jobs.length > 0 && (
+            <Box head={`Jobs for this bug (${data.jobs.length})`}>
+              <ul className="bug-jobs">
+                {data.jobs.map((j) => (
+                  <li key={j.id}>
+                    <Link to={`/jobs/${j.id}`} className="bug-job">
+                      <Chip tone="outline">{j.kind}</Chip>
+                      <JobStateChip job={j} />
+                      <span className="small muted">
+                        {j.scope && j.scope !== f.id ? `${j.scope} · ` : ''}
+                        {ago(j.started_at)}
+                        {j.error && j.state !== 'running' ? ` · ${j.error.split('\n')[0].slice(0, 70)}` : ''}
+                      </span>
+                    </Link>
+                    {j.pr_url && (
+                      <a href={j.pr_url} target="_blank" rel="noreferrer" className="small">
+                        PR ↗
+                      </a>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </Box>
+          )}
 
           <Box head={`Root cause ${data.group.id}`} chip={<Chip>{data.group.findings.length} finding{data.group.findings.length > 1 ? 's' : ''}</Chip>}>
             <p style={{ marginTop: 0 }}>{data.group.summary}</p>
@@ -600,7 +625,7 @@ function FixStatus({ job, ws, run, onDone }: { job: BugDetail['jobs'][number]; w
           <JobTimeline events={events} status={st} />
         </div>
       </Box>
-      {st.branch && <BranchPanel ws={ws} run={run} branch={st.branch} base={st.base} live={st.state === 'running'} />}
+      {st.branch && <BranchPanel ws={ws} run={run} branch={st.branch} base={st.base} live={st.state === 'running'} publish={{ ids: st.scope && /^RC-\d+$/i.test(st.scope) ? [st.scope] : st.finding_ids }} />}
     </>
   );
 }
