@@ -20,6 +20,7 @@ import { branchInfo } from './git.ts';
 import { dashboard } from './dashboard.ts';
 import { agentsOverview } from './agentStats.ts';
 import { compareRuns } from './compare.ts';
+import { publicSettings, saveSettings, inbox, readMany, sendTest } from './notifications.ts';
 import { improvementsOverview, decideProposal, launchRetro, launchImplement } from './improvements.ts';
 
 const exec = promisify(execFile);
@@ -127,6 +128,11 @@ app.post('/runs/:ws/:run/fix', async (c) => {
   return c.json(launchJob('fix', args, { run_dir: dir, finding_ids: ids, scope: ids.join(','), options: { pr: !!b.pr, draft: b.draft !== false, base: b.base ?? null } }), 202);
 });
 
+app.get('/notifications', (c) => c.json(inbox()));
+app.post('/notifications/read', async (c) => c.json(readMany(await c.req.json<{ ids?: string[]; all?: boolean }>().catch(() => ({})))));
+app.get('/settings', (c) => c.json(publicSettings()));
+app.put('/settings', async (c) => c.json(saveSettings(await c.req.json())));
+app.post('/settings/test', async (c) => c.json(await sendTest((await c.req.json<{ channel: string }>()).channel)));
 app.get('/compare', (c) => {
   const a = c.req.query('a');
   const b = c.req.query('b');

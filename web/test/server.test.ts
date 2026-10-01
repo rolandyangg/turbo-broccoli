@@ -10,6 +10,7 @@ const jobsDir = join(root, 'web-jobs');
 process.env.BUGBASH_WORKSPACES = ws;
 process.env.BUGBASH_WEB_JOBS = jobsDir;
 process.env.BUGBASH_PRESETS_FILE = join(root, 'presets.json');
+process.env.BUGBASH_HOME = join(root, 'home');
 
 const RUN = '2026-01-01T00-00-00Z';
 let app: typeof import('../server/app.ts').app;
@@ -231,5 +232,39 @@ describe('bugbash web API', () => {
     expect(same.severity_change).toEqual({ from: 'minor', to: 'major', direction: 'worse' });
     expect(same.group).toMatchObject({ id: 'RC-001', side: 'b' });
     expect((await get(`/compare?a=${wsId}/2026-03-01T00-00-00Z`)).status).toBe(400);
+  });
+
+  it('saves notification settings, masks the Slack webhook, and keeps an inbox', async () => {
+    const put = (body: unknown) => app.request('/api/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const post = (p: string, body: unknown) => app.request(`/api${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await (await get('/settings')).json()).channels).toEqual({ macos: true, inbox: true, slack: false });
+    expect((await put({ slack_webhook: 'https://evil.example.com/x' })).status).toBe(400);
+    const hook = 'https://hooks.slack.com/services/T000/B000/abcdefghijklmnop';
+    const saved = await (await put({ slack_webhook: hook, channels: { macos: false }, events: { proposals: false } })).json();
+    expect(saved.slack_webhook).toBeNull();
+    expect(saved.slack_webhook_set).toBe(true);
+    expect(saved.slack_webhook_hint).not.toContain('abcdefghijklmnop');
+    expect(saved.channels.macos).toBe(false);
+    expect(saved.events.proposals).toBe(false);
+    expect((await (await put({ web_url: 'http://localhost:9999' })).json()).slack_webhook_set).toBe(true); // kept when omitted
+    expect((await (await put({ slack_webhook: null })).json()).slack_webhook_set).toBe(false);
+
+    process.env.BUGBASH_NOTIFY_TEST = '1';
+    try {
+      expect(await (await post('/settings/test', { channel: 'inbox' })).json()).toEqual({ channel: 'inbox', result: 'sent' });
+      const { notify } = await import('../../src/notify/notify.ts');
+      await notify({ event: 'proposals', title: 'muted by settings', body: '' }); // proposals turned off above
+      await notify({ event: 'failure', level: 'error', title: 'Fix failed', body: 'boom', path: '/jobs/x' }, { only: ['inbox'] });
+    } finally {
+      delete process.env.BUGBASH_NOTIFY_TEST;
+    }
+    const box = await (await get('/notifications')).json();
+    expect(box.items.map((n: { title: string }) => n.title)).toEqual(['Fix failed', 'Test notification']);
+    expect(box.unread).toBe(2);
+    expect((await (await post('/notifications/read', { ids: [box.items[0].id] })).json()).marked).toBe(1);
+    expect((await (await get('/notifications')).json()).unread).toBe(1);
+    await post('/notifications/read', { all: true });
+    expect((await (await get('/notifications')).json()).unread).toBe(0);
+    expect((await post('/settings/test', { channel: 'email' })).status).toBe(400);
   });
 });

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { NavLink, Outlet, Link } from 'react-router';
 import { Logo, Chamfer, ThemeToggle } from '../components/ui.tsx';
 import { LauncherDialog } from '../components/Launcher.tsx';
+import { Inbox } from '../components/Inbox.tsx';
 import { useApi } from '../lib/api.ts';
 import type { JobView } from '../lib/types.ts';
 
@@ -34,6 +35,7 @@ export function Layout() {
               {imp?.pending ? <span className="nav-count">{imp.pending}</span> : null}
             </NavLink>
           </nav>
+          <Inbox />
           <ThemeToggle />
           <div className="chamfer-group">
             <Chamfer onClick={() => setLaunch(true)}>New bug bash</Chamfer>
