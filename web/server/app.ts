@@ -19,6 +19,7 @@ import { listJobs, getJob, launchJob, cancelJob, readEvents, CLI, REPO_ROOT, WEB
 import { branchInfo } from './git.ts';
 import { dashboard } from './dashboard.ts';
 import { agentsOverview } from './agentStats.ts';
+import { improvementsOverview, decideProposal, launchRetro, launchImplement } from './improvements.ts';
 
 const exec = promisify(execFile);
 const ID = /^(BB|RC)-\d{3,5}$/i;
@@ -123,6 +124,22 @@ app.post('/runs/:ws/:run/fix', async (c) => {
   if (b.keepWorktree) args.push('--keep-worktree');
   if (b.prAssets === false) args.push('--no-pr-assets');
   return c.json(launchJob('fix', args, { run_dir: dir, finding_ids: ids, scope: ids.join(','), options: { pr: !!b.pr, draft: b.draft !== false, base: b.base ?? null } }), 202);
+});
+
+app.get('/improvements', (c) => c.json(improvementsOverview()));
+app.post('/improvements/:ws/:run/:id', async (c) => {
+  runDirOf(c.req.param('ws'), c.req.param('run')); // validates the run
+  const b = await c.req.json<{ action: 'approve' | 'reject'; title?: string; body?: string; note?: string }>();
+  return c.json(decideProposal(c.req.param('ws'), c.req.param('run'), c.req.param('id'), b));
+});
+app.post('/runs/:ws/:run/retro', (c) => {
+  const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
+  if (!readFindings(dir)) throw new HttpError(409, 'Triage this run before running a retrospective.');
+  return c.json(launchRetro(c.req.param('ws'), c.req.param('run'), dir), 202);
+});
+app.post('/backlog/:ws/:id/implement', async (c) => {
+  const b = await c.req.json<{ pr?: boolean; confirmPush?: boolean }>().catch(() => ({}));
+  return c.json(launchImplement(c.req.param('ws'), c.req.param('id'), b), 202);
 });
 
 app.post('/runs/:ws/:run/bugs/:id/reproduce', async (c) => {

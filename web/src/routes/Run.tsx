@@ -9,6 +9,7 @@ import { FixDialog } from '../components/Actions.tsx';
 import { JobsTable } from '../components/Jobs.tsx';
 import { DashboardView } from './Dashboard.tsx';
 import { RunName } from '../components/RunName.tsx';
+import { RetroButton } from './Improvements.tsx';
 
 type Tab = 'overview' | 'bugs' | 'campaign' | 'coverage' | 'hypotheses' | 'intel' | 'jobs';
 
@@ -81,6 +82,7 @@ export function Run() {
             >
               {s.triaged ? 'Re-triage' : 'Triage now'}
             </button>
+            <RetroButton ws={ws} run={run} triaged={s.triaged} />
           </div>
         </div>
       </div>

@@ -34,12 +34,17 @@ export function Job() {
           )}
         </div>
         <h1 className="display" style={{ fontSize: 'clamp(28px, 4vw, 54px)', marginTop: 12 }}>
-          {job.kind === 'fix' ? `Fixing ${job.finding_ids.join(', ')}` : job.kind === 'explore' ? `Bug bash: ${targetName(target ?? '')}` : job.kind === 'reproduce' ? `Reproducing ${job.finding_ids.join(', ')}` : 'Triage'}
+          {job.kind === 'fix' ? `Fixing ${job.finding_ids.join(', ')}` : job.kind === 'explore' ? `Bug bash: ${targetName(target ?? '')}` : job.kind === 'reproduce' ? `Reproducing ${job.finding_ids.join(', ')}` : job.kind === 'retro' ? 'Retrospective' : job.kind === 'improve' ? `Implementing ${job.scope ?? 'improvement'}` : 'Triage'}
         </h1>
         <p className="mono small muted" style={{ margin: '8px 0 0' }}>
           started {dateTime(job.started_at)} ({ago(job.started_at)}) · {duration(job.started_at, job.ended_at)}
           {job.ended_at ? '' : ' so far'}
         </p>
+        {(job.kind === 'retro' || job.kind === 'improve') && (
+          <p style={{ margin: '8px 0 0' }}>
+            <Link to={job.kind === 'retro' ? '/improvements' : '/improvements?tab=backlog'}>Open Improvements →</Link>
+          </p>
+        )}
       </div>
       <div className="bug-grid">
         <div className="stack" style={{ ['--gap' as string]: '20px', minWidth: 0 }}>

@@ -11,6 +11,7 @@ import { Dashboard } from './routes/Dashboard.tsx';
 import { Run } from './routes/Run.tsx';
 import { Bug } from './routes/Bug.tsx';
 import { Job, Jobs } from './routes/Job.tsx';
+import { Improvements } from './routes/Improvements.tsx';
 
 const router = createBrowserRouter([
   {
@@ -23,6 +24,7 @@ const router = createBrowserRouter([
       { path: 'runs/:ws/:run/bugs/:id', element: <Bug /> },
       { path: 'jobs', element: <Jobs /> },
       { path: 'jobs/:id', element: <Job /> },
+      { path: 'improvements', element: <Improvements /> },
     ],
   },
 ]);

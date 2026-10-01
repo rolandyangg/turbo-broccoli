@@ -1,0 +1,554 @@
+import { useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router';
+import { api, fileUrl, useApi } from '../lib/api.ts';
+import type { JobView } from '../lib/types.ts';
+import { ago, targetName } from '../lib/format.ts';
+import { Chamfer, Chip, Dialog, ErrorBox, Loading, Stat, Tabs, useToast } from '../components/ui.tsx';
+import { DataTable } from '../components/Charts.tsx';
+
+type Kind = 'lesson' | 'prior' | 'detector' | 'tweak';
+interface Proposal {
+  id: string;
+  run: string;
+  source: 'retro' | 'lead';
+  kind: Kind;
+  scope: 'site' | 'general';
+  title: string;
+  body: string;
+  prior: { strategy: string; persona: string | null; page_kind: string | null; effect: 'prefer' | 'avoid' } | null;
+  detector: { finding_type: string; sketch: string } | null;
+  tweak: { target: string; change: string } | null;
+  evidence: { finding_ids: string[]; numbers: string[]; transcripts: string[] };
+  status: 'pending' | 'approved' | 'rejected';
+  edited: boolean;
+  decision_note: string | null;
+  decided_at: string | null;
+  created_at: string;
+}
+interface RunGroup {
+  ws: string;
+  run: string;
+  name: string | null;
+  target: string;
+  retro: { ok: boolean; at: string; error: string | null; summary: string; job_id: string | null } | null;
+  proposals: Proposal[];
+}
+interface BacklogItem {
+  ws: string;
+  id: string;
+  proposal_id: string;
+  run: string;
+  kind: 'detector' | 'tweak';
+  title: string;
+  body: string;
+  detector: Proposal['detector'];
+  tweak: Proposal['tweak'];
+  status: 'open' | 'implementing' | 'implemented' | 'failed' | 'closed';
+  branch: string | null;
+  job_id: string | null;
+  pr_url: string | null;
+  error: string | null;
+  created_at: string;
+}
+interface Overview {
+  pending: number;
+  runs: RunGroup[];
+  backlog: BacklogItem[];
+  priors: { ws: string; id: string; strategy: string; persona: string | null; page_kind: string | null; effect: string; reason: string; proposal_id: string; approved_at: string }[];
+  rejected: number;
+  lessons: { ws: string; path: string; text: string }[];
+  bench: { version: string; commit: string | null; runs: { run: string; recall: number; precision: number | null }[]; best_recall: number; mean_recall: number; regression: { from: string; drop: number } | null }[];
+  jobs: JobView[];
+}
+
+const KIND_LABEL: Record<Kind, string> = { lesson: 'Lesson', prior: 'Strategy prior', detector: 'Detector suggestion', tweak: 'Prompt / config tweak' };
+const APPROVE_EFFECT: Record<Kind, string> = {
+  lesson: 'Approving adds it to the lessons future leads and explorers read.',
+  prior: 'Approving adds it to the strategy priors the lead plans with.',
+  detector: 'Approving puts it on the backlog. Code only changes if you implement it on a branch and merge it.',
+  tweak: 'Approving puts it on the backlog. Code only changes if you implement it on a branch and merge it.',
+};
+type Tab = 'pending' | 'backlog' | 'knowledge' | 'bench' | 'history';
+const pct = (x: number | null | undefined) => (x == null ? '—' : `${Math.round(x * 100)}%`);
+
+export function Improvements() {
+  const { data, error, reload } = useApi<Overview>('/improvements', { pollMs: 8000 });
+  const [params, setParams] = useSearchParams();
+  const tab = (params.get('tab') as Tab) || 'pending';
+  if (error) return <ErrorBox error={error} />;
+  if (!data) return <Loading what="Loading improvements" />;
+  const all = data.runs.flatMap((r) => r.proposals.map((p) => ({ p, r })));
+  const approved = all.filter(({ p }) => p.status === 'approved').length;
+  const openBacklog = data.backlog.filter((b) => b.status !== 'closed' && b.status !== 'implemented').length;
+  const regressed = data.bench.some((v) => v.regression);
+  return (
+    <>
+      <div className="run-head">
+        <div className="label">
+          <Link to="/">Dashboard</Link> / Learning loop
+        </div>
+        <h1 className="page-title">Improvements</h1>
+        <p className="muted" style={{ maxWidth: 760, margin: '6px 0 0' }}>
+          After each triaged run, a retrospective agent proposes what the agents should learn. Nothing changes until you approve it here, one item at a time. Rejected ideas are remembered and not proposed again.
+        </p>
+      </div>
+      <div className="stats" style={{ marginTop: 20 }}>
+        <Stat n={data.pending} label="Waiting for review" />
+        <Stat n={approved} label="Approved" />
+        <Stat n={data.rejected} label="Rejected" sub="remembered" />
+        <Stat n={openBacklog} label="Backlog" sub="code changes to implement" />
+        <Stat n={data.priors.length} label="Strategy priors" />
+        <Stat n={data.bench.length ? pct(data.bench[data.bench.length - 1].best_recall) : '—'} label="Bench recall" sub={regressed ? 'a version lowered recall' : 'latest agent version'} color={regressed ? 'var(--err)' : undefined} />
+      </div>
+      <div style={{ marginTop: 20 }}>
+        <Tabs<Tab>
+          tabs={[
+            { id: 'pending', label: `Pending (${data.pending})` },
+            { id: 'backlog', label: `Backlog (${data.backlog.length})` },
+            { id: 'knowledge', label: 'Approved knowledge' },
+            { id: 'bench', label: 'Benchmark gate' },
+            { id: 'history', label: 'History' },
+          ]}
+          value={tab}
+          onChange={(t) => setParams(t === 'pending' ? {} : { tab: t }, { replace: true })}
+        />
+      </div>
+      <div style={{ marginTop: 20 }}>
+        {tab === 'pending' && <Pending runs={data.runs} reload={reload} />}
+        {tab === 'backlog' && <Backlog items={data.backlog} reload={reload} />}
+        {tab === 'knowledge' && <Knowledge data={data} />}
+        {tab === 'bench' && <Bench data={data} />}
+        {tab === 'history' && <History rows={all.filter(({ p }) => p.status !== 'pending')} />}
+      </div>
+    </>
+  );
+}
+
+function Pending({ runs, reload }: { runs: RunGroup[]; reload: () => void }) {
+  const groups = runs.map((r) => ({ ...r, pending: r.proposals.filter((p) => p.status === 'pending') })).filter((r) => r.pending.length || (r.retro && !r.retro.ok));
+  if (!groups.length)
+    return (
+      <div className="empty">
+        Nothing to review. Retrospectives run after triage (turn this off per preset), or start one from a run page with <b>Run retrospective</b>.
+      </div>
+    );
+  return (
+    <div className="stack" style={{ ['--gap' as string]: '28px' }}>
+      {groups.map((g) => (
+        <section key={`${g.ws}/${g.run}`} className="stack" style={{ ['--gap' as string]: '12px' }}>
+          <div className="spread" style={{ alignItems: 'baseline' }}>
+            <div>
+              <div className="label">
+                {targetName(g.target)} · {g.retro ? `retrospective ${ago(g.retro.at)}` : 'lead notes'}
+              </div>
+              <h2 className="display h3" style={{ margin: '2px 0 0' }}>
+                <Link to={`/runs/${g.ws}/${encodeURIComponent(g.run)}`}>{g.name ?? g.run}</Link>
+              </h2>
+            </div>
+            <Chip>{g.pending.length} pending</Chip>
+          </div>
+          {g.retro?.summary && <p className="muted" style={{ margin: 0, maxWidth: 900 }}>{g.retro.summary}</p>}
+          {g.retro && !g.retro.ok && <div className="empty" style={{ color: 'var(--err)' }}>Retrospective failed: {g.retro.error}</div>}
+          {g.pending.map((p) => (
+            <ProposalCard key={p.id} p={p} ws={g.ws} reload={reload} />
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function ProposalCard({ p, ws, reload }: { p: Proposal; ws: string; reload: () => void }) {
+  const toast = useToast();
+  const [mode, setMode] = useState<'view' | 'edit' | 'reject'>('view');
+  const [title, setTitle] = useState(p.title);
+  const [body, setBody] = useState(p.body);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const send = async (action: 'approve' | 'reject', extra: Record<string, string> = {}) => {
+    setBusy(true);
+    try {
+      const r = await api<{ applied: string }>(`/improvements/${ws}/${encodeURIComponent(p.run)}/${p.id}`, { json: { action, ...extra } });
+      toast(r.applied);
+      reload();
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <article className="box proposal" aria-labelledby={`${p.id}-t`}>
+      <div className="box-head">
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <span className="mono small">{p.id}</span>
+          <Chip tone="ink">{KIND_LABEL[p.kind]}</Chip>
+          {p.scope === 'general' && <Chip tone="outline">general</Chip>}
+          <Chip tone="outline">{p.source === 'lead' ? 'from the lead' : 'retrospective'}</Chip>
+        </div>
+      </div>
+      <div className="box-body stack" style={{ ['--gap' as string]: '10px' }}>
+        {mode === 'edit' ? (
+          <>
+            <label className="field">
+              <span className="label">Title</span>
+              <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
+            </label>
+            <label className="field">
+              <span className="label">Text</span>
+              <textarea className="input" rows={5} value={body} onChange={(e) => setBody(e.target.value)} />
+            </label>
+          </>
+        ) : (
+          <>
+            <h3 id={`${p.id}-t`} className="proposal-title">
+              {p.title}
+            </h3>
+            <p style={{ margin: 0 }}>{p.body}</p>
+          </>
+        )}
+        {p.prior && (
+          <dl className="kv">
+            <dt>Strategy</dt>
+            <dd className="mono small">
+              {p.prior.effect === 'prefer' ? 'prefer' : 'avoid'} {p.prior.strategy}
+            </dd>
+            {p.prior.persona && (
+              <>
+                <dt>Persona</dt>
+                <dd>{p.prior.persona}</dd>
+              </>
+            )}
+            {p.prior.page_kind && (
+              <>
+                <dt>Pages</dt>
+                <dd>{p.prior.page_kind}</dd>
+              </>
+            )}
+          </dl>
+        )}
+        {p.detector && (
+          <div className="small">
+            <span className="label">Detector for</span> <span className="mono">{p.detector.finding_type}</span>
+            <p style={{ margin: '4px 0 0' }}>{p.detector.sketch}</p>
+          </div>
+        )}
+        {p.tweak && (
+          <div className="small">
+            <span className="label">Change to {p.tweak.target}</span>
+            <p style={{ margin: '4px 0 0' }}>{p.tweak.change}</p>
+          </div>
+        )}
+        <Evidence p={p} ws={ws} />
+        <p className="small muted" style={{ margin: 0 }}>
+          {APPROVE_EFFECT[p.kind]}
+        </p>
+        {mode === 'reject' && (
+          <label className="field">
+            <span className="label">Why not? (optional, kept with the decision)</span>
+            <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. too costly, wrong for this site" autoFocus />
+          </label>
+        )}
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          {mode === 'view' && (
+            <>
+              <Chamfer tone="green" small disabled={busy} onClick={() => send('approve')}>
+                Approve
+              </Chamfer>
+              <button className="btn-ghost" disabled={busy} onClick={() => setMode('edit')}>
+                Edit
+              </button>
+              <button className="btn-ghost" disabled={busy} onClick={() => setMode('reject')}>
+                Reject
+              </button>
+            </>
+          )}
+          {mode === 'edit' && (
+            <>
+              <Chamfer tone="green" small disabled={busy || !title.trim() || !body.trim()} onClick={() => send('approve', { title, body })}>
+                Save and approve
+              </Chamfer>
+              <button className="btn-ghost" onClick={() => (setMode('view'), setTitle(p.title), setBody(p.body))}>
+                Cancel
+              </button>
+            </>
+          )}
+          {mode === 'reject' && (
+            <>
+              <Chamfer tone="danger" small disabled={busy} onClick={() => send('reject', note.trim() ? { note } : {})}>
+                Reject
+              </Chamfer>
+              <button className="btn-ghost" onClick={() => setMode('view')}>
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function Evidence({ p, ws }: { p: Proposal; ws: string }) {
+  const e = p.evidence;
+  if (!e.finding_ids.length && !e.numbers.length && !e.transcripts.length) return null;
+  return (
+    <details className="evidence">
+      <summary className="label">Evidence</summary>
+      <div className="stack small" style={{ ['--gap' as string]: '6px', marginTop: 8 }}>
+        {e.numbers.length > 0 && (
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {e.numbers.map((n, i) => (
+              <li key={i}>{n}</li>
+            ))}
+          </ul>
+        )}
+        {e.finding_ids.length > 0 && (
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+            {e.finding_ids.map((id) =>
+              /^BB-\d+$/.test(id) ? (
+                <Link key={id} to={`/runs/${ws}/${encodeURIComponent(p.run)}/bugs/${id}`} className="mono">
+                  {id}
+                </Link>
+              ) : (
+                <span key={id} className="mono">
+                  {id}
+                </span>
+              ),
+            )}
+          </div>
+        )}
+        {e.transcripts.length > 0 && (
+          <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
+            {e.transcripts.map((t) => (
+              <a key={t} className="mono" href={fileUrl(ws, p.run, t)} target="_blank" rel="noreferrer">
+                {t}
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+const STATUS_TONE: Record<BacklogItem['status'], string> = { open: 'outline', implementing: 'green live', implemented: 'mint', failed: 'sev-critical dot', closed: 'outline' };
+
+function Backlog({ items, reload }: { items: BacklogItem[]; reload: () => void }) {
+  const [impl, setImpl] = useState<BacklogItem | null>(null);
+  if (!items.length) return <div className="empty">The backlog is empty. Approved detector suggestions and prompt/config tweaks land here.</div>;
+  return (
+    <>
+      <div className="stack" style={{ ['--gap' as string]: '14px' }}>
+        {[...items].reverse().map((b) => (
+          <article key={`${b.ws}/${b.id}`} className="box">
+            <div className="box-head">
+              <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                <span className="mono small">{b.id}</span>
+                <Chip tone="ink">{KIND_LABEL[b.kind]}</Chip>
+                <Chip tone={STATUS_TONE[b.status]}>{b.status}</Chip>
+              </div>
+              <span className="small muted">from {b.proposal_id}</span>
+            </div>
+            <div className="box-body stack" style={{ ['--gap' as string]: '8px' }}>
+              <h3 className="proposal-title">{b.title}</h3>
+              <p style={{ margin: 0 }}>{b.body}</p>
+              {(b.detector || b.tweak) && <p className="small muted" style={{ margin: 0 }}>{b.detector ? `${b.detector.finding_type}: ${b.detector.sketch}` : `${b.tweak!.target}: ${b.tweak!.change}`}</p>}
+              {b.branch && (
+                <div className="small">
+                  Branch <span className="mono">{b.branch}</span>
+                  {b.pr_url && (
+                    <>
+                      {' · '}
+                      <a href={b.pr_url} target="_blank" rel="noreferrer">
+                        pull request
+                      </a>
+                    </>
+                  )}
+                  {b.job_id && (
+                    <>
+                      {' · '}
+                      <Link to={`/jobs/${b.job_id}`}>job</Link>
+                    </>
+                  )}
+                </div>
+              )}
+              {b.error && <div className="small" style={{ color: 'var(--err)' }}>{b.error}</div>}
+              {(b.status === 'open' || b.status === 'failed') && (
+                <div>
+                  <Chamfer small onClick={() => setImpl(b)}>
+                    {b.status === 'failed' ? 'Try again on a new branch' : 'Implement on a branch'}
+                  </Chamfer>
+                </div>
+              )}
+            </div>
+          </article>
+        ))}
+      </div>
+      {impl && <ImplementDialog item={impl} onClose={() => setImpl(null)} onStarted={reload} />}
+    </>
+  );
+}
+
+function ImplementDialog({ item, onClose, onStarted }: { item: BacklogItem; onClose: () => void; onStarted: () => void }) {
+  const [pr, setPr] = useState(false);
+  const [confirmPush, setConfirmPush] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
+  const nav = useNavigate();
+  const start = async () => {
+    setBusy(true);
+    try {
+      const job = await api<JobView>(`/backlog/${item.ws}/${item.id}/implement`, { json: { pr, confirmPush: pr ? confirmPush : undefined } });
+      toast('Implementation started');
+      onStarted();
+      nav(`/jobs/${job.id}`);
+    } catch (e) {
+      toast((e as Error).message, true);
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Implement ${item.id}`}
+      footer={
+        <>
+          <button className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <Chamfer tone="green" onClick={start} disabled={busy || (pr && !confirmPush)}>
+            {busy ? 'Starting…' : pr ? 'Implement + open PR' : 'Implement on a branch'}
+          </Chamfer>
+        </>
+      }
+    >
+      <p style={{ margin: 0 }}>
+        <strong>{item.title}</strong>
+      </p>
+      <p className="small muted" style={{ margin: 0 }}>
+        An agent makes the change in a separate git worktree on a new <span className="mono">improve/…</span> branch of the bugbash repo, then the typecheck and the unit and detector tests run (failures go back to the agent once). It commits on that branch; your checkout and the running agents stay unchanged until you merge.
+      </p>
+      <label className="check">
+        <input type="checkbox" checked={pr} onChange={(e) => setPr(e.target.checked)} /> Push the branch and open a GitHub pull request
+      </label>
+      {pr && (
+        <label className="check" style={{ color: 'var(--sev-major)', paddingLeft: 24 }}>
+          <input type="checkbox" checked={confirmPush} onChange={(e) => setConfirmPush(e.target.checked)} /> I understand this pushes to GitHub
+        </label>
+      )}
+    </Dialog>
+  );
+}
+
+function Knowledge({ data }: { data: Overview }) {
+  return (
+    <div className="dash-grid">
+      <div className="span-2 box">
+        <div className="box-head">
+          <div className="path">Lessons the agents read</div>
+        </div>
+        <div className="box-body">
+          {data.lessons.length ? (
+            data.lessons.map((l) => (
+              <div key={l.ws}>
+                <div className="label small">{l.path}/memory/lessons.md</div>
+                <pre className="lessons">{l.text.trim()}</pre>
+              </div>
+            ))
+          ) : (
+            <p className="muted small">No lessons yet.</p>
+          )}
+        </div>
+      </div>
+      <div className="box">
+        <div className="box-head">
+          <div className="path">Strategy priors</div>
+        </div>
+        <div className="box-body">
+          {data.priors.length ? (
+            <DataTable head={['Strategy', 'Effect', 'Where', 'Why']} rows={data.priors.map((p) => [<span className="mono small">{p.strategy}</span>, p.effect, [p.persona, p.page_kind].filter(Boolean).join(' · ') || 'everywhere', p.reason])} />
+          ) : (
+            <p className="muted small">No priors yet.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Bench({ data }: { data: Overview }) {
+  return (
+    <div className="stack" style={{ ['--gap' as string]: '14px' }}>
+      <p className="muted" style={{ margin: 0, maxWidth: 820 }}>
+        <span className="mono">bugbash bench</span> runs the agents on the seeded fixture (11 known bugs) and records which version of the agent code (<span className="mono">src/</span>) ran. A version whose best recall drops by at least one seeded bug against the previous version is flagged. Run the bench on an improvement branch before merging it.
+      </p>
+      {data.bench.length ? (
+        <div className="box">
+          <DataTable
+            head={['Agent version', 'Commit', 'Bench runs', 'Best recall', 'Mean recall', 'Precision (last)', 'Gate']}
+            rows={data.bench.map((v) => [
+              <span className="mono small">{v.version}</span>,
+              <span className="mono small">{v.commit ?? '—'}</span>,
+              v.runs.length,
+              pct(v.best_recall),
+              pct(v.mean_recall),
+              pct(v.runs[v.runs.length - 1]?.precision),
+              v.regression ? <Chip tone="sev-critical dot">recall −{Math.round(v.regression.drop * 100)} pts vs {v.regression.from}</Chip> : <Chip tone="outline">ok</Chip>,
+            ])}
+          />
+        </div>
+      ) : (
+        <div className="empty">No benchmark runs yet.</div>
+      )}
+    </div>
+  );
+}
+
+function History({ rows }: { rows: { p: Proposal; r: RunGroup }[] }) {
+  if (!rows.length) return <div className="empty">No decisions yet.</div>;
+  return (
+    <div className="box">
+      <DataTable
+        head={['Decided', 'Proposal', 'Kind', 'Decision', 'Note']}
+        rows={[...rows]
+          .sort((a, b) => String(b.p.decided_at).localeCompare(String(a.p.decided_at)))
+          .map(({ p }) => [
+            <span className="small">{ago(p.decided_at)}</span>,
+            <span>
+              <span className="mono small">{p.id}</span> {p.title}
+              {p.edited ? <span className="small muted"> (edited)</span> : null}
+            </span>,
+            KIND_LABEL[p.kind],
+            p.status === 'approved' ? <Chip tone="mint">approved</Chip> : <Chip tone="outline">rejected</Chip>,
+            <span className="small muted">{p.decision_note ?? ''}</span>,
+          ])}
+      />
+    </div>
+  );
+}
+
+export function RetroButton({ ws, run, triaged }: { ws: string; run: string; triaged: boolean }) {
+  const toast = useToast();
+  const nav = useNavigate();
+  return (
+    <button
+      className="btn-ghost"
+      disabled={!triaged}
+      title={triaged ? 'Post-mortem this run: propose lessons and improvements for you to review' : 'Triage the run first'}
+      onClick={async () => {
+        try {
+          const job = await api<JobView>(`/runs/${ws}/${encodeURIComponent(run)}/retro`, { json: {} });
+          toast('Retrospective started');
+          nav(`/jobs/${job.id}`);
+        } catch (e) {
+          toast((e as Error).message, true);
+        }
+      }}
+    >
+      Run retrospective
+    </button>
+  );
+}
+

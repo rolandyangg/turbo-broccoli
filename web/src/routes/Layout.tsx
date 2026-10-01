@@ -9,6 +9,7 @@ export function Layout() {
   const [launch, setLaunch] = useState(false);
   const { data: jobs } = useApi<JobView[]>('/jobs', { pollMs: 5000 });
   const running = jobs?.filter((j) => j.state === 'running' && j.alive) ?? [];
+  const { data: imp } = useApi<{ pending: number }>('/improvements', { pollMs: 20000 });
   return (
     <>
       {running.length > 0 && (
@@ -28,6 +29,10 @@ export function Layout() {
             </NavLink>
             <NavLink to="/runs">Runs</NavLink>
             <NavLink to="/jobs">Jobs</NavLink>
+            <NavLink to="/improvements" aria-label={imp?.pending ? `Improvements, ${imp.pending} waiting for review` : undefined}>
+              Improvements
+              {imp?.pending ? <span className="nav-count">{imp.pending}</span> : null}
+            </NavLink>
           </nav>
           <ThemeToggle />
           <div className="chamfer-group">

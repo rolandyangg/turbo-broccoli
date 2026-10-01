@@ -180,4 +180,35 @@ describe('bugbash web API', () => {
     expect(all.totals.cost_usd).toBeGreaterThanOrEqual(0.75);
     expect((await get(`/agents?ws=${wsId}&run=nope`)).status).toBe(404);
   });
+
+  it('lists improvement proposals and applies approve / edit / reject decisions', async () => {
+    const { addProposals, backlog } = await import('../../src/learn/proposals.ts');
+    const { readFileSync, existsSync } = await import('node:fs');
+    const { added } = addProposals(ws, RUN, 'retro', [
+      { kind: 'lesson', title: 'Open the plan modal before resizing', body: 'BUG-07 only shows with it open.' },
+      { kind: 'tweak', title: 'Show known findings in explorer briefs', body: '33% duplicates', tweak: { target: 'explorer-prompt', change: 'list known bugs' } },
+      { kind: 'lesson', title: 'Something wrong', body: 'nope' },
+    ]);
+    const ov = await (await get('/improvements')).json();
+    expect(ov.pending).toBeGreaterThanOrEqual(3);
+    expect(ov.runs.find((r: { run: string }) => r.run === RUN).proposals).toHaveLength(3);
+
+    const post = (id: string, body: unknown) => app.request(`/api/improvements/${wsId}/${RUN}/${id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const a = await post(added[0].id, { action: 'approve', body: 'Click "Compare plans" first, then resize.' });
+    expect(a.status).toBe(200);
+    expect((await a.json()).proposal).toMatchObject({ status: 'approved', edited: true });
+    expect(readFileSync(join(ws, 'memory', 'lessons.md'), 'utf8')).toMatch(/Compare plans/);
+    expect((await post(added[1].id, { action: 'approve' })).status).toBe(200);
+    expect(backlog(ws).map((b) => b.title)).toContain('Show known findings in explorer briefs');
+    expect((await post(added[2].id, { action: 'reject', note: 'wrong' })).status).toBe(200);
+    expect(existsSync(join(ws, 'improvements', 'rejected.json'))).toBe(true);
+    expect((await post(added[2].id, { action: 'approve' })).status).toBe(409); // already decided
+    expect((await post('P-nope-99', { action: 'approve' })).status).toBe(404);
+    expect((await post(added[0].id, { action: 'delete' })).status).toBe(400);
+
+    const impl = (id: string, body: unknown) => app.request(`/api/backlog/${wsId}/${id}/implement`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await impl('B-1', { pr: true })).status).toBe(400); // pushing needs explicit confirmation
+    expect((await impl('B-99', {})).status).toBe(404);
+    expect((await impl('../x', {})).status).toBe(404);
+  });
 });

@@ -1094,3 +1094,36 @@
   outline: 2px solid var(--green-ink);
   outline-offset: 2px;
 }
+
+/* Improvements page */
+.nav-count {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  font: 700 11px/18px var(--font-mono);
+  text-align: center;
+  color: var(--on-ink);
+  background: var(--green-ink);
+  vertical-align: 1px;
+}
+.proposal-title {
+  margin: 0;
+  font: 700 17px/1.35 var(--font-body);
+  color: var(--ink);
+}
+.evidence summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.lessons {
+  margin: 6px 0 16px;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px dashed var(--line-soft);
+  white-space: pre-wrap;
+  font: 13px/1.55 var(--font-mono);
+  color: var(--ink-2);
+  max-height: 520px;
+  overflow: auto;
+}
