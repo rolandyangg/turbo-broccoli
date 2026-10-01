@@ -59,6 +59,10 @@ function overrides(o: Record<string, any>): Partial<Config> {
     browsers: o.browsers ? o.browsers.split(',').map((b: string) => BrowserName.parse(b.trim())) : undefined,
     startPaths: o.start ? o.start.split(',') : undefined,
     personas: o.personas ? o.personas.split(',').map((x: string) => x.trim()) : undefined,
+    devices: o.devices ? o.devices.split(',').map((x: string) => x.trim()) : undefined,
+    personaSessions: o.personaSessions ? Object.fromEntries(o.personaSessions.split(',').map((kv: string) => kv.split('=')).map(([k, v]: string[]) => [k.trim(), Number(v)])) : undefined,
+    strategies: o.strategies || o.excludeStrategies ? { include: o.strategies ? o.strategies.split(',').map((x: string) => x.trim()) : [], exclude: o.excludeStrategies ? o.excludeStrategies.split(',').map((x: string) => x.trim()) : [] } : undefined,
+    focusPaths: o.focus ? o.focus.split(',').map((x: string) => x.trim()) : undefined,
     disabledPersonas: o.disablePersonas !== undefined ? o.disablePersonas.split(',').map((x: string) => x.trim()).filter(Boolean) : undefined,
     model: o.model,
     devCommand: o.devCommand,
@@ -79,6 +83,13 @@ const exploreOpts = (c: Command) =>
     .option('--time-limit <minutes>', 'Wall-clock limit', int)
     .option('--browsers <list>', 'Comma list: chromium,webkit,firefox')
     .option('--start <paths>', 'Comma list of start paths')
+    .option('--preset <id>', 'Run setup preset: standard (default), quick, mobile, desktop, deep, or one you saved')
+    .option('--config <file>', 'JSON file with config overrides (used by the web launcher)')
+    .option('--devices <list>', 'Allowed device profiles (e.g. iphone-15,pixel-7,laptop)')
+    .option('--persona-sessions <list>', 'Minimum sessions per persona, e.g. phone-user=3,everyday-user=3')
+    .option('--strategies <list>', 'Only these attack strategies')
+    .option('--exclude-strategies <list>', 'Attack strategies to turn off (their tools are refused)')
+    .option('--focus <paths>', 'Pages the lead must cover')
     .option('--personas <list>', 'Only use these personas (e.g. everyday-user,phone-user)')
     .option('--disable-personas <list>', 'Personas to turn off (default: low-vision-user; pass "" to enable all)')
     .option('--model <model>', 'Claude model alias for all agents')
@@ -96,11 +107,30 @@ exploreOpts(program.command('explore').description('Agentically bug-bash a site 
     const ws = workspaceFor(target.repoPath, o.out);
     const { rep, logf } = jobLogger(ws, o.job, 'explore', { options: { target: targetArg, repo: o.repo ?? null, thenTriage: !!o.thenTriage, browsers: o.browsers ?? null, budgetSessions: o.budgetSessions ?? null, noLead: o.lead === false, codeIntel: o.codeIntel !== false } });
     try {
-      const { runDir } = await exploreRun({ targetArg, target, out: ws, overrides: overrides(o), noLead: o.lead === false, codeIntel: o.codeIntel, name: o.name, log: logf, onRun: (runDir) => rep.update({ run_dir: runDir }) });
+      const { getPreset, DEFAULT_PRESET } = await import('./presets.js');
+      const preset = getPreset(o.preset ?? DEFAULT_PRESET);
+      if (o.preset && !preset) throw new Error(`Unknown preset "${o.preset}"`);
+      const { pickConfig } = await import('./config.js');
+      const picked = o.config ? pickConfig(JSON.parse(readFileSync(resolve(o.config), 'utf8'))) : { ok: true as const, config: {} };
+      if (!picked.ok) throw new Error(`Invalid --config: ${picked.error}`);
+      const fileOverrides = picked.config;
+      logf(`Preset: ${preset?.name ?? 'none'}${o.config ? ' + custom settings' : ''}`);
+      const { runDir, config } = await exploreRun({
+        targetArg,
+        target,
+        out: ws,
+        preset: preset?.config,
+        overrides: { ...fileOverrides, ...Object.fromEntries(Object.entries(overrides(o)).filter(([, v]) => v !== undefined)) },
+        noLead: o.lead === false ? true : undefined,
+        codeIntel: o.codeIntel === false ? false : undefined,
+        name: o.name,
+        log: logf,
+        onRun: (runDir) => rep.update({ run_dir: runDir }),
+      });
       rememberRun(runDir);
       if (o.thenTriage) {
         const { triageRun } = await import('./triage/triage.js');
-        await triageRun({ runDir, baseUrl: target.baseUrl, log: logf });
+        await triageRun({ runDir, baseUrl: target.baseUrl, log: logf, video: config.triage.video, review: config.triage.review });
       } else logf(`Next: bugbash triage --run ${runDir}`);
       rep.finish('succeeded', { summary: o.thenTriage ? 'Explored and triaged' : 'Explored' });
     } catch (e) {

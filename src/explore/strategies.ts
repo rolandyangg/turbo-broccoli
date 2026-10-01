@@ -35,3 +35,46 @@ export const STRATEGIES = {
 } as const;
 export type StrategyId = keyof typeof STRATEGIES;
 export const STRATEGY_IDS = Object.keys(STRATEGIES) as StrategyId[];
+
+/** Which strategies a browser tool call exercises (used to refuse calls for strategies turned off in a run). */
+export function strategiesOfCall(tool: string, args: Record<string, unknown>, deviceKind: (id: string) => string | null): StrategyId[] {
+  switch (tool) {
+    case 'mutate_text':
+      return ['content.label-mutation'];
+    case 'rapid_click':
+      return ['chaos.rapid-click'];
+    case 'sweep_viewports':
+      return ['size.sweep'];
+    case 'back':
+    case 'forward':
+      return ['nav.back-forward'];
+    case 'reload':
+      return ['nav.reload-mid-flow'];
+    case 'stress_fill': {
+      const k = String(args.kind ?? '');
+      const map: Record<string, StrategyId> = { 'long-word': 'content.long-word', german: 'content.long-word', 'long-text': 'content.long-text', 'huge-paste': 'content.huge-paste', emoji: 'content.intl', cjk: 'content.intl', rtl: 'content.intl', zalgo: 'content.intl', empty: 'content.empty', whitespace: 'content.empty' };
+      return map[k] ? [map[k]] : [];
+    }
+    case 'set_variant': {
+      const out: StrategyId[] = [];
+      if (args.network && args.network !== 'online') out.push('env.offline');
+      if (Array.isArray(args.blocked) && args.blocked.length) out.push('env.block-resources');
+      if (args.colorScheme === 'dark') out.push('env.dark-mode');
+      if (typeof args.fontScale === 'number' && args.fontScale !== 1) out.push('content.font-scale');
+      if (typeof args.zoom === 'number' && args.zoom !== 1) out.push('content.zoom');
+      if (typeof args.dpr === 'number' && args.dpr !== 1) out.push('env.dpr');
+      if (args.reducedMotion === true) out.push('env.reduced-motion');
+      return out;
+    }
+    case 'set_device': {
+      const kind = deviceKind(String(args.device ?? ''));
+      return kind === 'desktop' ? ['size.desktop-sizes'] : kind ? ['size.devices'] : [];
+    }
+    case 'sweep_devices':
+      return ['size.devices'];
+    case 'press':
+      return /^(Tab|Shift\+Tab|Escape)$/.test(String(args.key ?? '')) ? ['chaos.keyboard'] : [];
+    default:
+      return [];
+  }
+}

@@ -167,3 +167,66 @@ describe('run names', () => {
     expect(cleanRunName('x'.repeat(200))!.length).toBe(80);
   });
 });
+
+describe('presets and strict run selection', () => {
+  it('ships built-in presets and saves/deletes user presets', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    process.env.BUGBASH_PRESETS_FILE = join(mkdtempSync(join(tmpdir(), 'bb-presets-')), 'presets.json');
+    const { listPresets, savePreset, deletePreset, getPreset, DEFAULT_PRESET } = await import('../src/presets.js');
+    const { Config } = await import('../src/config.js');
+    expect(listPresets().map((p) => p.id)).toEqual(['standard', 'quick', 'mobile', 'desktop', 'deep']);
+    expect(DEFAULT_PRESET).toBe('standard');
+    for (const p of listPresets()) expect(() => Config.parse(p.config)).not.toThrow();
+    const mine = savePreset({ name: 'My Pricing Sweep', config: { personas: ['phone-user'], budgetSessions: 2 } });
+    expect(mine.id).toBe('my-pricing-sweep');
+    expect(getPreset('my-pricing-sweep')!.config.budgetSessions).toBe(2);
+    const copy = savePreset({ id: 'standard', name: 'Standard', config: {} });
+    expect(copy.id).not.toBe('standard'); // built-ins are read-only
+    expect(deletePreset('my-pricing-sweep')).toBe(true);
+    expect(() => deletePreset('standard')).toThrow();
+  });
+
+  it('maps tool calls to strategies so excluded strategies can be refused', async () => {
+    const { strategiesOfCall } = await import('../src/explore/strategies.js');
+    const { deviceById } = await import('../src/explore/devices.js');
+    const kind = (id: string) => deviceById(id)?.kind ?? null;
+    expect(strategiesOfCall('mutate_text', {}, kind)).toEqual(['content.label-mutation']);
+    expect(strategiesOfCall('set_variant', { network: 'offline', colorScheme: 'dark' }, kind)).toEqual(['env.offline', 'env.dark-mode']);
+    expect(strategiesOfCall('stress_fill', { kind: 'realistic' }, kind)).toEqual([]);
+    expect(strategiesOfCall('set_device', { device: 'iphone-15' }, kind)).toEqual(['size.devices']);
+    expect(strategiesOfCall('set_device', { device: 'laptop' }, kind)).toEqual(['size.desktop-sizes']);
+    expect(strategiesOfCall('click', {}, kind)).toEqual([]);
+  });
+
+  it('strict campaign: rejects unselected devices/browsers and tracks required persona sessions', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { Campaign } = await import('../src/explore/campaign.js');
+    const { Config } = await import('../src/config.js');
+    const runDir = mkdtempSync(join(tmpdir(), 'bb-camp-'));
+    const config = Config.parse({ personas: ['everyday-user', 'phone-user'], personaSessions: { 'phone-user': 2 }, devices: ['iphone-15', 'laptop'], browsers: ['chromium'], strategies: { include: [], exclude: ['env.offline'] } });
+    const c = new Campaign({ runId: 'r', runDir, workspace: runDir, baseUrl: 'http://127.0.0.1:1', config, intel: null, log: () => {} });
+    expect(c.allowedDevices()).toEqual(['iphone-15', 'laptop']);
+    expect(c.excludedStrategies()).toEqual(['env.offline']);
+    expect(c.unmetPersonaSessions()).toEqual({ 'phone-user': 2 });
+    expect(c.spawn({ goal: 'x', device: 'pixel-7' })).toMatch(/not selected/);
+    expect(c.spawn({ goal: 'x', browser: 'webkit' })).toMatch(/not selected/);
+    expect(c.spawn({ goal: 'x', persona: 'german-user' })).toMatch(/disabled or unknown/);
+    const incOnly = new Campaign({ runId: 'r', runDir, workspace: runDir, baseUrl: 'http://x', config: Config.parse({ strategies: { include: ['size.devices'], exclude: [] } }), intel: null, log: () => {} });
+    expect(incOnly.excludedStrategies()).not.toContain('size.devices');
+    expect(incOnly.excludedStrategies()).toContain('chaos.rapid-click');
+  });
+});
+
+describe('pickConfig', () => {
+  it('keeps only provided keys (no defaults leak in) and validates them', async () => {
+    const { pickConfig } = await import('../src/config.js');
+    const r = pickConfig({ maxToolCallsPerSession: 25, strategies: { exclude: ['size.sweep'] } });
+    expect(r.ok && Object.keys(r.config).sort()).toEqual(['maxToolCallsPerSession', 'strategies']);
+    expect(pickConfig({ parallel: 0 }).ok).toBe(false);
+    expect(pickConfig({ nope: 1 }).ok).toBe(false);
+  });
+});

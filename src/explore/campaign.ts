@@ -15,7 +15,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(here, '..');
 export const PERSONAS_DIR = join(here, 'prompts', 'personas');
 import { enabledPersonas, personaById, EVERYDAY_TOOLS } from './personas.js';
-import { describeDevices } from './devices.js';
+import { describeDevices, deviceById, DEVICE_PROFILES } from './devices.js';
+import { STRATEGY_IDS } from './strategies.js';
 
 export interface CampaignOptions {
   runId: string;
@@ -95,6 +96,30 @@ export class Campaign {
     return this.o.config;
   }
 
+  allowedDevices(): string[] {
+    return this.cfg.devices.length ? this.cfg.devices.filter((d) => deviceById(d)).map((d) => deviceById(d)!.id) : DEVICE_PROFILES.map((d) => d.id);
+  }
+
+  /** Strategies turned off for this run (include list = everything else off). */
+  excludedStrategies(): string[] {
+    const inc = this.cfg.strategies.include;
+    const off = new Set(this.cfg.strategies.exclude);
+    if (inc.length) for (const s of STRATEGY_IDS) if (!inc.includes(s)) off.add(s);
+    return [...off];
+  }
+
+  /** Persona minimums not yet met: persona → sessions still required. */
+  unmetPersonaSessions(): Record<string, number> {
+    const out: Record<string, number> = {};
+    const enabled = enabledPersonas(this.cfg).map((p) => p.id);
+    for (const [p, min] of Object.entries(this.cfg.personaSessions)) {
+      if (!enabled.includes(p)) continue;
+      const have = this.jobs.filter((j) => j.persona === p).length;
+      if (have < min) out[p] = min - have;
+    }
+    return out;
+  }
+
   /** Live campaign state for UIs: rewritten on every change. */
   persist(phase: 'running' | 'finished' = 'running') {
     const left = this.budgetLeft();
@@ -129,6 +154,9 @@ export class Campaign {
     if (left.timeMs <= 60_000) return 'Time budget exhausted. Call stop() with your summary.';
     const dup = this.jobs.find((j) => j.goal.trim().toLowerCase() === spec.goal.trim().toLowerCase() && j.browser === (spec.browser ?? 'chromium') && j.persona === (spec.persona ?? null));
     if (dup) return `Duplicate of ${dup.id}; not spawned.`;
+    if (spec.device && !deviceById(spec.device)) return `Unknown device "${spec.device}". Allowed: ${this.allowedDevices().join(', ')}.`;
+    if (spec.device && !this.allowedDevices().includes(deviceById(spec.device)!.id)) return `Device "${spec.device}" is not selected for this run. Allowed: ${this.allowedDevices().join(', ')}.`;
+    if (spec.browser && !this.cfg.browsers.includes(spec.browser)) return `Browser "${spec.browser}" is not selected for this run. Allowed: ${this.cfg.browsers.join(', ')}.`;
     const enabled = enabledPersonas(this.cfg).map((p) => p.id);
     if (spec.persona && !enabled.includes(spec.persona)) return `Persona "${spec.persona}" is disabled or unknown. Enabled personas: ${enabled.join(', ')}.`;
     const persona = spec.persona ?? null;
@@ -226,6 +254,9 @@ export class Campaign {
     else if (job.viewport) env.BUGBASH_VIEWPORT = JSON.stringify(job.viewport);
     else if (persona?.device) env.BUGBASH_DEVICE = persona.device;
     env.BUGBASH_TOOLSET = persona?.toolset ?? 'full';
+    const excluded = this.excludedStrategies();
+    if (excluded.length) env.BUGBASH_EXCLUDE_STRATEGIES = excluded.join(',');
+    if (this.cfg.devices.length) env.BUGBASH_ALLOWED_DEVICES = this.allowedDevices().join(',');
     const r = await runClaude({
       prompt: this.explorerPrompt(job),
       systemPrompt: readFileSync(join(here, 'prompts', 'explorer.md'), 'utf8'),
@@ -361,7 +392,16 @@ export class Campaign {
             this.decisions.push(String(args.text).slice(0, 400));
             out = { ok: true };
             break;
-          case '/stop':
+          case '/stop': {
+            const unmet = this.unmetPersonaSessions();
+            const left = this.budgetLeft();
+            if (Object.keys(unmet).length && left.sessions > 0 && left.timeMs > 60_000) {
+              out = { error: `Cannot stop yet: the user requires more sessions for ${Object.entries(unmet).map(([p, n]) => `${p} (${n} more)`).join(', ')}. Spawn them first.` };
+              break;
+            }
+          }
+          // falls through
+          case '/stop-confirmed':
             this.stopReason = String(args.reason ?? 'lead stopped');
             this.decisions.push(`STOP: ${this.stopReason}`);
             out = { ok: true, message: 'Stopping. Running explorers will finish; no new ones will start.' };
@@ -400,7 +440,11 @@ export class Campaign {
       `Browsers available: ${this.cfg.browsers.join(', ')}.`,
       `Personas (only these are enabled):\n${enabledPersonas(this.cfg).map((p) => `- ${p.id}: ${p.summary}`).join('\n')}`,
       `PRIORITY: the user mainly cares about mobile devices and different desktop sizes with normal mouse + keyboard use. Give most sessions to ${this.cfg.priorityPersonas.filter((x) => enabledPersonas(this.cfg).some((p) => p.id === x)).join(' and ')}: phones/tablets via real device emulation, desktops across common sizes (1280×720 … 2560×1440).`,
-      `Devices you can assign with spawn_explorer({device}): ${describeDevices()}. A plain viewport is a narrow DESKTOP window (mouse, hover, desktop UA) — never use it to stand in for a phone.`,
+      `Devices you can assign with spawn_explorer({device}): ${describeDevices().split('; ').filter((d) => this.allowedDevices().includes(d.split(' ')[0])).join('; ')}. A plain viewport is a narrow DESKTOP window (mouse, hover, desktop UA) — never use it to stand in for a phone.`,
+      Object.keys(this.cfg.personaSessions).length ? `REQUIRED by the user (strict): at least ${Object.entries(this.cfg.personaSessions).map(([p, n]) => `${n} session(s) with ${p}`).join(', ')}. stop() is refused until these are met.` : '',
+      this.cfg.devices.length ? `Only these devices are selected for this run (strict): ${this.allowedDevices().join(', ')}.` : '',
+      this.excludedStrategies().length ? `These attack strategies are turned off for this run and their tools are disabled: ${this.excludedStrategies().join(', ')}.` : '',
+      this.cfg.focusPaths.length ? `The user wants these pages covered: ${this.cfg.focusPaths.join(', ')}.` : '',
       `Budget: ${this.cfg.budgetSessions} explorer sessions, ${Math.round(this.cfg.timeLimitMs / 60000)} minutes, ${this.cfg.parallel} in parallel, ~${this.cfg.maxToolCallsPerSession} tool calls each.`,
       `Stop rule: saturation when the last ${this.cfg.saturationWindow} sessions produce fewer than ${this.cfg.saturationMinNew} new unique findings in total (findings_summary.saturation.saturated), or when budget runs out.`,
       `Begin by reading memory, code_intel and site_map, then plan and spawn the first wave.`,
@@ -421,6 +465,16 @@ export class Campaign {
     if (!leadResult.ok) this.o.log(`Lead agent ended with error: ${leadResult.error}`);
     if (!this.stopReason) this.stopReason = leadResult.ok ? 'lead finished without calling stop()' : `lead error: ${leadResult.error}`;
     // Safety net: if the lead died before doing anything useful, fall back to a fixed plan.
+    // Strict: required persona sessions the lead didn't schedule are run anyway (budget permitting).
+    const unmet = this.unmetPersonaSessions();
+    const limitStop = this.stopReason?.startsWith('Stopped early: Claude usage limit');
+    if (Object.keys(unmet).length && this.budgetLeft().sessions > 0 && !limitStop) {
+      this.o.log(`Running required sessions the lead did not schedule: ${JSON.stringify(unmet)}`);
+      this.decisions.push(`Required sessions added after the lead finished: ${JSON.stringify(unmet)}`);
+      this.stopReason = null;
+      this.plannedSessions(unmet);
+      if (!this.stopReason) this.stopReason = 'lead finished; required persona sessions completed';
+    }
     if (this.jobs.length === 0) {
       this.o.log('Lead spawned no explorers; running fallback plan.');
       this.stopReason += ' (fallback plan used)';
@@ -434,15 +488,37 @@ export class Campaign {
   }
 
   private defaultPlan() {
-    const seeds = this.o.intel?.hypotheses.slice(0, 8).map((h) => h.text) ?? [];
-    const pages = this.o.intel?.routes.length ? this.o.intel.routes.filter((r) => !r.includes(':')) : this.cfg.startPaths;
     const enabled = enabledPersonas(this.cfg).map((p) => p.id);
     const personas = [...this.cfg.priorityPersonas.filter((p) => enabled.includes(p)), ...enabled.filter((p) => !this.cfg.priorityPersonas.includes(p))];
-    let i = 0;
-    for (const p of pages) {
-      const persona = personas[i++ % personas.length];
-      this.spawn({ goal: `Explore ${p} and every flow reachable from it; break the layout.`, pages: [p], persona, hypotheses: seeds, kind: 'fallback' });
-    }
-    for (const b of this.cfg.browsers.filter((b) => b !== 'chromium')) this.spawn({ goal: `Cross-browser check of the riskiest pages in ${b}.`, pages, browser: b, hypotheses: seeds, kind: 'fallback' });
+    const want: Record<string, number> = {};
+    for (const p of personas) want[p] = this.cfg.personaSessions[p] ?? (Object.keys(this.cfg.personaSessions).length ? 0 : 1);
+    this.plannedSessions(want);
   }
+
+  /**
+   * Fixed plan: N sessions per persona, cycling through the allowed devices that suit the persona
+   * (phones/tablets for phone-user, desktop sizes for everyday-user), the selected browsers and the pages.
+   */
+  private plannedSessions(want: Record<string, number>) {
+    const seeds = this.o.intel?.hypotheses.slice(0, 8).map((h) => h.text) ?? [];
+    const routes = this.o.intel?.routes.filter((r) => !r.includes(':')) ?? [];
+    const pages = [...new Set([...this.cfg.focusPaths, ...(routes.length ? routes : this.cfg.startPaths)])];
+    const devs = this.allowedDevices().map((d) => deviceById(d)!);
+    const suits = (persona: string) => {
+      const kind = persona === 'phone-user' ? ['phone', 'tablet'] : persona === 'everyday-user' || persona === 'power-user' ? ['desktop'] : null;
+      const list = kind ? devs.filter((d) => kind.includes(d.kind)) : devs;
+      return list.length ? list : devs;
+    };
+    let n = 0;
+    for (const [persona, count] of Object.entries(want)) {
+      const options = suits(persona);
+      for (let i = 0; i < count; i++, n++) {
+        const device = options[i % options.length];
+        const browser = this.cfg.browsers[n % this.cfg.browsers.length];
+        const page = pages[n % pages.length] ?? '/';
+        this.spawn({ goal: `As ${persona} on ${device?.label ?? 'desktop'} (${browser}): explore ${page} and every flow reachable from it; find layout defects.`, pages: [page, ...pages.filter((p) => p !== page)].slice(0, 4), persona, device: device?.id, browser, hypotheses: seeds, kind: 'fallback' });
+      }
+    }
+  }
+
 }

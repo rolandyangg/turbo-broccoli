@@ -9,8 +9,8 @@ import { readFileSync } from 'node:fs';
 import { BrowserSession, STRESS_KINDS } from './session.js';
 import { Config } from '../config.js';
 import { FindingType, Severity, BrowserName } from '../store/schema.js';
-import { STRATEGY_IDS } from '../explore/strategies.js';
-import { DEVICE_PROFILES, describeDevices } from '../explore/devices.js';
+import { STRATEGY_IDS, strategiesOfCall } from '../explore/strategies.js';
+import { DEVICE_PROFILES, describeDevices, deviceById } from '../explore/devices.js';
 import { EVERYDAY_TOOLS } from '../explore/personas.js';
 
 const env = (k: string, d?: string) => process.env[k] ?? d;
@@ -31,6 +31,15 @@ const session = new BrowserSession({
 /** Persona tool set, enforced here: "everyday" explorers cannot rewrite text, stress inputs or change the environment. */
 const toolset = env('BUGBASH_TOOLSET', 'full');
 const allowed = (name: string) => toolset !== 'everyday' || EVERYDAY_TOOLS.includes(name);
+/** Run-level selections (strict): strategies turned off, and the allowed device profiles. */
+const excludedStrategies = new Set((env('BUGBASH_EXCLUDE_STRATEGIES') ?? '').split(',').filter(Boolean));
+const allowedDevices = (env('BUGBASH_ALLOWED_DEVICES') ?? '').split(',').filter(Boolean);
+function runSelectionBlock(name: string, args: Record<string, unknown>): string | null {
+  const hit = strategiesOfCall(name, args, (id) => deviceById(id)?.kind ?? null).filter((s) => excludedStrategies.has(s));
+  if (hit.length) return `"${name}" exercises ${hit.join(', ')}, which is turned off for this run. Use a different approach.`;
+  if (name === 'set_device' && allowedDevices.length && args.device && args.device !== 'none' && !allowedDevices.includes(deviceById(String(args.device))?.id ?? '')) return `Device "${args.device}" isn't selected for this run. Allowed: ${allowedDevices.join(', ')}.`;
+  return null;
+}
 
 let calls = 0;
 const WRAP_UP_TOOLS = new Set(['record_finding', 'log_hypothesis', 'notes']);
@@ -52,6 +61,8 @@ function wrap<A>(name: string, fn: (args: A) => Promise<string | ToolResult> | s
 
 async function run<A>(name: string, fn: (args: A) => Promise<string | ToolResult> | string | ToolResult, args: A): Promise<ToolResult> {
   if (!allowed(name)) return { content: [{ type: 'text', text: `"${name}" is not available to your persona (normal mouse + keyboard use only). Use the normal interaction tools.` }], isError: true };
+  const blockedBySelection = runSelectionBlock(name, (args ?? {}) as Record<string, unknown>);
+  if (blockedBySelection) return { content: [{ type: 'text', text: blockedBySelection }], isError: true };
   {
     calls++;
     const over = calls - maxCalls;
@@ -149,7 +160,12 @@ server.registerTool(
 server.registerTool(
   'sweep_devices',
   { description: 'Render the current page state on several real device profiles (default: all phones and tablets) and run the detectors on each. Your own page is not changed.', inputSchema: { devices: z.array(z.string()).optional(), min_confidence: z.number().optional() } },
-  wrap('sweep_devices', ({ devices, min_confidence }: { devices?: string[]; min_confidence?: number }) => session.sweepDevices({ devices, minConfidence: min_confidence })),
+  wrap('sweep_devices', ({ devices, min_confidence }: { devices?: string[]; min_confidence?: number }) => {
+    // Only the run's selected devices (phones/tablets by default).
+    const pool = (devices?.length ? devices : DEVICE_PROFILES.filter((d) => d.kind !== 'desktop').map((d) => d.id)).filter((d) => !allowedDevices.length || allowedDevices.includes(deviceById(d)?.id ?? ''));
+    if (!pool.length) return 'None of those devices are selected for this run.';
+    return session.sweepDevices({ devices: pool, minConfidence: min_confidence });
+  }),
 );
 server.registerTool(
   'mutate_text',

@@ -17,20 +17,25 @@ export interface ExploreOptions {
   log: (m: string) => void;
   onRun?: (runDir: string, runId: string) => void;
   name?: string | null;
+  /** Preset config layered under the explicit overrides. */
+  preset?: Partial<Config>;
 }
 
-export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; runId: string; workspace: string }> {
+export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; runId: string; workspace: string; config: Config }> {
   const { target, log } = o;
   const ws = workspaceFor(target.repoPath, o.out);
-  const config = loadConfig(target.repoPath ?? process.cwd(), o.overrides);
+  const config = loadConfig(target.repoPath ?? process.cwd(), o.overrides, o.preset);
+  // Explicit flags win; otherwise the (preset/config) choice applies.
+  const noLead = o.noLead ?? !config.lead;
+  const useIntel = o.codeIntel ?? config.codeIntel;
   const runId = newRunId();
   const runDir = createRunDir(ws, runId);
   const memory = new Memory(ws);
-  const intel = o.codeIntel !== false && target.repoPath ? scanRepo(target.repoPath, memory.site().lastCommit) : null;
+  const intel = useIntel && target.repoPath ? scanRepo(target.repoPath, memory.site().lastCommit) : null;
   if (intel) writeFileSync(join(runDir, 'code-intel.json'), JSON.stringify(intel, null, 2));
   const info: RunInfo = {
     run_id: runId,
-    name: cleanRunName(o.name),
+    name: cleanRunName(o.name ?? null),
     target: o.targetArg,
     base_url: target.baseUrl,
     target_kind: target.kind,
@@ -50,7 +55,7 @@ export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; r
   log(`Run ${runId} → ${runDir}`);
   log(intel ? `Code intel: ${intel.breakpoints.length} breakpoints, ${intel.risky.length} risky rules, ${intel.components.length} shared components, ${intel.hypotheses.length} hypothesis seeds` : 'Black-box mode (no source).');
 
-  const campaign = new Campaign({ runId, runDir, workspace: ws, baseUrl: target.baseUrl, config, intel, log, noLead: o.noLead });
+  const campaign = new Campaign({ runId, runDir, workspace: ws, baseUrl: target.baseUrl, config, intel, log, noLead });
   const res = await campaign.run();
   info.ended_at = new Date().toISOString();
   info.stop_reason = res.stopReason;
@@ -63,5 +68,5 @@ export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; r
   site.routes = [...new Set([...site.routes, ...(intel?.routes ?? [])])];
   memory.saveSite(site);
   log(`Explore finished: ${res.jobs.length} sessions. Stop reason: ${res.stopReason}`);
-  return { runDir, runId, workspace: ws };
+  return { runDir, runId, workspace: ws, config };
 }
