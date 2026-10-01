@@ -159,6 +159,23 @@ program
   });
 
 program
+  .command('reproduce')
+  .description("Open a real browser window with a bug's exact environment (browser, device, size, settings), replay its steps and highlight it")
+  .argument('<id>', 'BB-xxxx')
+  .option('--run <id|path>')
+  .option('--out <dir>')
+  .option('--mode <mode>', 'full (replay steps up to the bug) | start (just open the page in that environment)', 'full')
+  .option('--slow', 'Slow motion')
+  .option('--browser <name>', 'Override the browser engine (chromium, webkit, firefox)')
+  .option('--no-guardrails', 'Let the page make real requests and navigate anywhere (manual testing)')
+  .option('--job <id>', 'Job id for progress events (used by the web app)')
+  .action(async (id: string, o) => {
+    const runDir = findRunDir(o);
+    const { reproduce } = await import('./repro/reproduce.js');
+    await reproduce({ runDir, id: id.toUpperCase(), mode: o.mode === 'start' ? 'start' : 'full', slow: !!o.slow, browser: o.browser ? BrowserName.parse(o.browser) : null, guardrails: o.guardrails !== false, jobId: o.job, log });
+  });
+
+program
   .command('list')
   .description('List findings of a run, grouped by root cause')
   .option('--run <id|path>')
