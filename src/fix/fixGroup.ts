@@ -97,7 +97,10 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   const gitRoot = (await top).stdout.trim();
   if (!gitRoot) throw new Error(`${repo} is not inside a git repository.`);
   const status = (await git(gitRoot, ['status', '--porcelain'])).stdout.split('\n').filter((l) => l.trim() && !l.slice(3).startsWith('.bugbash'));
-  if (status.length) throw new Error(`Working tree is not clean (commit or stash first):\n${status.slice(0, 10).join('\n')}`);
+  // The fix happens in a separate worktree branched from the last commit, so local edits can't leak into it and
+  // aren't touched. Just say they're not included (and warn later if the fix edits the same files).
+  const dirty = status.map((l) => l.slice(3).replace(/^"|"$/g, '').split(' -> ').pop()!);
+  if (status.length) say('worktree', `Your working tree has uncommitted changes (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? ', …' : ''}). They stay as they are and aren't part of the fix branch.`, 'warn', { uncommitted: dirty.slice(0, 50) });
   const baseBranch = o.base ?? ((await git(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim() || 'main');
   const branch = `bugbash/${scopeLabel.toLowerCase()}-${slug(scopeIsGroup ? groups.get(o.ids[0])!.summary : selected[0].title)}`;
   const worktree = join(dirname(gitRoot), `${basename(gitRoot)}-bugbash-worktrees`, branch.replace(/\//g, '__'));
@@ -201,6 +204,9 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     if (c.exitCode !== 0) throw new Error(`git commit failed: ${c.stderr || c.stdout}`);
     const sha = (await git(worktree, ['rev-parse', 'HEAD'])).stdout.trim();
     say('commit', `Committed ${sha.slice(0, 8)} on ${branch}`, 'success', { sha, message: commitMsg.split('\n')[0] });
+    const touched = (await git(worktree, ['diff', '--name-only', 'HEAD~1', 'HEAD'])).stdout.split('\n').filter(Boolean);
+    const overlap = touched.filter((f) => dirty.includes(f));
+    if (overlap.length) say('commit', `Heads up: the fix changes ${overlap.join(', ')}, which you also have uncommitted edits to. Commit or stash those before merging ${branch}.`, 'warn', { overlap });
 
     // ---- PR ----
     let prUrl: string | null = null;
