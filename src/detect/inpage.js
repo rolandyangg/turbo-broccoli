@@ -186,7 +186,10 @@
       const ellipsis = s.textOverflow === 'ellipsis' || (s.webkitLineClamp && s.webkitLineClamp !== 'none');
       const px = Math.max(ox, oy);
       if (ellipsis) {
-        out.push(cand('text-overflow', el, 0.3, `Text truncated with ellipsis/line-clamp (${px}px hidden). May be intentional.`, { overflow_px: px, truncated_by_design: true, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+        // Truncation by design is fine when the full text is still available (title / aria-label / tooltip).
+        const full = el.closest('[title], [aria-label], [data-tooltip], [data-tip]') || el.querySelector('[title]');
+        if (full) out.push(cand('text-overflow', el, 0.3, `Text truncated with ellipsis/line-clamp (${px}px hidden). May be intentional.`, { overflow_px: px, truncated_by_design: true, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+        else out.push(cand('truncated-no-tooltip', el, 0.35, `Text is cut off with an ellipsis (${px}px hidden) and there is no title or tooltip to read the rest. Truncation looks intentional; a problem when the hidden part matters.`, { overflow_px: px, truncated_by_design: true, no_tooltip: true, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
       } else {
         out.push(cand('text-overflow', el, Math.min(0.95, 0.55 + px / 40), `Text clipped by overflow:${clipsX ? s.overflowX : s.overflowY}; ${ox > 1 ? ox + 'px horizontally' : ''}${ox > 1 && oy > 2 ? ', ' : ''}${oy > 2 ? oy + 'px vertically' : ''} hidden.`, { overflow_px: px, overflow_x_px: ox, overflow_y_px: oy, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, height: s.height, whiteSpace: s.whiteSpace }));
       }
@@ -418,6 +421,298 @@
     return out;
   }
 
+  // ---------- focus & keyboard ----------
+  const FOCUS_TYPES = ['focus-invisible', 'focus-obscured', 'focus-escape'];
+  const OPEN_OVERLAY = 'dialog[open], [role=dialog], [role=alertdialog], [aria-modal=true], [role=menu], [role=listbox], [popover]';
+  const isFixedLike = (el) => {
+    for (let p = el; p && p !== document.documentElement; p = p.parentElement) {
+      const pos = cs(p).position;
+      if (pos === 'fixed' || pos === 'sticky') return p;
+    }
+    return null;
+  };
+  const FOCUS_PROPS = ['outlineStyle', 'outlineWidth', 'outlineColor', 'boxShadow', 'borderTopColor', 'borderBottomColor', 'borderBottomWidth', 'backgroundColor', 'color', 'textDecorationLine', 'transform'];
+  const focusStyle = (el) => {
+    const s = cs(el);
+    const o = {};
+    for (const p of FOCUS_PROPS) o[p] = s[p];
+    // A focus ring is often drawn by a pseudo-element or a wrapping element.
+    for (const pseudo of ['::before', '::after']) {
+      const ps = getComputedStyle(el, pseudo);
+      o[pseudo] = ps.content === 'none' ? '' : [ps.content, ps.opacity, ps.borderTopColor, ps.boxShadow, ps.outlineStyle, ps.backgroundColor].join('|');
+    }
+    if (el.parentElement) o.parent = [cs(el.parentElement).boxShadow, cs(el.parentElement).outlineStyle, cs(el.parentElement).borderTopColor].join('|');
+    return o;
+  };
+  const visibleOverlay = () => [...document.querySelectorAll(OPEN_OVERLAY)].filter((d) => isVisible(d) && (d.matches('dialog[open], [aria-modal=true], [role=dialog], [role=alertdialog]') || (d.matches('[popover]') && d.matches(':popover-open'))));
+
+  /** Checks the currently focused element: visible indicator, not hidden under fixed/sticky bars, not outside an open modal. */
+  function detectFocus() {
+    const el = document.activeElement;
+    if (!el || el === document.body || el === document.documentElement || !isVisible(el)) return [];
+    const out = [];
+    // Transitions would make the blurred read-back still show the focused values: switch them off while measuring.
+    const noAnim = document.createElement('style');
+    noAnim.setAttribute('data-bugbash-overlay', 'style');
+    noAnim.textContent = '*, *::before, *::after { transition: none !important; }';
+    document.head.appendChild(noAnim);
+    const focused = focusStyle(el);
+    // Compare against the unfocused look, then restore focus (programmatic refocus keeps :focus-visible after keyboard focus).
+    // Swallow the focus events at window capture so the page's own blur/focus handlers (e.g. close-on-blur menus) don't run.
+    const swallow = (e) => e.stopImmediatePropagation();
+    const EVENTS = ['blur', 'focusout', 'focus', 'focusin'];
+    for (const t of EVENTS) addEventListener(t, swallow, true);
+    let blurred;
+    try {
+      el.blur();
+      blurred = focusStyle(el);
+      el.focus({ preventScroll: true });
+    } finally {
+      for (const t of EVENTS) removeEventListener(t, swallow, true);
+      noAnim.remove();
+    }
+    const changed = Object.keys(focused).filter((k) => focused[k] !== blurred[k] && !(k === 'outlineColor' && focused.outlineStyle === 'none'));
+    if (!changed.length) out.push(cand('focus-invisible', el, 0.75, 'Keyboard focus has no visible indicator: no outline, ring, border, colour or underline change when focused.', { compared: FOCUS_PROPS }));
+    // Obscured: the element's centre and top are covered by a fixed/sticky element that isn't its ancestor.
+    const r = rectOf(el);
+    const pts = [
+      [r.left + r.width / 2, r.top + r.height / 2],
+      [r.left + r.width / 2, r.top + Math.min(4, r.height / 2)],
+    ].filter(([x, y]) => x >= 0 && y >= 0 && x < innerWidth && y < innerHeight);
+    if (r.bottom < 0 || r.top > innerHeight) out.push(cand('focus-obscured', el, 0.6, 'Focused element is scrolled out of the viewport.', { top: Math.round(r.top) }));
+    else if (pts.length) {
+      const covers = pts.map(([x, y]) => document.elementFromPoint(x, y)).filter((t) => t && t !== el && !el.contains(t) && !t.contains(el) && !t.closest('[data-bugbash-overlay]'));
+      const bar = covers.length === pts.length && isFixedLike(covers[0]);
+      if (bar) out.push(cand('focus-obscured', el, 0.8, `Focused element is hidden behind a ${cs(bar).position} element.`, { by: selectorFor(bar) }, bar));
+    }
+    const modal = visibleOverlay().find((d) => d.matches('dialog[open]:modal, [aria-modal=true], dialog[open]'));
+    if (modal && !modal.contains(el) && !el.closest(OPEN_OVERLAY)) out.push(cand('focus-escape', el, 0.75, 'Focus moved outside the open dialog: keyboard users end up behind the overlay.', { dialog: selectorFor(modal) }, modal));
+    return out;
+  }
+
+  // ---------- overlays that don't fit ----------
+  const scrollsY = (el) => /(auto|scroll)/.test(cs(el).overflowY) && el.scrollHeight > el.clientHeight + 1;
+  function detectOverlays() {
+    const out = [];
+    const overlays = [...document.querySelectorAll(OPEN_OVERLAY + ', [class*=modal i], [class*=dropdown i], [class*=popover i], [class*=menu i]')].filter((el) => isVisible(el) && cs(el).position !== 'static');
+    for (const el of overlays) {
+      if (overlays.some((o) => o !== el && o.contains(el))) continue; // report the outermost box
+      const r = rectOf(el);
+      if (r.width < 40 || r.height < 40) continue;
+      const fixed = !!isFixedLike(el);
+      const offX = Math.max(0, -r.left, r.right - innerWidth);
+      // A position:absolute box that runs off the bottom can be reached by scrolling the page; a fixed one can't.
+      const offY = fixed ? Math.max(0, -r.top, r.bottom - innerHeight) : Math.max(0, -(r.top + scrollY));
+      if (offX <= 2 && offY <= 2) continue;
+      const canScroll = scrollsY(el) || [...el.querySelectorAll('*')].some((c) => scrollsY(c) && rectOf(c).height > 40);
+      if (offY > 2 && !offX && canScroll && r.top >= 0 && r.bottom <= innerHeight + 2) continue;
+      const off = offX > 2 ? `${Math.round(offX)}px off-screen horizontally` : `${Math.round(offY)}px off-screen vertically`;
+      out.push(cand('overlay-overflow', el, offY > 2 && fixed && !canScroll ? 0.85 : 0.7, `Overlay doesn't fit the ${innerWidth}×${innerHeight} viewport: ${off}${canScroll ? '' : ' and it has no internal scroll'}, so part of it can't be reached.`, { off_x_px: Math.round(offX), off_y_px: Math.round(offY), fixed, internal_scroll: canScroll, viewport: [innerWidth, innerHeight] }));
+    }
+    // An anchor target (#hash) hidden behind a fixed/sticky header.
+    if (location.hash.length > 1) {
+      let target = null;
+      try {
+        target = document.getElementById(decodeURIComponent(location.hash.slice(1))) || document.querySelector(`[name="${CSS.escape(location.hash.slice(1))}"]`);
+      } catch {}
+      if (target && isVisible(target)) {
+        const r = rectOf(target);
+        const x = Math.min(innerWidth - 1, Math.max(0, r.left + Math.min(20, r.width / 2)));
+        const y = Math.max(0, r.top + Math.min(6, r.height / 2));
+        const top = y < innerHeight ? document.elementFromPoint(x, y) : null;
+        const bar = top && !target.contains(top) && !top.contains(target) && isFixedLike(top);
+        if (bar && bar !== target) out.push(cand('hidden-by-sticky', target, 0.75, `Anchor target #${location.hash.slice(1)} is hidden under a ${cs(bar).position} header after jumping to it (add scroll-margin-top).`, { by: selectorFor(bar) }, bar));
+      }
+    }
+    return out;
+  }
+
+  // ---------- touch-only problems ----------
+  const isTouch = () => matchMedia('(hover: none)').matches || matchMedia('(pointer: coarse)').matches;
+  function hoverRules() {
+    const rules = [];
+    const walk = (list) => {
+      for (const r of list) {
+        if (r.cssRules && !r.selectorText) walk(r.cssRules);
+        else if (r.selectorText && r.selectorText.includes(':hover') && r.style) rules.push(r);
+      }
+    };
+    for (const sh of document.styleSheets) {
+      try {
+        walk(sh.cssRules);
+      } catch {} // cross-origin sheet
+    }
+    return rules;
+  }
+  function detectTouch(els) {
+    if (!isTouch()) return [];
+    const out = [];
+    // Content only revealed by `X:hover Y { display/visibility/opacity }` with no :focus-within / open-state alternative.
+    const rules = hoverRules();
+    const allSel = rules.map((r) => r.selectorText).join(' ');
+    const seen = new Set();
+    for (const r of rules) {
+      const reveals = (r.style.display && r.style.display !== 'none') || r.style.visibility === 'visible' || (r.style.opacity && Number(r.style.opacity) > 0) || r.style.maxHeight || r.style.transform;
+      if (!reveals) continue;
+      for (const part of r.selectorText.split(',')) {
+        const m = part.trim().match(/^(.*?):hover\s*([>+~]?\s*.+)$/);
+        if (!m || !m[2].trim()) continue;
+        const host = m[1].trim() || '*';
+        let hosts = [];
+        try {
+          hosts = [...document.querySelectorAll(host)].filter(isVisible).slice(0, 5);
+        } catch {
+          continue;
+        }
+        const alt = /focus-within|:focus|\.open|\.is-open|\.active|\[aria-expanded/.test(allSel) && new RegExp(host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(:focus|\\.open|\\.is-open|\\.active|\\[aria-expanded)').test(allSel);
+        let hostSheetAlt = false;
+        for (const sh of document.styleSheets) {
+          try {
+            for (const rr of sh.cssRules) if (rr.selectorText && rr.selectorText.includes(host) && /focus-within|\.open|\.is-open|\.active|aria-expanded/.test(rr.selectorText)) hostSheetAlt = true;
+          } catch {}
+        }
+        if (alt || hostSheetAlt) continue;
+        for (const h of hosts) {
+          let hidden = [];
+          try {
+            hidden = [...h.querySelectorAll(m[2].replace(/^[>+~]\s*/, ''))].filter((c) => { const s = cs(c); return s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity) === 0; });
+          } catch {}
+          if (!hidden.length || seen.has(h)) continue;
+          seen.add(h);
+          const clickable = h.matches(INTERACTIVE + ', [aria-haspopup], [aria-expanded]') || [...h.querySelectorAll(INTERACTIVE + ', [aria-haspopup], [aria-expanded]')].some((c) => isVisible(c) && !hidden.some((x) => x.contains(c)));
+          out.push(cand('hover-only', h, clickable ? 0.5 : 0.65, `Content inside this element is only revealed on :hover (${r.selectorText.slice(0, 80)}); touch screens can't hover, so it may be unreachable.`, { rule: r.selectorText.slice(0, 160), hidden: hidden.slice(0, 3).map(selectorFor) }));
+        }
+      }
+    }
+    // Overlapping tap targets.
+    const targets = els.filter((el) => el.matches(INTERACTIVE) && isVisible(el)).slice(0, 300);
+    const rects = targets.map(rectOf);
+    const pairs = new Set();
+    for (let i = 0; i < targets.length; i++)
+      for (let j = i + 1; j < targets.length; j++) {
+        const a = targets[i], b = targets[j];
+        if (a.contains(b) || b.contains(a)) continue;
+        const ix = intersect(rects[i], rects[j]);
+        if (!ix) continue;
+        const area = ix.width * ix.height;
+        const minArea = Math.min(rects[i].width * rects[i].height, rects[j].width * rects[j].height);
+        if (area < 16 || area / minArea < 0.15) continue;
+        const k = selectorFor(a) + '|' + selectorFor(b);
+        if (pairs.has(k)) continue;
+        pairs.add(k);
+        out.push(cand('overlap', a, 0.7, `Tap targets overlap (${Math.round((area / minArea) * 100)}% of the smaller one): a tap may hit the wrong control.`, { tap_overlap: true, overlap_px: Math.round(area) }, b));
+      }
+    // Near-full-screen scroll containers that swallow vertical swipes.
+    const pageScrolls = (document.scrollingElement || document.documentElement).scrollHeight > innerHeight + 40;
+    if (pageScrolls)
+      for (const el of els) {
+        if (el === document.body || el === document.documentElement || !scrollsY(el) || !isVisible(el)) continue;
+        const r = rectOf(el);
+        if (r.height < innerHeight * 0.85 || r.width < innerWidth * 0.9) continue;
+        if (isFixedLike(el)) continue; // full-screen sheets are handled as overlays
+        out.push(cand('scroll-trap', el, 0.55, `A ${Math.round(r.width)}×${Math.round(r.height)}px inner scroll area fills the screen: swipes scroll it instead of the page, so content after it is hard to reach on touch.`, { height: Math.round(r.height), viewport: [innerWidth, innerHeight] }));
+      }
+    return out.slice(0, 30);
+  }
+
+  // ---------- visual polish ----------
+  function parseColor(c) {
+    const m = c && c.match(/rgba?\(([^)]+)\)/);
+    if (!m) return null;
+    const p = m[1].split(/[ ,/]+/).filter(Boolean).map(Number);
+    return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 };
+  }
+  const over = (fg, bg) => ({ r: fg.r * fg.a + bg.r * (1 - fg.a), g: fg.g * fg.a + bg.g * (1 - fg.a), b: fg.b * fg.a + bg.b * (1 - fg.a), a: 1 });
+  const lum = ({ r, g, b }) => {
+    const f = (v) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+  };
+  const contrast = (a, b) => {
+    const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+    return (x + 0.05) / (y + 0.05);
+  };
+  /** Effective background behind el, or null when an image/gradient makes it unknowable. */
+  function backgroundOf(el) {
+    const layers = [];
+    for (let p = el; p; p = p.parentElement) {
+      const s = cs(p);
+      if (s.backgroundImage && s.backgroundImage !== 'none') return null;
+      const c = parseColor(s.backgroundColor);
+      if (c && c.a > 0) {
+        layers.push(c);
+        if (c.a >= 1) break;
+      }
+    }
+    let bg = { r: 255, g: 255, b: 255, a: 1 };
+    for (const l of layers.reverse()) bg = over(l, bg);
+    return bg;
+  }
+  function detectPolish(els) {
+    const out = [];
+    // Low contrast text (WCAG AA): 4.5:1, or 3:1 for large text.
+    const pairs = new Map();
+    for (const el of els) {
+      if (out.length >= 25) break;
+      if (!directText(el) || !isVisible(el)) continue;
+      if (el.closest('[disabled], [aria-disabled=true], [aria-hidden=true]') || el.matches('option')) continue;
+      const s = cs(el);
+      const fg = parseColor(s.color);
+      const bg = backgroundOf(el);
+      if (!fg || !bg) continue;
+      let op = 1;
+      for (let p = el; p; p = p.parentElement) op *= Number(cs(p).opacity);
+      const ratio = contrast(over({ ...fg, a: fg.a * op }, bg), bg);
+      const size = parseFloat(s.fontSize);
+      const large = size >= 24 || (size >= 18.66 && Number(s.fontWeight) >= 700);
+      const need = large ? 3 : 4.5;
+      if (ratio >= need) continue;
+      const k = s.color + '|' + JSON.stringify(bg) + '|' + large;
+      const n = (pairs.get(k) || 0) + 1;
+      pairs.set(k, n);
+      if (n > 3) continue; // same colour pair: report a few instances
+      out.push(cand('low-contrast', el, ratio < need * 0.67 ? 0.8 : 0.6, `Text contrast ${ratio.toFixed(2)}:1 is below WCAG AA ${need}:1 (${s.color} on rgb(${Math.round(bg.r)}, ${Math.round(bg.g)}, ${Math.round(bg.b)})).`, { ratio: Math.round(ratio * 100) / 100, required: need, color: s.color, background: `rgb(${Math.round(bg.r)}, ${Math.round(bg.g)}, ${Math.round(bg.b)})`, font_px: size }));
+    }
+    // Stretched / squashed images.
+    for (const el of els) {
+      if (el.tagName !== 'IMG' || !el.complete || !el.naturalWidth || !isVisible(el)) continue;
+      const s = cs(el);
+      if (s.objectFit !== 'fill') continue;
+      const r = rectOf(el);
+      if (r.width < 24 || r.height < 24) continue;
+      const nat = el.naturalWidth / el.naturalHeight;
+      const shown = r.width / r.height;
+      const skew = Math.abs(shown / nat - 1);
+      if (skew < 0.06) continue;
+      out.push(cand('distorted-image', el, Math.min(0.9, 0.55 + skew), `Image is ${shown > nat ? 'stretched' : 'squashed'}: shown at ${Math.round(r.width)}×${Math.round(r.height)} (ratio ${shown.toFixed(2)}) but the image is ${el.naturalWidth}×${el.naturalHeight} (ratio ${nat.toFixed(2)}). Use object-fit or keep the aspect ratio.`, { natural: [el.naturalWidth, el.naturalHeight], rendered: [Math.round(r.width), Math.round(r.height)], skew: Math.round(skew * 100) / 100 }));
+    }
+    // Misaligned items in a row: equal-height siblings in a flex row / grid row whose tops are off by 1-6px.
+    const parents = new Set(els.filter((e) => { const d = cs(e).display; return (d.includes('flex') && !cs(e).flexDirection.startsWith('column')) || d.includes('grid'); }));
+    for (const p of parents) {
+      const kids = [...p.children].filter(isVisible).filter((k) => !['absolute', 'fixed'].includes(cs(k).position));
+      if (kids.length < 3) continue;
+      const rows = new Map();
+      for (const k of kids) {
+        const r = rectOf(k);
+        const key = Math.round(r.top / 12);
+        const row = rows.get(key) || rows.get(key - 1) || rows.get(key + 1) || [];
+        if (!row.length) rows.set(key, row);
+        row.push({ k, r });
+      }
+      for (const row of rows.values()) {
+        if (row.length < 3) continue;
+        const h = row.map((x) => Math.round(x.r.height));
+        if (Math.max(...h) - Math.min(...h) > 2) continue;
+        const tops = row.map((x) => Math.round(x.r.top));
+        const mode = tops.sort((a, b) => tops.filter((v) => v === b).length - tops.filter((v) => v === a).length)[0];
+        for (const x of row) {
+          const d = Math.abs(Math.round(x.r.top) - mode);
+          if (d >= 1 && d <= 6) out.push(cand('misalignment', x.k, 0.5, `Item sits ${d}px ${x.r.top > mode ? 'lower' : 'higher'} than its ${row.length - 1} same-height siblings in the row.`, { offset_px: d, row_size: row.length }, p));
+        }
+      }
+    }
+    return out;
+  }
+
   // ---------- layout shift tracking ----------
   // Chromium: PerformanceObserver layout-shift entries. Only pointer input discounts a shift (a Tab keypress
   // near a timer-driven shift must not hide it). WebKit/Firefox: sample element positions for the first seconds.
@@ -565,6 +860,10 @@
       ...run('small-tap-target', () => detectTapTargets(els, o)),
       ...run('broken-image', () => detectMisc(els)),
       ...run('layout-shift', () => detectLayoutShift()),
+      ...(!o.only || o.only.some((t) => FOCUS_TYPES.includes(t)) ? detectFocus().filter((c) => !o.only || o.only.includes(c.type)) : []),
+      ...(!o.only || o.only.some((t) => ['overlay-overflow', 'hidden-by-sticky'].includes(t)) ? detectOverlays().filter((c) => !o.only || o.only.includes(c.type)) : []),
+      ...(!o.only || o.only.some((t) => ['hover-only', 'overlap', 'scroll-trap'].includes(t)) ? detectTouch(els).filter((c) => !o.only || o.only.includes(c.type)) : []),
+      ...(!o.only || o.only.some((t) => ['low-contrast', 'distorted-image', 'misalignment'].includes(t)) ? detectPolish(els).filter((c) => !o.only || o.only.includes(c.type)) : []),
     ];
     // Dedupe by type+selector, keep highest confidence.
     const best = new Map();
@@ -605,5 +904,5 @@
     return allElements().filter((e) => isVisible(e) && signatureOf(e) === signature).slice(0, 50).map((e) => ({ selector: selectorFor(e), text: textOf(e), bbox: r2(rectOf(e)) }));
   }
 
-  window.__bugbash = { version: 1, detect, selectorFor, signatureOf, interactives, domHash, elementInfo, findBySignature, drawBox, caption, ring, clearOverlay, shifts, resetShifts: () => (shifts.length = 0) };
+  window.__bugbash = { version: 1, detect, detectFocus, selectorFor, signatureOf, interactives, domHash, elementInfo, findBySignature, drawBox, caption, ring, clearOverlay, shifts, resetShifts: () => (shifts.length = 0) };
 })();

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Polish lab</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 24px; color: #222; background: #fff; }
+  /* LAB-P1: light grey text on white (about 2.3:1). */
+  .faint { color: #aaa; }
+  /* LAB-P2: a 2:1 image forced into a square. */
+  .logo { width: 120px; height: 120px; }
+  .logo-ok { width: 120px; height: 60px; }
+  /* LAB-P3: one card 3px lower than its siblings. */
+  .row { display: flex; gap: 12px; align-items: flex-start; }
+  .card { width: 120px; height: 60px; background: #eef; border: 1px solid #99c; }
+  .card.off { margin-top: 3px; }
+  /* LAB-P4: truncated text with no way to read the rest (control has a title). */
+  .trunc { width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<h1>Polish lab</h1>
+<p class="faint" id="faint">Prices exclude VAT and shipping to remote areas.</p>
+<p id="ok-text">This paragraph has normal contrast.</p>
+<p><img class="logo" id="squashed" src="wide.svg" alt="Wide logo" /> <img class="logo-ok" id="fine" src="wide.svg" alt="Wide logo, correct ratio" /></p>
+<div class="row"><div class="card">One</div><div class="card off" id="low-card">Two</div><div class="card">Three</div><div class="card">Four</div></div>
+<p class="trunc" id="cut">International shipping policy for oversized items</p>
+<p class="trunc" id="cut-ok" title="International shipping policy for oversized items">International shipping policy for oversized items</p>
+</body>
+</html>

@@ -16,9 +16,23 @@ export const FindingType = z.enum([
   'broken-image',
   'console-error',
   'broken-state',
+  'focus-obscured',
+  'focus-escape',
+  'overlay-overflow',
+  'hover-only',
+  'scroll-trap',
+  'low-contrast',
+  'distorted-image',
+  'truncated-no-tooltip',
   'other',
 ]);
 export type FindingType = z.infer<typeof FindingType>;
+
+/** layout = visual/UI defects (the main counts); ux-functional = behaviour bugs (broken flows, errors), kept separate. */
+export const FindingCategory = z.enum(['layout', 'ux-functional']);
+export type FindingCategory = z.infer<typeof FindingCategory>;
+export const FUNCTIONAL_TYPES: ReadonlySet<string> = new Set(['broken-state', 'console-error']);
+export const categoryOf = (type: string): FindingCategory => (FUNCTIONAL_TYPES.has(type) ? 'ux-functional' : 'layout');
 
 export const Severity = z.enum(['critical', 'major', 'minor', 'cosmetic']);
 export type Severity = z.infer<typeof Severity>;
@@ -112,6 +126,7 @@ export const Finding = z.object({
   root_cause_id: z.string().nullable().default(null),
   fingerprint: z.string(),
   type: FindingType,
+  category: FindingCategory.optional(),
   title: z.string(),
   description: z.string().default(''),
   severity: Severity.default('minor'),
@@ -213,6 +228,7 @@ export const RawFinding = z.object({
   session: z.string(),
   persona: z.string().nullable(),
   type: FindingType,
+  category: FindingCategory.optional(),
   title: z.string(),
   description: z.string(),
   severity: Severity,

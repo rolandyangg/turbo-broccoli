@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Overlay lab</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 24px; color: #222; background: #fff; }
+  /* LAB-O1: a fixed modal taller than short viewports, with no internal scroll. */
+  .modal { position: fixed; top: 40px; left: 50%; transform: translateX(-50%); width: min(90vw, 420px); background: #fff; border: 1px solid #999; padding: 20px; }
+  .modal .terms { height: 900px; background: repeating-linear-gradient(#fff 0 22px, #eee 22px 24px); }
+</style>
+</head>
+<body>
+<h1>Overlay lab</h1>
+<div class="modal" role="dialog" aria-modal="true" aria-label="Terms">
+  <h2>Accept the terms</h2>
+  <div class="terms"></div>
+  <button id="agree">I agree</button>
+</div>
+</body>
+</html>

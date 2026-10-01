@@ -245,7 +245,8 @@
       "types": [
         "broken-state",
         "other",
-        "misalignment"
+        "misalignment",
+        "hover-only"
       ],
       "match": [
         "dropdown",

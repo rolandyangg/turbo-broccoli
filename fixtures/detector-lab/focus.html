@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Focus lab</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 24px 24px 200px; color: #222; background: #fff; }
+  button { font: inherit; padding: 8px 14px; border: 1px solid #555; background: #f4f4f4; border-radius: 4px; }
+  /* LAB-F1: focus indicator removed with nothing in its place. */
+  #no-ring:focus { outline: none; }
+  /* Control: a clear focus ring. */
+  #good-ring:focus-visible { outline: 3px solid #1a5fd0; outline-offset: 2px; }
+  /* LAB-F2: a fixed cookie consent sheet covers the bottom half of the viewport (browsers scroll focus to the middle). */
+  .cookie { position: fixed; left: 0; right: 0; bottom: 0; height: 55vh; background: #1d1d1f; color: #fff; padding: 16px 24px; }
+  .spacer { height: 1400px; }
+  /* LAB-F3: a modal dialog that doesn't trap focus. */
+  .dialog { position: fixed; top: 80px; left: 50%; transform: translateX(-50%); width: 320px; padding: 20px; background: #fff; border: 1px solid #999; box-shadow: 0 10px 40px #0004; }
+</style>
+</head>
+<body>
+<h1>Focus lab</h1>
+<p><button id="good-ring">Good focus ring</button> <button id="no-ring">No focus ring</button></p>
+<div class="spacer"></div>
+<p><a id="deep-link" href="#x">A link far down the page</a></p>
+<div class="cookie">We use cookies. <button id="accept">Accept</button></div>
+<div class="dialog" role="dialog" aria-modal="true" aria-label="Newsletter" id="dlg" hidden>
+  <p>Subscribe to the newsletter?</p>
+  <button id="dlg-ok">Subscribe</button>
+</div>
+<a id="outside" href="#y">Link outside the dialog</a>
+</body>
+</html>

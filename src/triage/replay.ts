@@ -7,13 +7,35 @@ import { normalizeSteps, suffixFromLastGoto } from './steps.js';
 
 const isInteraction = (s: Step) => s.action !== 'resize' && s.action !== 'variant' && s.action !== 'goto';
 
-export const DETECTABLE = new Set(['text-overflow', 'spill-out', 'overlap', 'too-close', 'viewport-overflow', 'small-tap-target', 'broken-image', 'layout-shift']);
+export const DETECTABLE = new Set([
+  'text-overflow',
+  'spill-out',
+  'overlap',
+  'too-close',
+  'viewport-overflow',
+  'small-tap-target',
+  'broken-image',
+  'layout-shift',
+  // Replayed with the same steps (e.g. the Tab presses), then checked on the final state.
+  'focus-invisible',
+  'focus-obscured',
+  'focus-escape',
+  'overlay-overflow',
+  'hidden-by-sticky',
+  'hover-only',
+  'scroll-trap',
+  'low-contrast',
+  'distorted-image',
+  'misalignment',
+  'truncated-no-tooltip',
+]);
 const ALIASES: Record<string, string[]> = {
   'text-overflow': ['text-overflow', 'spill-out'],
   'spill-out': ['spill-out', 'text-overflow'],
   overlap: ['overlap'],
   'too-close': ['too-close', 'small-tap-target'],
   'small-tap-target': ['small-tap-target', 'too-close'],
+  'truncated-no-tooltip': ['truncated-no-tooltip', 'text-overflow'],
 };
 
 export interface DefectSpec {

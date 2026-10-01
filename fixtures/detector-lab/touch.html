@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Touch lab</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 16px; color: #222; background: #fff; }
+  /* LAB-T1: a menu that only opens on hover. */
+  .account { display: inline-block; padding: 8px 12px; border: 1px solid #999; }
+  .account .submenu { display: none; }
+  .account:hover .submenu { display: block; }
+  /* LAB-T2: two tap targets overlapping. */
+  .pair button { font: inherit; width: 120px; height: 48px; }
+  .pair .second { margin-left: -40px; position: relative; }
+  /* LAB-T3: an inner scroll area that fills the screen. */
+  .feed { height: 95vh; overflow-y: auto; border: 1px solid #ccc; }
+  .feed .tall { height: 3000px; background: linear-gradient(#fafafa, #ddd); }
+</style>
+</head>
+<body>
+<h1>Touch lab</h1>
+<div class="account">Account <div class="submenu"><a href="#settings">Settings</a> <a href="#logout">Log out</a></div></div>
+<p class="pair"><button class="first">Save</button><button class="second">Delete</button></p>
+<div class="feed"><div class="tall">Feed</div></div>
+<p>Footer content after the feed.</p>
+</body>
+</html>

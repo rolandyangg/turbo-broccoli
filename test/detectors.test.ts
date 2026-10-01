@@ -82,6 +82,7 @@ describe('detectors on seeded fixture', () => {
     expect(tag).toBeDefined();
     expect(tag!.confidence).toBeLessThanOrEqual(0.35);
     expect(tag!.metrics.truncated_by_design).toBe(true);
+    expect(tag!.type).toBe('truncated-no-tooltip'); // the tag has no title, so the full text can't be read
   });
 
   it('control: clean desktop signup page has no high-confidence layout defects beyond the footer', async () => {
