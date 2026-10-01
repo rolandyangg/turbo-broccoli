@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, copyFileSync, symlinkSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, symlinkSync, writeFileSync, readFileSync, realpathSync, readdirSync } from 'node:fs';
 import { join, basename, dirname, relative } from 'node:path';
 import { execa } from 'execa';
 import { Config } from '../config.js';
@@ -55,7 +55,7 @@ export async function fixFindings(o: FixOptions) {
   });
   try {
     const r = await fixInner(o, rep, say);
-    rep.finish('succeeded', { verified: r.verified, pr_url: r.prUrl, also_fixed: r.alsoFixed, summary: r.verified ? 'Fixed and verified' : 'Committed, but not fully verified' });
+    rep.finish('succeeded', { verified: r.verified, pr_url: r.prUrl, also_fixed: r.alsoFixed, error: r.publishError ? `Not published: ${r.publishError}` : null, summary: `${r.verified ? 'Fixed and verified' : 'Committed, but not fully verified'}${r.publishError ? ' — committed locally, but the push/PR failed (see the retry command)' : ''}` });
     notifyFixDone(o.runDir, { ids: o.ids, branch: r.branch, verified: r.verified, prUrl: r.prUrl });
     return r;
   } catch (e) {
@@ -222,6 +222,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
 
     // ---- PR ----
     let prUrl: string | null = null;
+    let publishError: string | null = null;
     if (o.pr) {
       let assetBase: string | null = null;
       if (o.prAssets) {
@@ -233,22 +234,35 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
           if (existsSync(join(assetsDir, `${f.id}-after.png`))) copyFileSync(join(assetsDir, `${f.id}-after.png`), join(worktree, rel, `${f.id}-after.png`));
           if (f.video?.gif && existsSync(join(o.runDir, f.video.gif))) copyFileSync(join(o.runDir, f.video.gif), join(worktree, rel, `${f.id}-before.gif`));
         }
+        await shrinkImages(join(worktree, rel));
         await git(worktree, ['add', '-f', rel]);
         await git(worktree, ['commit', '-m', `chore(bugbash): before/after evidence for PR review\n\nSafe to drop before merging.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`]);
         const nwo = (await execa('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'], { cwd: worktree, reject: false })).stdout.trim();
         if (nwo) assetBase = `https://github.com/${nwo}/raw/${branch}/${rel}`;
       }
-      say('push', `Pushing ${branch} to origin`);
-      const push = await git(worktree, ['push', '-u', 'origin', branch]);
-      if (push.exitCode !== 0) throw new Error(`git push failed: ${push.stderr}`);
       const body = prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, assetBase, attempts: attempt });
       const bodyFile = join(assetsDir, 'pr-body.md');
       writeFileSync(bodyFile, body);
-      const pr = await execa('gh', ['pr', 'create', '--base', baseBranch, '--head', branch, '--title', `fix(ui): ${clip(title, 90)}`, '--body-file', bodyFile, ...(o.draft ? ['--draft'] : [])], { cwd: worktree, reject: false });
-      if (pr.exitCode !== 0) throw new Error(`gh pr create failed: ${pr.stderr}`);
-      prUrl = pr.stdout.trim().split('\n').pop() ?? null;
-      rep.update({ pr_url: prUrl });
-      say('pr', `Opened ${o.draft ? 'draft ' : ''}PR ${prUrl}`, 'success', { pr_url: prUrl });
+      const prArgs = ['pr', 'create', '--base', baseBranch, '--head', branch, '--title', `fix(ui): ${clip(title, 90)}`, '--body-file', bodyFile, ...(o.draft ? ['--draft'] : [])];
+      // Publishing can fail for reasons unrelated to the fix (network, auth, GitHub limits). The verified commit is
+      // kept either way; the job reports what to run to finish publishing.
+      try {
+        say('push', `Pushing ${branch} to origin`);
+        // HTTPS pushes over git's 1 MiB default buffer go out chunked, which GitHub sometimes rejects with
+        // "RPC failed; HTTP 400" (evidence images easily exceed it): send them in one request instead.
+        const push = await git(worktree, ['-c', 'http.postBuffer=524288000', 'push', '-u', 'origin', branch]);
+        if (push.exitCode !== 0) throw new Error(`git push failed: ${push.stderr.trim()}`);
+        const pr = await execa('gh', prArgs, { cwd: worktree, reject: false });
+        if (pr.exitCode !== 0) throw new Error(`gh pr create failed: ${pr.stderr.trim()}`);
+        prUrl = pr.stdout.trim().split('\n').pop() ?? null;
+        rep.update({ pr_url: prUrl });
+        say('pr', `Opened ${o.draft ? 'draft ' : ''}PR ${prUrl}`, 'success', { pr_url: prUrl });
+      } catch (e) {
+        publishError = (e as Error).message;
+        const retry = `git -C ${worktree} -c http.postBuffer=524288000 push -u origin ${branch} && gh pr create ${prArgs.slice(2).map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(' ')}`;
+        say('push', `The fix is committed on ${branch}, but publishing failed: ${publishError}\nThe worktree is kept so you can retry:\n${retry}`, 'error', { retry });
+        o.keepWorktree = true;
+      }
     } else {
       writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, assetBase: null, attempts: attempt }));
       say('commit', `Not pushed (no PR requested). PR description draft saved.`, 'info', { pr_body: relative(o.runDir, join(assetsDir, 'pr-body.md')) });
@@ -268,7 +282,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     writeFindings(o.runDir, { run_id: fresh.run_id, target: fresh.target, generated_at: fresh.generated_at, groups: fresh.groups });
     writeReport(o.runDir);
     say('record', `Done: ${verified ? 'verified ✓' : 'NOT fully verified ✗'}${alsoFixed.length ? `; also fixed ${alsoFixed.join(', ')}` : ''}`, verified ? 'success' : 'warn');
-    return { branch, prUrl, verified, alsoFixed, worktree };
+    return { branch, prUrl, verified, alsoFixed, worktree, publishError };
   } catch (e) {
     restoreStatus(o.runDir, selected, rep.status.id);
     throw e;
@@ -407,4 +421,13 @@ export async function provideDependencies(repo: string, appDir: string, say: (st
   }
   symlinkSync(src, dest, 'dir');
   say('server', 'Linked node_modules from your checkout (some bundlers, e.g. Turbopack, reject this)', 'warn');
+}
+
+/** Keeps PR evidence light: scales screenshots wider than 1400px down (macOS sips; skipped elsewhere). */
+async function shrinkImages(dir: string) {
+  if (process.platform !== 'darwin' || !existsSync(dir)) return;
+  for (const f of readdirSync(dir).filter((x) => x.endsWith('.png'))) {
+    const w = Number((await execa('sips', ['-g', 'pixelWidth', join(dir, f)], { reject: false })).stdout.match(/pixelWidth:\s*(\d+)/)?.[1] ?? 0);
+    if (w > 1400) await execa('sips', ['--resampleWidth', '1400', join(dir, f)], { reject: false });
+  }
 }
