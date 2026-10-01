@@ -3,7 +3,8 @@ import { Link, useParams } from 'react-router';
 import { fileUrl, useApi, useJobStream } from '../lib/api.ts';
 import type { BugDetail, Finding, TranscriptItem } from '../lib/types.ts';
 import { ago, pct, variantEntries, widthRange } from '../lib/format.ts';
-import { Box, Chamfer, Chip, ConfidenceBar, CopyButton, ErrorBox, JsonView, Lightbox, Loading, SevChip, StatusChip, Tabs, FileIcon, Arrow } from '../components/ui.tsx';
+import { Box, Chamfer, Chip, ConfidenceBar, CopyButton, ErrorBox, JsonView, Loading, SevChip, StatusChip, Tabs, FileIcon, Arrow } from '../components/ui.tsx';
+import { ImageViewer, type ViewerImage } from '../components/ImageViewer.tsx';
 import { VideoPlayer, type Chapter } from '../components/VideoPlayer.tsx';
 import { FixDialog, LabelControls, ReproduceDialog } from '../components/Actions.tsx';
 import { BranchPanel, CancelButton, JobStateChip, JobTimeline } from '../components/Jobs.tsx';
@@ -171,7 +172,7 @@ export function Bug() {
 
 // ---------------- media ----------------
 function MediaPanel({ f, ws, run, m, setM, chapters, seek, afterShot, onChapter }: { f: Finding; ws: string; run: string; m: Media; setM: (m: Media) => void; chapters: Chapter[]; seek: { t_ms: number; n: number } | null; afterShot: string | null; onChapter: (c: Chapter | null) => void }) {
-  const [zoom, setZoom] = useState<string | null>(null);
+  const [viewer, setViewer] = useState<number | null>(null);
   const explorerShot = f.screenshots.explorer ?? null;
   const v = f.video;
   const tabs: { id: Media; label: string }[] = [
@@ -183,7 +184,10 @@ function MediaPanel({ f, ws, run, m, setM, chapters, seek, afterShot, onChapter 
     ...(afterShot ? [{ id: 'after' as Media, label: 'After fix' }] : []),
     ...(explorerShot ? [{ id: 'explorer' as Media, label: "Explorer's shot" }] : []),
   ];
-  const img = m === 'annotated' ? f.screenshots.annotated : m === 'crop' ? f.screenshots.crop : m === 'full' ? f.screenshots.full : m === 'filmstrip' ? v?.filmstrip : m === 'after' ? afterShot : m === 'explorer' ? explorerShot : null;
+  const pathOf = (k: Media) => (k === 'annotated' ? f.screenshots.annotated : k === 'crop' ? f.screenshots.crop : k === 'full' ? f.screenshots.full : k === 'filmstrip' ? v?.filmstrip : k === 'after' ? afterShot : k === 'explorer' ? explorerShot : null);
+  const img = pathOf(m);
+  // Every still image of this bug, in tab order, for flipping through in the viewer.
+  const gallery: (ViewerImage & { key: Media })[] = tabs.filter((t) => t.id !== 'video' && pathOf(t.id)).map((t) => ({ key: t.id, label: `${f.id} · ${t.label}`, src: fileUrl(ws, run, pathOf(t.id)) }));
   return (
     <div className="box media">
       <Tabs<Media> tabs={tabs} value={m} onChange={setM} />
@@ -192,8 +196,9 @@ function MediaPanel({ f, ws, run, m, setM, chapters, seek, afterShot, onChapter 
           <VideoPlayer src={fileUrl(ws, run, v.mp4 ?? v.webm)} poster={fileUrl(ws, run, f.screenshots.annotated)} chapters={chapters} bugAtMs={v.bug_at_ms} seek={seek} onChapter={onChapter} />
         )}
         {m !== 'video' && img && (
-          <button className="media-img" onClick={() => setZoom(fileUrl(ws, run, img))} title="Click to enlarge">
+          <button className="media-img" onClick={() => setViewer(Math.max(0, gallery.findIndex((g) => g.key === m)))} title="Click to zoom and pan">
             <img src={fileUrl(ws, run, img)} alt={`${f.id} ${m}`} />
+            <span className="media-zoom-hint label">Click to zoom</span>
           </button>
         )}
         {m === 'after' && f.screenshots.annotated && (
@@ -229,7 +234,7 @@ function MediaPanel({ f, ws, run, m, setM, chapters, seek, afterShot, onChapter 
           )}
         </span>
       </div>
-      <Lightbox src={zoom} onClose={() => setZoom(null)} />
+      {viewer !== null && gallery.length > 0 && <ImageViewer images={gallery} index={viewer} onIndex={setViewer} onClose={() => setViewer(null)} />}
     </div>
   );
 }

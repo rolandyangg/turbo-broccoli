@@ -216,21 +216,6 @@ export function Dialog({ open, onClose, title, children, footer, wide }: { open:
   );
 }
 
-export function Lightbox({ src, onClose }: { src: string | null; onClose: () => void }) {
-  useEffect(() => {
-    if (!src) return;
-    const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', k);
-    return () => window.removeEventListener('keydown', k);
-  }, [src, onClose]);
-  if (!src) return null;
-  return (
-    <div className="overlay lightbox" onClick={onClose} role="dialog" aria-label="Image preview">
-      <img src={src} alt="" />
-    </div>
-  );
-}
-
 export function JsonView({ value, max = 520 }: { value: unknown; max?: number }) {
   return (
     <pre className="code" style={{ maxHeight: max }}>
