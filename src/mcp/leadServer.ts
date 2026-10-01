@@ -27,7 +27,8 @@ server.registerTool(
     inputSchema: {
       goal: z.string(),
       pages: z.array(z.string()).describe('Paths, first is the start page'),
-      persona: z.enum(['phone-user', 'keyboard-user', 'german-user', 'impatient-user', 'power-user', 'low-vision-user']).optional(),
+      persona: z.string().optional().describe('An enabled persona id (see the campaign brief)'),
+      device: z.string().optional().describe('Device profile id to start on, e.g. iphone-15, pixel-7, ipad-mini, laptop, desktop-fhd'),
       browser: z.enum(['chromium', 'webkit', 'firefox']).optional(),
       viewport: z.object({ width: z.number().int(), height: z.number().int() }).optional(),
       hypotheses: z.array(z.string()).optional(),

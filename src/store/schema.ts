@@ -49,6 +49,8 @@ export const Variant = z.object({
   zoom: z.number().default(1),
   network: z.enum(['online', 'offline', 'slow-3g']).default('online'),
   blocked: z.array(z.string()).default([]),
+  /** Real device emulation profile id (touch, mobile UA, DPR, meta viewport); null = desktop window. */
+  device: z.string().nullable().default(null),
 });
 export type Variant = z.infer<typeof Variant>;
 

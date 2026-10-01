@@ -4,6 +4,8 @@ import { Driver } from '../replay/driver.js';
 import { runDetectors, settle, temporalSignals, type Candidate } from '../detect/index.js';
 import { Coverage, mergeAll, pageKey, summarize } from '../explore/coverage.js';
 import { STRATEGIES, STRATEGY_IDS } from '../explore/strategies.js';
+import { DEVICE_PROFILES, deviceById, deviceContextOptions } from '../explore/devices.js';
+import { suffixFromLastGoto } from '../triage/steps.js';
 import { mutatedText, stressValue, STRESS_KINDS, type StressKind } from '../explore/forms.js';
 import type { Config } from '../config.js';
 import {
@@ -25,6 +27,8 @@ export interface SessionOptions {
   config: Config;
   startPath?: string;
   viewport?: { width: number; height: number };
+  /** Start on this device profile (real touch/mobile emulation or a desktop size). */
+  device?: string | null;
   headless?: boolean;
 }
 
@@ -84,6 +88,7 @@ export class BrowserSession {
     const vp = this.driver.viewport;
     this.record({ action: 'resize', width: vp.width, height: vp.height }, false);
     await this.goto(this.opts.startPath ?? '/');
+    if (this.opts.device) await this.setDevice(this.opts.device).catch(() => {});
   }
 
   private log(entry: Record<string, unknown>) {
@@ -131,9 +136,21 @@ export class BrowserSession {
   private async afterAction(selector?: string) {
     const path = this.driver.path();
     if (selector) this.coverage.tried(path, selector);
-    this.coverage.width(path, this.driver.viewport.width);
+    this.coverage.width(path, this.driver.viewport.width, this.driver.viewport.height);
+    if (this.driver.variant.device) this.coverage.device(path, this.driver.variant.device);
     this.coverage.browser(path, this.opts.browser);
     this.coverage.flush();
+  }
+
+  /**
+   * After the browser context is rebuilt (device or DPR change), replay the interactions since the last
+   * navigation so the page is back in the same state (open menus, typed input…).
+   */
+  private async restoreState() {
+    const replayable = suffixFromLastGoto(this.trace).filter((st) => st.action !== 'resize' && st.action !== 'variant' && st.action !== 'goto');
+    let failed = 0;
+    for (const st of replayable) await this.driver.apply(st).catch(() => failed++);
+    return failed ? ` (${failed} of ${replayable.length} earlier interactions could not be replayed; call observe())` : replayable.length ? ` (replayed ${replayable.length} interactions to restore the page state)` : '';
   }
 
   // ---------------- tools ----------------
@@ -186,6 +203,7 @@ export class BrowserSession {
   private variantSummary() {
     const v = this.driver.variant;
     const out: Record<string, unknown> = {};
+    if (v.device) out.device = v.device;
     if (v.colorScheme !== 'light') out.colorScheme = v.colorScheme;
     if (v.fontScale !== 1) out.fontScale = v.fontScale;
     if (v.zoom !== 1) out.zoom = v.zoom;
@@ -330,8 +348,31 @@ export class BrowserSession {
     return `Viewport is now ${width}x${h}`;
   }
 
+  async setDevice(id: string | null) {
+    const dev = id && id !== 'none' ? deviceById(id) : null;
+    if (id && id !== 'none' && !dev) return `Unknown device "${id}". Available: ${DEVICE_PROFILES.map((d) => d.id).join(', ')}`;
+    const notes = dev?.playwright ? deviceContextOptions(dev.id, this.opts.browser).notes : [];
+    if (!dev?.playwright && dev) {
+      // Desktop profiles are plain window sizes: resize, no context rebuild.
+      if (this.driver.variant.device) await this.driver.setVariant({ device: null });
+      await this.resize(dev.viewport.width, dev.viewport.height);
+      this.tagStrategy('size.desktop-sizes');
+      return `Desktop window ${dev.label}: ${dev.viewport.width}x${dev.viewport.height} (mouse + keyboard).`;
+    }
+    const recreated = await this.driver.setVariant({ device: dev?.id ?? null });
+    this.record({ action: 'variant', variant: { device: dev?.id ?? null } });
+    const restored = recreated ? await this.restoreState() : '';
+    if (dev) this.tagStrategy('size.devices');
+    await this.afterAction();
+    const vp = this.driver.viewport;
+    return dev
+      ? `Emulating ${dev.label}: ${vp.width}x${vp.height}, touch (no hover), mobile UA, DPR ${this.page.viewportSize() ? (await this.page.evaluate('devicePixelRatio')) : '?'}${restored}.${notes.length ? ' Note: ' + notes.join(' ') : ''}`
+      : `Back to a desktop window ${vp.width}x${vp.height}${restored}.`;
+  }
+
   async setVariant(v: Partial<Variant>) {
-    await this.driver.setVariant(v);
+    const recreated = await this.driver.setVariant(v);
+    if (recreated) await this.restoreState();
     this.record({ action: 'variant', variant: v });
     const path = this.driver.path();
     if (v.colorScheme === 'dark') (this.coverage.variant(path, 'dark'), this.tagStrategy('env.dark-mode'));
@@ -381,7 +422,8 @@ export class BrowserSession {
   async runDetectors(opts: { only?: string[]; scope?: string; minConfidence?: number } = {}) {
     await this.driver.refreshVariant();
     const cands = (await runDetectors(this.page, this.detectOpts(opts.only, opts.scope))).filter((c) => c.confidence >= (opts.minConfidence ?? 0));
-    this.coverage.width(this.driver.path(), this.driver.viewport.width);
+    this.coverage.width(this.driver.path(), this.driver.viewport.width, this.driver.viewport.height);
+    if (this.driver.variant.device) this.coverage.device(this.driver.path(), this.driver.variant.device);
     this.coverage.flush();
     const stored = this.storeCandidates(cands);
     if (!stored.length) return `No detector candidates at ${this.driver.viewport.width}x${this.driver.viewport.height}.`;
@@ -395,7 +437,7 @@ export class BrowserSession {
     const agg = new Map<string, { ids: string[]; widths: number[]; c: Candidate }>();
     for (const w of widths) {
       await this.driver.resize(w, height);
-      this.coverage.width(this.driver.path(), w);
+      this.coverage.width(this.driver.path(), w, height);
       const cands = (await runDetectors(this.page, this.detectOpts())).filter((c) => c.confidence >= (opts.minConfidence ?? 0.4));
       for (const { id, c } of this.storeCandidates(cands)) {
         const key = `${c.type}|${c.selector}`;
@@ -416,6 +458,56 @@ export class BrowserSession {
     return (
       `Swept ${widths.length} widths at height ${height}; viewport restored to ${orig.width}x${orig.height}. Candidates (use the listed candidate id — its viewport is applied automatically when recording):\n` +
       rows.map((r) => `  ${r.ids[0]} ${r.c.type} conf=${r.c.confidence} ${r.c.selector} "${r.c.text.slice(0, 40)}" at widths ${compressRanges(r.widths)} — ${r.c.message}${r.c.related ? ` [with ${r.c.related.selector}]` : ''}`).join('\n')
+    );
+  }
+
+  /**
+   * Re-renders the current page state on real device profiles (each in its own temporary context, replaying the
+   * interactions since the last navigation) and runs the detectors there. The session's own page is untouched.
+   */
+  async sweepDevices(opts: { devices?: string[]; minConfidence?: number } = {}) {
+    const ids = (opts.devices?.length ? opts.devices : DEVICE_PROFILES.filter((d) => d.kind !== 'desktop').map((d) => d.id)).filter((id) => deviceById(id));
+    const path = this.driver.path();
+    const replay = suffixFromLastGoto(this.trace).filter((st) => st.action !== 'resize' && st.action !== 'variant' && st.action !== 'goto');
+    const agg = new Map<string, { ids: string[]; devices: string[]; c: Candidate }>();
+    const skipped: string[] = [];
+    for (const id of ids) {
+      const dev = deviceById(id)!;
+      const temp = new Driver({ browser: this.opts.browser, baseUrl: this.opts.baseUrl, viewport: dev.viewport, variant: { ...this.driver.variant, device: dev.playwright ? dev.id : null }, guardrails: this.opts.config.guardrails, sharedBrowser: this.driver.browser });
+      try {
+        await temp.start();
+        await temp.goto(path);
+        for (const st of replay) await temp.apply(st).catch(() => {});
+        await temp.refreshVariant();
+        const cands = (await runDetectors(temp.page, this.detectOpts())).filter((c) => c.confidence >= (opts.minConfidence ?? 0.4));
+        this.coverage.width(path, temp.viewport.width, temp.viewport.height);
+        if (dev.playwright) this.coverage.device(path, dev.id);
+        for (const c of cands) {
+          const cid = `c${++this.candCounter}`;
+          this.candidates.set(cid, { id: cid, candidate: c, viewport: { ...temp.viewport }, variant: { ...temp.variant }, path, traceLength: this.trace.length });
+          const key = `${c.type}|${c.selector}`;
+          const a = agg.get(key) ?? { ids: [], devices: [], c };
+          a.ids.push(cid);
+          a.devices.push(dev.id);
+          if (c.confidence > a.c.confidence) a.c = c;
+          agg.set(key, a);
+        }
+      } catch (e) {
+        skipped.push(`${id}: ${(e as Error).message.split('\n')[0]}`);
+      } finally {
+        await temp.context?.close().catch(() => {});
+      }
+    }
+    this.tagStrategy('size.devices');
+    this.coverage.flush();
+    const head = `Rendered ${path} on ${ids.length} device profile(s) (${ids.join(', ')}) in ${this.opts.browser}${replay.length ? `, replaying ${replay.length} interactions` : ''}. Your own page was not changed.`;
+    const rows = [...agg.values()].sort((a, b) => b.c.confidence - a.c.confidence);
+    return (
+      head +
+      (skipped.length ? `\nSkipped: ${skipped.join('; ')}` : '') +
+      (rows.length
+        ? `\nCandidates (recording one switches your session to that device automatically):\n` + rows.map((r) => `  ${r.ids[0]} ${r.c.type} conf=${r.c.confidence} ${r.c.selector} "${r.c.text.slice(0, 40)}" on ${r.devices.join(', ')} — ${r.c.message}${r.c.related ? ` [with ${r.c.related.selector}]` : ''}`).join('\n')
+        : '\nNo detector candidates on these devices.')
     );
   }
 
@@ -446,6 +538,7 @@ export class BrowserSession {
       cand = this.candidates.get(input.candidate_id);
       if (!cand) return `Unknown candidate_id ${input.candidate_id}.`;
       // Reproduce the environment the candidate was seen in.
+      if ((cand.variant.device ?? null) !== (this.driver.variant.device ?? null)) await this.setDevice(cand.variant.device ?? 'none');
       if (cand.viewport.width !== this.driver.viewport.width || cand.viewport.height !== this.driver.viewport.height) await this.resize(cand.viewport.width, cand.viewport.height);
     }
     let element: RawFinding['element'] = { selector: null, text: null, bbox: null, signature: null };

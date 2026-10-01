@@ -361,7 +361,12 @@
   function detectViewportOverflow(els) {
     const out = [];
     const docW = document.documentElement.scrollWidth;
-    const vw = document.documentElement.clientWidth;
+    // On a real (emulated) phone, mobile browsers widen the layout viewport to fit overflowing content and
+    // zoom the page out, so clientWidth grows with the bug. Compare against the device screen instead.
+    const client = document.documentElement.clientWidth;
+    const touch = navigator.maxTouchPoints > 0 || matchMedia('(pointer: coarse)').matches;
+    const zoomedOut = touch && screen.width > 0 && client > screen.width + 1;
+    const vw = zoomedOut ? screen.width : client;
     const culprits = [];
     for (const el of els) {
       if (!isVisible(el)) continue;
@@ -373,11 +378,18 @@
     }
     // Keep the outermost culprits (their descendants overflow because of them).
     const outer = culprits.filter((c) => !culprits.some((o) => o !== c && o.el.contains(c.el) && o.r.right >= c.r.right - 1));
-    const pageScrolls = docW > vw + 1;
+    const pageScrolls = docW > vw + 1 || zoomedOut;
     for (const c of outer.slice(0, 5)) {
       const px = Math.round(Math.max(c.r.right - vw, -c.r.left));
       const offLeft = c.r.left < -1;
-      out.push(cand('viewport-overflow', c.el, pageScrolls ? Math.min(0.95, 0.7 + px / 100) : 0.55, offLeft ? `Element extends ${px}px past the left edge of the viewport (cut off).` : pageScrolls ? `Element is ${px}px wider than the viewport, causing horizontal page scroll.` : `Element extends ${px}px past the right edge (clipped by the page).`, { overflow_px: px, document_scroll_width: docW, viewport_width: vw, page_scrolls: pageScrolls }));
+      const msg = offLeft
+        ? `Element extends ${px}px past the left edge of the viewport (cut off).`
+        : zoomedOut
+          ? `Element is ${px}px wider than the ${vw}px phone screen: the browser widens the page to ${client}px and shows it zoomed out (or sideways-scrolling).`
+          : pageScrolls
+            ? `Element is ${px}px wider than the viewport, causing horizontal page scroll.`
+            : `Element extends ${px}px past the right edge (clipped by the page).`;
+      out.push(cand('viewport-overflow', c.el, pageScrolls ? Math.min(0.95, 0.7 + px / 100) : 0.55, msg, { overflow_px: px, document_scroll_width: docW, viewport_width: vw, layout_viewport_width: client, zoomed_out: zoomedOut, page_scrolls: pageScrolls }));
     }
     return out;
   }

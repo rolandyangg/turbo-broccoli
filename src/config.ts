@@ -11,6 +11,10 @@ export const Config = z.object({
   startPaths: z.array(z.string()).default(['/']),
   browsers: z.array(BrowserName).default(['chromium', 'webkit', 'firefox']),
   personas: z.array(z.string()).default([]), // empty = all built-in personas
+  /** Personas the lead must not use. low-vision-user is off by default (re-enable by removing it). */
+  disabledPersonas: z.array(z.string()).default(['low-vision-user']),
+  /** Personas that get most of the session budget. */
+  priorityPersonas: z.array(z.string()).default(['everyday-user', 'phone-user']),
   parallel: z.number().int().min(1).default(3),
   budgetSessions: z.number().int().min(1).default(12),
   /** Max tool calls one explorer session may make before being told to wrap up. */

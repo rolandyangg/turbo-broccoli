@@ -14,7 +14,8 @@ import { Memory } from '../memory/siteMemory.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(here, '..');
 export const PERSONAS_DIR = join(here, 'prompts', 'personas');
-export const PERSONAS = ['phone-user', 'keyboard-user', 'german-user', 'impatient-user', 'power-user', 'low-vision-user'];
+import { enabledPersonas, personaById, EVERYDAY_TOOLS } from './personas.js';
+import { describeDevices } from './devices.js';
 
 export interface CampaignOptions {
   runId: string;
@@ -36,6 +37,8 @@ export interface ExplorerJob {
   browser: BrowserName;
   pages: string[];
   viewport: { width: number; height: number } | null;
+  /** Device profile to start on (devices.ts); overrides viewport. */
+  device: string | null;
   hypotheses: string[];
   maxToolCalls: number;
   kind: 'explore' | 'sibling-hunt' | 'fallback';
@@ -126,7 +129,9 @@ export class Campaign {
     if (left.timeMs <= 60_000) return 'Time budget exhausted. Call stop() with your summary.';
     const dup = this.jobs.find((j) => j.goal.trim().toLowerCase() === spec.goal.trim().toLowerCase() && j.browser === (spec.browser ?? 'chromium') && j.persona === (spec.persona ?? null));
     if (dup) return `Duplicate of ${dup.id}; not spawned.`;
-    const persona = spec.persona && PERSONAS.includes(spec.persona) ? spec.persona : null;
+    const enabled = enabledPersonas(this.cfg).map((p) => p.id);
+    if (spec.persona && !enabled.includes(spec.persona)) return `Persona "${spec.persona}" is disabled or unknown. Enabled personas: ${enabled.join(', ')}.`;
+    const persona = spec.persona ?? null;
     const job: ExplorerJob = {
       id: `s-${String(++this.counter).padStart(3, '0')}`,
       goal: spec.goal,
@@ -134,6 +139,7 @@ export class Campaign {
       browser: spec.browser && this.cfg.browsers.includes(spec.browser) ? spec.browser : 'chromium',
       pages: spec.pages?.length ? spec.pages : [this.cfg.startPaths[0]],
       viewport: spec.viewport ?? null,
+      device: spec.device ?? null,
       hypotheses: spec.hypotheses ?? [],
       maxToolCalls: Math.min(spec.maxToolCalls ?? this.cfg.maxToolCallsPerSession, this.cfg.maxToolCallsPerSession * 2),
       kind: spec.kind ?? 'explore',
@@ -215,13 +221,17 @@ export class Campaign {
       BUGBASH_START_PATH: job.pages[0],
       BUGBASH_MAX_CALLS: String(job.maxToolCalls),
     };
-    if (job.viewport) env.BUGBASH_VIEWPORT = JSON.stringify(job.viewport);
-    else if (job.persona === 'phone-user') env.BUGBASH_VIEWPORT = JSON.stringify({ width: 375, height: 740 });
+    const persona = personaById(job.persona);
+    if (job.device) env.BUGBASH_DEVICE = job.device;
+    else if (job.viewport) env.BUGBASH_VIEWPORT = JSON.stringify(job.viewport);
+    else if (persona?.device) env.BUGBASH_DEVICE = persona.device;
+    env.BUGBASH_TOOLSET = persona?.toolset ?? 'full';
     const r = await runClaude({
       prompt: this.explorerPrompt(job),
       systemPrompt: readFileSync(join(here, 'prompts', 'explorer.md'), 'utf8'),
       mcpServers: { bugbash: tsxServer(join(SRC, 'mcp', 'browserServer.ts'), env) },
-      allowedTools: ['mcp__bugbash'],
+      // Enforced twice: the allowlist here and the tool set check inside the MCP server.
+      allowedTools: persona?.toolset === 'everyday' ? EVERYDAY_TOOLS.map((t) => `mcp__bugbash__${t}`) : ['mcp__bugbash'],
       model: this.cfg.model,
       timeoutMs: this.cfg.sessionTimeoutMs,
       transcriptPath: join(this.o.runDir, 'transcripts', `${job.id}.jsonl`),
@@ -380,7 +390,10 @@ export class Campaign {
     const control = await this.startControlServer();
     const leadPrompt = [
       `Target: ${this.o.baseUrl}. Start paths: ${this.cfg.startPaths.join(', ')}.`,
-      `Browsers available: ${this.cfg.browsers.join(', ')}. Personas: ${PERSONAS.join(', ')}.`,
+      `Browsers available: ${this.cfg.browsers.join(', ')}.`,
+      `Personas (only these are enabled):\n${enabledPersonas(this.cfg).map((p) => `- ${p.id}: ${p.summary}`).join('\n')}`,
+      `PRIORITY: the user mainly cares about mobile devices and different desktop sizes with normal mouse + keyboard use. Give most sessions to ${this.cfg.priorityPersonas.filter((x) => enabledPersonas(this.cfg).some((p) => p.id === x)).join(' and ')}: phones/tablets via real device emulation, desktops across common sizes (1280×720 … 2560×1440).`,
+      `Devices you can assign with spawn_explorer({device}): ${describeDevices()}. A plain viewport is a narrow DESKTOP window (mouse, hover, desktop UA) — never use it to stand in for a phone.`,
       `Budget: ${this.cfg.budgetSessions} explorer sessions, ${Math.round(this.cfg.timeLimitMs / 60000)} minutes, ${this.cfg.parallel} in parallel, ~${this.cfg.maxToolCallsPerSession} tool calls each.`,
       `Stop rule: saturation when the last ${this.cfg.saturationWindow} sessions produce fewer than ${this.cfg.saturationMinNew} new unique findings in total (findings_summary.saturation.saturated), or when budget runs out.`,
       `Begin by reading memory, code_intel and site_map, then plan and spawn the first wave.`,
@@ -416,7 +429,8 @@ export class Campaign {
   private defaultPlan() {
     const seeds = this.o.intel?.hypotheses.slice(0, 8).map((h) => h.text) ?? [];
     const pages = this.o.intel?.routes.length ? this.o.intel.routes.filter((r) => !r.includes(':')) : this.cfg.startPaths;
-    const personas = ['phone-user', 'german-user', 'impatient-user', 'keyboard-user', 'low-vision-user', 'power-user'];
+    const enabled = enabledPersonas(this.cfg).map((p) => p.id);
+    const personas = [...this.cfg.priorityPersonas.filter((p) => enabled.includes(p)), ...enabled.filter((p) => !this.cfg.priorityPersonas.includes(p))];
     let i = 0;
     for (const p of pages) {
       const persona = personas[i++ % personas.length];

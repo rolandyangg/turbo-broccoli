@@ -58,6 +58,8 @@ function overrides(o: Record<string, any>): Partial<Config> {
     timeLimitMs: o.timeLimit ? o.timeLimit * 60_000 : undefined,
     browsers: o.browsers ? o.browsers.split(',').map((b: string) => BrowserName.parse(b.trim())) : undefined,
     startPaths: o.start ? o.start.split(',') : undefined,
+    personas: o.personas ? o.personas.split(',').map((x: string) => x.trim()) : undefined,
+    disabledPersonas: o.disablePersonas !== undefined ? o.disablePersonas.split(',').map((x: string) => x.trim()).filter(Boolean) : undefined,
     model: o.model,
     devCommand: o.devCommand,
     devPort: o.devPort,
@@ -77,6 +79,8 @@ const exploreOpts = (c: Command) =>
     .option('--time-limit <minutes>', 'Wall-clock limit', int)
     .option('--browsers <list>', 'Comma list: chromium,webkit,firefox')
     .option('--start <paths>', 'Comma list of start paths')
+    .option('--personas <list>', 'Only use these personas (e.g. everyday-user,phone-user)')
+    .option('--disable-personas <list>', 'Personas to turn off (default: low-vision-user; pass "" to enable all)')
     .option('--model <model>', 'Claude model alias for all agents')
     .option('--dev-command <cmd>', 'Command that starts the app')
     .option('--dev-port <port>', 'Port the dev server listens on', int)

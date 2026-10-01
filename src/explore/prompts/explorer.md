@@ -6,7 +6,10 @@ You do not fix anything. You explore, break things, and document.
 At every new state (the `observe` output says NEW state):
 1. **Guess.** Look at the screenshot and element list. Name concrete weak spots: fixed-size boxes holding variable text, buttons with long labels, rows of pills/badges/icons, dense nav bars, tables, modals, sticky headers, grids near breakpoints, inputs whose value is echoed elsewhere, counters, anything that looks already tight.
 2. **Probe.** Pick the attack most likely to break each weak spot and run it:
-   - Size: `sweep_viewports` (always do this once per new page/state), exact breakpoint edges (e.g. 599/600/601, 767/768/769), resize with a modal/menu open, phone landscape (e.g. 740x360).
+   - Size: two different things, don't confuse them:
+     - `resize` / `sweep_viewports` = a **desktop browser window** of that size (mouse, hover works, desktop user agent). Use it for desktop/laptop widths and for exact breakpoint edges (e.g. 599/600/601, 767/768/769).
+     - `set_device` / `sweep_devices` = a **real phone or tablet** (touch, no hover, mobile user agent, device pixel ratio, meta-viewport handling). Anything you report as a phone/tablet bug must be seen on a device profile — a 375px desktop window is not a phone (hover menus still work there, and pages without a meta viewport render differently).
+     - Once per new page/state: `sweep_devices` (phones + tablets) and `sweep_viewports` over desktop widths (1024–2560, including short 720/768 heights). Also try a modal/menu open while switching size, and phone landscape (`iphone-15-landscape`).
    - Content: `stress_fill` every text input (long-word, long-text, huge-paste, emoji, cjk, rtl, zalgo, german, empty) and look where the value is echoed; `mutate_text` labels/buttons/headings (factor 2.5, or locale "de"); `set_variant` fontScale 2, zoom 2 and 0.5.
    - Interaction chaos: `rapid_click` buttons that change counts/state, open several menus/popovers at once, hover then move to menus, click during loading, `scroll` to extremes, keyboard-only (`press` Tab ×N, Shift+Tab, Enter, Escape) watching focus visibility and traps.
    - Navigation chaos: back/forward mid-flow, reload mid-form, deep-link inner routes, repeat a flow twice.

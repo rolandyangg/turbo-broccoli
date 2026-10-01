@@ -10,6 +10,8 @@ import { BrowserSession, STRESS_KINDS } from './session.js';
 import { Config } from '../config.js';
 import { FindingType, Severity, BrowserName } from '../store/schema.js';
 import { STRATEGY_IDS } from '../explore/strategies.js';
+import { DEVICE_PROFILES, describeDevices } from '../explore/devices.js';
+import { EVERYDAY_TOOLS } from '../explore/personas.js';
 
 const env = (k: string, d?: string) => process.env[k] ?? d;
 const config = Config.parse(JSON.parse(readFileSync(env('BUGBASH_CONFIG')!, 'utf8')));
@@ -24,7 +26,11 @@ const session = new BrowserSession({
   config,
   startPath: env('BUGBASH_START_PATH', '/'),
   viewport: env('BUGBASH_VIEWPORT') ? JSON.parse(env('BUGBASH_VIEWPORT')!) : undefined,
+  device: env('BUGBASH_DEVICE') || null,
 });
+/** Persona tool set, enforced here: "everyday" explorers cannot rewrite text, stress inputs or change the environment. */
+const toolset = env('BUGBASH_TOOLSET', 'full');
+const allowed = (name: string) => toolset !== 'everyday' || EVERYDAY_TOOLS.includes(name);
 
 let calls = 0;
 const WRAP_UP_TOOLS = new Set(['record_finding', 'log_hypothesis', 'notes']);
@@ -45,6 +51,7 @@ function wrap<A>(name: string, fn: (args: A) => Promise<string | ToolResult> | s
 }
 
 async function run<A>(name: string, fn: (args: A) => Promise<string | ToolResult> | string | ToolResult, args: A): Promise<ToolResult> {
+  if (!allowed(name)) return { content: [{ type: 'text', text: `"${name}" is not available to your persona (normal mouse + keyboard use only). Use the normal interaction tools.` }], isError: true };
   {
     calls++;
     const over = calls - maxCalls;
@@ -132,6 +139,19 @@ server.registerTool(
   wrap('set_variant', (v: Record<string, unknown>) => session.setVariant(v)),
 );
 server.registerTool(
+  'set_device',
+  {
+    description: `Emulate a real device (touch, no hover, mobile UA, DPR, meta viewport) or a common desktop size. resize() is only a narrow DESKTOP window; use this for phone/tablet claims. "none" returns to a desktop window. Devices: ${describeDevices()}.`,
+    inputSchema: { device: z.enum(['none', ...DEVICE_PROFILES.map((d) => d.id)] as [string, ...string[]]) },
+  },
+  wrap('set_device', ({ device }: { device: string }) => session.setDevice(device)),
+);
+server.registerTool(
+  'sweep_devices',
+  { description: 'Render the current page state on several real device profiles (default: all phones and tablets) and run the detectors on each. Your own page is not changed.', inputSchema: { devices: z.array(z.string()).optional(), min_confidence: z.number().optional() } },
+  wrap('sweep_devices', ({ devices, min_confidence }: { devices?: string[]; min_confidence?: number }) => session.sweepDevices({ devices, minConfidence: min_confidence })),
+);
+server.registerTool(
   'mutate_text',
   { description: 'Replace an element\'s visible text with longer text (translation stress). Give factor (e.g. 2.5), locale ("de"/"fi" for long compound words) or exact text.', inputSchema: { ref, factor: z.number().min(1).max(10).optional(), locale: z.enum(['de', 'fi']).optional(), text: z.string().optional() } },
   wrap('mutate_text', ({ ref, ...o }: { ref: string; factor?: number; locale?: string; text?: string }) => session.mutateText(ref, o)),
@@ -143,7 +163,7 @@ server.registerTool(
 );
 server.registerTool(
   'sweep_viewports',
-  { description: 'Resize through many widths, run detectors at each, and restore the viewport. Returns deduped candidates with the widths where they occur.', inputSchema: { widths: z.array(z.number().int()).optional(), height: z.number().int().optional(), min_confidence: z.number().optional() } },
+  { description: 'Resize a DESKTOP window through many widths, run detectors at each, and restore the viewport. Not a phone (no touch, no mobile UA): use sweep_devices for phones/tablets.', inputSchema: { widths: z.array(z.number().int()).optional(), height: z.number().int().optional(), min_confidence: z.number().optional() } },
   wrap('sweep_viewports', ({ widths, height, min_confidence }: { widths?: number[]; height?: number; min_confidence?: number }) => session.sweepViewports({ widths, height, minConfidence: min_confidence })),
 );
 server.registerTool('find_similar', { description: 'Find other instances of the same component (same DOM structure signature) on this page — use to hunt sibling bugs.', inputSchema: { ref } }, wrap('find_similar', ({ ref }: { ref: string }) => session.findSimilar(ref)));

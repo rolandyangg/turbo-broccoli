@@ -5,6 +5,8 @@ import type { BrowserName, Step, Variant } from '../store/schema.js';
 import type { Config } from '../config.js';
 import { normalizeSteps, suffixFromLastGoto } from './steps.js';
 
+const isInteraction = (s: Step) => s.action !== 'resize' && s.action !== 'variant' && s.action !== 'goto';
+
 export const DETECTABLE = new Set(['text-overflow', 'spill-out', 'overlap', 'too-close', 'viewport-overflow', 'small-tap-target', 'broken-image', 'layout-shift']);
 const ALIASES: Record<string, string[]> = {
   'text-overflow': ['text-overflow', 'spill-out'],
@@ -65,7 +67,9 @@ export async function replay(steps: Step[], o: ReplayOptions): Promise<{ driver:
   for (let i = 0; i < steps.length; i++) {
     try {
       await o.beforeStep?.(driver, steps[i], i);
-      await driver.apply(steps[i]);
+      const rebuilt = await driver.apply(steps[i]);
+      // A device/DPR switch rebuilds the context: restore the page state reached so far.
+      if (rebuilt === true) for (const s of suffixFromLastGoto(steps.slice(0, i)).filter(isInteraction)) await driver.apply(s).catch(() => {});
       await o.afterStep?.(driver, steps[i], i);
     } catch (e) {
       return { driver, failedStep: i, error: (e as Error).message.split('\n')[0] };

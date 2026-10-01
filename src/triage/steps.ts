@@ -1,4 +1,5 @@
 import type { Step, Variant } from '../store/schema.js';
+import { deviceById } from '../explore/devices.js';
 
 /** Plain-English description of a step (deterministic, so repro steps are always accurate). */
 export function describeStep(s: Step): string {
@@ -35,6 +36,10 @@ export function describeStep(s: Step): string {
 }
 
 function describeVariant(v: Partial<Variant>): string {
+  if (v.device !== undefined) {
+    const d = deviceById(v.device);
+    return d ? `Switch to device ${d.label} (${d.viewport.width}×${d.viewport.height}${d.playwright ? ', touch, mobile browser' : ''})` : 'Switch back to a desktop browser window';
+  }
   const parts: string[] = [];
   if (v.colorScheme) parts.push(`${v.colorScheme} mode`);
   if (v.fontScale != null) parts.push(`text size ${Math.round(v.fontScale * 100)}%`);

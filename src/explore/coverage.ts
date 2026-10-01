@@ -1,12 +1,15 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { STRATEGY_IDS } from './strategies.js';
+import { DEVICE_PROFILES } from './devices.js';
 
 export interface PageCoverage {
   states: string[]; // state keys (domHash)
   seen: Record<string, string>; // interactive selector -> text
   tried: string[]; // interactive selectors acted on
   widths: number[];
+  viewports: string[]; // "WxH" actually rendered
+  devices: string[]; // device profile ids emulated (touch/mobile)
   variants: string[]; // e.g. "dark", "font2", "zoom2", "dpr2", "offline"
   browsers: string[];
   strategies: string[];
@@ -14,7 +17,7 @@ export interface PageCoverage {
 
 export type CoverageMap = Record<string, PageCoverage>;
 
-const empty = (): PageCoverage => ({ states: [], seen: {}, tried: [], widths: [], variants: [], browsers: [], strategies: [] });
+const empty = (): PageCoverage => ({ states: [], seen: {}, tried: [], widths: [], viewports: [], devices: [], variants: [], browsers: [], strategies: [] });
 
 /** Normalizes URLs to a "page" key: pathname with numeric/uuid segments collapsed. */
 export function pageKey(path: string): string {
@@ -55,8 +58,13 @@ export class Coverage {
   tried(path: string, selector: string) {
     this.add(this.page(path).tried, selector);
   }
-  width(path: string, w: number) {
-    this.add(this.page(path).widths, w);
+  width(path: string, w: number, h?: number) {
+    const pc = this.page(path);
+    this.add(pc.widths, w);
+    if (h) this.add(pc.viewports, `${w}x${h}`);
+  }
+  device(path: string, id: string) {
+    this.add(this.page(path).devices, id);
   }
   variant(path: string, v: string) {
     this.add(this.page(path).variants, v);
@@ -85,8 +93,8 @@ export function mergeAll(runDir: string): CoverageMap {
     }
     for (const [k, pc] of Object.entries(m)) {
       const t = (out[k] ??= empty());
-      for (const key of ['states', 'tried', 'widths', 'variants', 'browsers', 'strategies'] as const) {
-        for (const v of pc[key] as (string | number)[]) if (!(t[key] as (string | number)[]).includes(v)) (t[key] as (string | number)[]).push(v);
+      for (const key of ['states', 'tried', 'widths', 'viewports', 'devices', 'variants', 'browsers', 'strategies'] as const) {
+        for (const v of (pc[key] ?? []) as (string | number)[]) if (!(t[key] as (string | number)[]).includes(v)) (t[key] as (string | number)[]).push(v);
       }
       Object.assign(t.seen, pc.seen);
     }
@@ -106,6 +114,9 @@ export function summarize(map: CoverageMap, allWidths: number[], browsers: strin
         untried_examples: untried.slice(0, 12).map(([s, t]) => `${t || '(no text)'} → ${s}`),
         widths_tested: [...pc.widths].sort((a, b) => a - b),
         widths_untested: allWidths.filter((w) => !pc.widths.includes(w)),
+        viewports_tested: [...pc.viewports].sort((a, b) => parseInt(a) - parseInt(b)),
+        devices_tested: pc.devices,
+        devices_untested: DEVICE_PROFILES.filter((d) => d.kind !== 'desktop' && !pc.devices.includes(d.id)).map((d) => d.id),
         variants_tested: pc.variants,
         browsers_tested: pc.browsers,
         browsers_untested: browsers.filter((b) => !pc.browsers.includes(b)),

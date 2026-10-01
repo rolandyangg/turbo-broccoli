@@ -145,3 +145,16 @@ describe('job reporter', () => {
     expect(d.map((x) => x.msg)).toEqual(['Edit …/styles/app.css', 'Fixed it.']);
   });
 });
+
+describe('personas', () => {
+  it('disables low-vision by default and gives everyday personas no editing tools', async () => {
+    const { enabledPersonas, EVERYDAY_TOOLS, personaById } = await import('../src/explore/personas.js');
+    const { Config } = await import('../src/config.js');
+    const ids = enabledPersonas(Config.parse({})).map((p) => p.id);
+    expect(ids).not.toContain('low-vision-user');
+    expect(ids).toEqual(expect.arrayContaining(['everyday-user', 'phone-user']));
+    expect(personaById('everyday-user')!.toolset).toBe('everyday');
+    for (const t of ['mutate_text', 'stress_fill', 'set_variant', 'rapid_click', 'block_resources']) expect(EVERYDAY_TOOLS).not.toContain(t);
+    expect(EVERYDAY_TOOLS).toEqual(expect.arrayContaining(['click', 'type', 'press', 'set_device', 'sweep_devices']));
+  });
+});

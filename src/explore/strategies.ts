@@ -1,6 +1,8 @@
 /** Attack strategy catalog. Tools tag coverage automatically; agents may also cite ids in log_hypothesis/record_finding. */
 export const STRATEGIES = {
-  'size.sweep': 'Sweep all viewport widths (sweep_viewports)',
+  'size.sweep': 'Sweep desktop window widths (sweep_viewports)',
+  'size.devices': 'Real phone/tablet emulation: touch, no hover, mobile UA, DPR, meta viewport (set_device / sweep_devices)',
+  'size.desktop-sizes': 'Common desktop/laptop sizes incl. short heights (1280×720, 1366×768, 1440×900, 1920×1080, 2560×1440)',
   'size.breakpoint-edges': 'Resize to N-1/N/N+1 around CSS breakpoints',
   'size.resize-with-overlay': 'Resize while a modal/menu/popover is open',
   'size.orientation': 'Flip phone portrait <-> landscape',

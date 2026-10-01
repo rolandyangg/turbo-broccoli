@@ -107,4 +107,52 @@ describe('BrowserSession exploration + replay', () => {
     expect((await s.observe({ screenshot: false })).text).toMatch(/URL: \/pricing/);
     await s.close();
   });
+
+  it('set_device emulates a real phone and restores page state (open modal)', async () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'bb-'));
+    const s = newSession(runDir);
+    await s.start();
+    await s.goto('/pricing');
+    await s.click('text=Compare plan details');
+    const msg = await s.setDevice('iphone-15');
+    expect(msg).toMatch(/Emulating iPhone 15/);
+    expect(msg).toMatch(/replayed 1 interactions/);
+    const env = (await s.page.evaluate(`({ coarse: matchMedia('(pointer: coarse)').matches, hoverNone: matchMedia('(hover: none)').matches, mobileUA: /Mobile/.test(navigator.userAgent), dpr: devicePixelRatio, w: screen.width })`)) as Record<string, unknown>;
+    expect(env).toMatchObject({ coarse: true, hoverNone: true, mobileUA: true, dpr: 3, w: 393 });
+    expect(await s.page.locator('.modal-backdrop.open').count()).toBe(1); // state survived the context rebuild
+    expect(s.trace.some((t) => t.action === 'variant' && t.variant.device === 'iphone-15')).toBe(true);
+    const cov = JSON.parse(s.coverageReport('/pricing'));
+    expect(cov[0].devices_tested).toContain('iphone-15');
+    await s.setDevice('none');
+    expect(await s.page.evaluate(`matchMedia('(pointer: coarse)').matches`)).toBe(false);
+    await s.close();
+  });
+
+  it('sweep_devices catches the table that makes a real phone zoom out', async () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'bb-'));
+    const s = newSession(runDir);
+    await s.start();
+    await s.goto('/pricing');
+    const out = await s.sweepDevices({ devices: ['iphone-se', 'pixel-7', 'laptop'] });
+    expect(out).toMatch(/viewport-overflow .*compare.*on .*iphone-se/);
+    expect(out).toMatch(/zoomed out|wider than the viewport/);
+    expect(s.driver.variant.device).toBeNull(); // the session's own page was not changed
+    await s.close();
+  });
+
+  it('replays a recorded device switch (with state) in a fresh browser', async () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'bb-'));
+    const s = newSession(runDir);
+    await s.start();
+    await s.goto('/pricing');
+    await s.setDevice('iphone-se');
+    const trace = [...s.trace];
+    await s.close();
+    const { replay } = await import('../src/triage/replay.js');
+    const { driver } = await replay(trace, { baseUrl: target.baseUrl, browser: 'chromium', initialViewport: { width: 1280, height: 800 }, guardrails: config.guardrails });
+    expect(await driver.page.evaluate('innerWidth >= 320 && matchMedia("(pointer: coarse)").matches')).toBe(true);
+    const c = await runDetectors(driver.page, { only: ['text-overflow'] });
+    expect(c.some((x) => /cta/.test(x.selector ?? ''))).toBe(true);
+    await driver.close();
+  });
 });

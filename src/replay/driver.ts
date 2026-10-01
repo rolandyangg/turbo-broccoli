@@ -4,6 +4,7 @@ import { Variant as VariantSchema } from '../store/schema.js';
 import { Guardrails } from '../mcp/guardrails.js';
 import { installDetectors, settle } from '../detect/index.js';
 import type { Config } from '../config.js';
+import { deviceById, deviceContextOptions } from '../explore/devices.js';
 
 const TYPES: Record<BrowserName, BrowserType> = { chromium, webkit, firefox };
 
@@ -37,8 +38,9 @@ export class Driver {
 
   constructor(readonly opts: DriverOptions) {
     this.guard = new Guardrails(opts.baseUrl, opts.guardrails);
-    this.viewport = opts.viewport;
     this.variant = VariantSchema.parse(opts.variant ?? {});
+    const dev = deviceById(this.variant.device);
+    this.viewport = dev && !opts.viewport ? dev.viewport : opts.viewport;
   }
 
   get browserName(): BrowserName {
@@ -56,13 +58,17 @@ export class Driver {
 
   private async newContext(url?: string) {
     const old = this.context;
+    // Device profile (real touch/mobile emulation) or a plain desktop window of the current size.
+    const device = this.variant.device ? deviceContextOptions(this.variant.device, this.opts.browser).options : null;
+    if (device?.viewport) this.viewport = { ...device.viewport };
     this.context = await this.browser.newContext({
       viewport: this.viewport,
-      deviceScaleFactor: this.variant.dpr,
+      deviceScaleFactor: this.variant.dpr !== 1 ? this.variant.dpr : (device?.deviceScaleFactor ?? 1),
       colorScheme: this.variant.colorScheme,
       reducedMotion: this.variant.reducedMotion ? 'reduce' : 'no-preference',
-      hasTouch: this.viewport.width <= 820 && this.opts.browser !== 'firefox',
-      isMobile: false,
+      hasTouch: device?.hasTouch ?? false,
+      isMobile: device?.isMobile ?? false,
+      userAgent: device?.userAgent,
       recordVideo: this.opts.recordVideoDir ? { dir: this.opts.recordVideoDir, size: this.viewport } : undefined,
       ignoreHTTPSErrors: true,
     });
@@ -160,19 +166,26 @@ export class Driver {
     await settle(this.page, 150);
   }
 
-  async setVariant(v: Partial<Variant>) {
+  /** Returns true when the browser context had to be recreated (page state such as open menus is lost). */
+  async setVariant(v: Partial<Variant>): Promise<boolean> {
     const next = VariantSchema.parse({ ...this.variant, ...v });
-    const needsNewContext = next.dpr !== this.variant.dpr;
+    const needsNewContext = next.dpr !== this.variant.dpr || next.device !== this.variant.device;
+    const leavingDevice = this.variant.device && !next.device;
     this.variant = next;
-    if (needsNewContext) return this.newContext(this.page.url());
+    if (needsNewContext) {
+      if (leavingDevice) this.viewport = { width: 1280, height: 800 };
+      await this.newContext(this.page.url());
+      return true;
+    }
     await this.page.emulateMedia({ colorScheme: next.colorScheme, reducedMotion: next.reducedMotion ? 'reduce' : 'no-preference' });
     await this.context.setOffline(next.network === 'offline');
     await this.applyPageVariant();
     await settle(this.page, 150);
+    return false;
   }
 
-  /** Execute a recorded step. Guardrails still apply during replay. */
-  async apply(step: Step, opts: { timeout?: number } = {}) {
+  /** Execute a recorded step. Guardrails still apply during replay. Resolves true if the context was rebuilt. */
+  async apply(step: Step, opts: { timeout?: number } = {}): Promise<boolean | void> {
     const timeout = opts.timeout ?? 5000;
     const p = this.page;
     switch (step.action) {
@@ -196,12 +209,14 @@ export class Driver {
         const n = step.count ?? 1;
         if (n > 1) {
           for (let i = 0; i < n; i++) await loc.click({ timeout, force: i > 0, delay: 0 }).catch(() => {});
-        } else await loc.click({ timeout });
+        } else await this.robust(loc, (o) => loc.click(o), 'click', timeout);
         return settle(p, 200);
       }
-      case 'hover':
-        await p.locator(step.selector).first().hover({ timeout });
+      case 'hover': {
+        const loc = p.locator(step.selector).first();
+        await this.robust(loc, (o) => loc.hover(o), 'mouseover', timeout);
         return settle(p, 150);
+      }
       case 'fill':
         await p.locator(step.selector).first().fill(step.value, { timeout });
         return settle(p, 100);
@@ -228,6 +243,27 @@ export class Driver {
         return settle(p, 100);
       case 'wait':
         return p.waitForTimeout(step.ms);
+    }
+  }
+
+  /**
+   * Chromium's mobile emulation can leave off-screen elements permanently "unstable" when the page is wider
+   * than the device (the layout viewport keeps adjusting). Fall back to scrolling the element into view and
+   * acting at its real coordinates, then to dispatching the event directly.
+   */
+  private async robust(loc: import('playwright').Locator, act: (o: { timeout: number; force?: boolean }) => Promise<void>, event: string, timeout: number) {
+    const quick = this.variant.device ? Math.min(timeout, 2500) : timeout;
+    try {
+      return await act({ timeout: quick });
+    } catch (e) {
+      if (!this.variant.device || !/Timeout/i.test(String(e))) throw e;
+    }
+    await loc.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'center' })).catch(() => {});
+    await this.page.waitForTimeout(150);
+    try {
+      return await act({ timeout: 2500, force: true });
+    } catch {
+      await loc.dispatchEvent(event);
     }
   }
 
