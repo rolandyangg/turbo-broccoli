@@ -265,3 +265,25 @@ describe('finding categories and focus strategy', () => {
     for (const id of ['overlay.fit', 'touch.hover-only', 'visual.contrast', 'visual.polish']) expect(STRATEGY_IDS).toContain(id);
   });
 });
+
+describe('fix worktree dependencies', () => {
+  it('gives the worktree a real node_modules (not a symlink Turbopack rejects), keeping pnpm-style relative links', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, lstatSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { provideDependencies } = await import('../src/fix/fixGroup.js');
+    const root = mkdtempSync(join(tmpdir(), 'bb-deps-'));
+    const repo = join(root, 'repo');
+    const wt = join(root, 'wt');
+    mkdirSync(join(repo, 'node_modules', '.pnpm', 'next@16', 'node_modules', 'next'), { recursive: true });
+    writeFileSync(join(repo, 'node_modules', '.pnpm', 'next@16', 'node_modules', 'next', 'package.json'), '{"name":"next"}');
+    symlinkSync('.pnpm/next@16/node_modules/next', join(repo, 'node_modules', 'next'));
+    mkdirSync(wt);
+    const events: string[] = [];
+    await provideDependencies(repo, wt, (_s, m) => events.push(m));
+    expect(lstatSync(join(wt, 'node_modules')).isSymbolicLink()).toBe(false);
+    expect(lstatSync(join(wt, 'node_modules', 'next')).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(join(wt, 'node_modules', 'next', 'package.json'), 'utf8')).name).toBe('next');
+    expect(events.join(' ')).toMatch(/Cloned node_modules/);
+  });
+});

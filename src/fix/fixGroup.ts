@@ -119,8 +119,8 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   markFixing(o.runDir, selected.map((f) => f.id), { branch, base: baseBranch, job_id: rep.status.id, scope: scopeLabel });
   let target: Awaited<ReturnType<typeof resolveTarget>>;
   try {
-    // Reuse dependencies so the dev server can start in the worktree.
-    if (existsSync(join(repo, 'node_modules')) && !existsSync(join(appDir, 'node_modules'))) symlinkSync(join(repo, 'node_modules'), join(appDir, 'node_modules'), 'dir');
+    // Give the worktree its own node_modules so the dev server can start there.
+    await provideDependencies(repo, appDir, say);
     target = await resolveTarget(appDir, { devCommand: config.devCommand, devPort: null, log: (m) => say('server', m) });
   } catch (e) {
     // Setup failed before any work: remove the worktree and the still-empty branch so a retry starts clean.
@@ -373,4 +373,38 @@ function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: s
 
 export function readText(p: string) {
   return readFileSync(p, 'utf8');
+}
+
+/**
+ * Makes node_modules available in the worktree. A symlink back to the main checkout is not enough: Turbopack
+ * (Next.js 16) rejects a node_modules symlink that points outside the project ("points out of the filesystem root").
+ * In order: copy-on-write clone (macOS APFS `cp -c`, Linux `--reflink`; seconds, no extra disk), then a
+ * lockfile-exact install with the project's package manager, then a symlink as the last resort.
+ */
+export async function provideDependencies(repo: string, appDir: string, say: (stage: string, msg: string, level?: JobEvent['level']) => void) {
+  const src = join(repo, 'node_modules');
+  const dest = join(appDir, 'node_modules');
+  if (!existsSync(src) || existsSync(dest)) return;
+  const t0 = Date.now();
+  const clone = process.platform === 'darwin' ? await execa('cp', ['-cR', src, dest], { reject: false }) : await execa('cp', ['-R', '--reflink=always', src, dest], { reject: false });
+  if (clone.exitCode === 0) {
+    say('server', `Cloned node_modules into the worktree (copy-on-write, ${Math.round((Date.now() - t0) / 1000)}s)`);
+    return;
+  }
+  await execa('rm', ['-rf', dest], { reject: false });
+  const pm = existsSync(join(appDir, 'pnpm-lock.yaml'))
+    ? ['pnpm', 'install', '--frozen-lockfile', '--prefer-offline']
+    : existsSync(join(appDir, 'yarn.lock'))
+      ? ['yarn', 'install', '--frozen-lockfile', '--prefer-offline']
+      : existsSync(join(appDir, 'package-lock.json'))
+        ? ['npm', 'ci', '--prefer-offline', '--no-audit', '--no-fund']
+        : null;
+  if (pm) {
+    say('server', `Installing dependencies in the worktree (${pm.slice(0, 2).join(' ')})`);
+    const r = await execa(pm[0], pm.slice(1), { cwd: appDir, reject: false, timeout: 10 * 60_000, all: true });
+    if (r.exitCode === 0) return;
+    say('server', `${pm.slice(0, 2).join(' ')} failed: ${String(r.all ?? '').slice(-300)}`, 'warn');
+  }
+  symlinkSync(src, dest, 'dir');
+  say('server', 'Linked node_modules from your checkout (some bundlers, e.g. Turbopack, reject this)', 'warn');
 }
