@@ -236,8 +236,15 @@ export class Campaign {
       timeoutMs: this.cfg.sessionTimeoutMs,
       transcriptPath: join(this.o.runDir, 'transcripts', `${job.id}.jsonl`),
     });
-    job.status = r.ok ? 'done' : 'failed';
-    job.result = { ok: r.ok, toolCalls: r.toolCalls, durationMs: r.durationMs, error: r.error, summary: r.text.slice(0, 1500) };
+    // Claude usage/session limits end sessions early: stop the campaign instead of burning the budget.
+    const limited = /hit your (session|usage|weekly) limit|usage limit reached|rate limit/i.test(`${r.text} ${r.error ?? ''}`);
+    job.status = r.ok && !limited ? 'done' : 'failed';
+    job.result = { ok: r.ok && !limited, toolCalls: r.toolCalls, durationMs: r.durationMs, error: limited ? `Claude usage limit: ${r.text.slice(0, 200)}` : r.error, summary: r.text.slice(0, 1500) };
+    if (limited && !this.stopReason) {
+      this.stopReason = `Stopped early: Claude usage limit reached (${r.text.slice(0, 160)}). Findings recorded so far are kept.`;
+      this.decisions.push(`STOP: ${this.stopReason}`);
+      this.o.log(this.stopReason);
+    }
   }
 
   async awaitAny(timeoutMs = 25 * 60_000): Promise<void> {
