@@ -52,6 +52,9 @@ open <workspace>/latest/report.html
 ./bin/bugbash.js fix BB-0007                   # just this finding
 ./bin/bugbash.js fix BB-0007 BB-0011           # these together, one branch
 ./bin/bugbash.js fix RC-002 --pr --draft       # the whole root cause, push + draft PR
+./bin/bugbash.js fix BB-0007 --continue --pr   # pick the branch up where it stopped (e.g. publish after a failed push)
+./bin/bugbash.js fix BB-0007 --retry           # start over on a fresh branch
+./bin/bugbash.js github-login                  # once: lets fix PRs show before/after pictures via GitHub's image hosting
 
 # Open a real browser window with a bug's exact environment, replay it, and poke around
 ./bin/bugbash.js reproduce BB-0007 [--mode start] [--slow] [--browser webkit]

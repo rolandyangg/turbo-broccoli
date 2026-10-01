@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { api } from '../lib/api.ts';
+import { api, useApi } from '../lib/api.ts';
 import type { JobView } from '../lib/types.ts';
 import { Chamfer, Dialog, useToast } from './ui.tsx';
 
@@ -80,6 +80,7 @@ export function FixDialog({ open, onClose, ws, run, ids, title, onStarted }: { o
           <label className="check" style={{ color: 'var(--sev-major)' }}>
             <input type="checkbox" checked={confirmPush} onChange={(e) => setConfirmPush(e.target.checked)} /> <span>I understand this pushes to <code>origin</code> and creates a PR visible to collaborators</span>
           </label>
+          <PrPicturesNote />
         </div>
       )}
     </Dialog>
@@ -253,5 +254,39 @@ export function ReproduceDialog({ open, onClose, ws, run, id, env, onStarted }: 
         </div>
       </div>
     </Dialog>
+  );
+}
+
+/** In PR dialogs: whether before/after pictures will be attached, with a one-click GitHub sign-in when they won't. */
+export function PrPicturesNote() {
+  const { data, reload } = useApi<{ login: string | null; connected: boolean; connecting: string | null }>('/github', { pollMs: 5000 });
+  const toast = useToast();
+  if (!data) return <p className="small muted" style={{ margin: 0 }}>Checking GitHub connection for PR pictures…</p>;
+  if (data.connected)
+    return (
+      <p className="small muted" style={{ margin: 0 }}>
+        Before/after pictures will be attached with GitHub's image hosting (as {data.login}); nothing is committed.
+      </p>
+    );
+  return (
+    <div className="small" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <span className="muted">{data.connecting ? 'A GitHub sign-in window is open: finish signing in there.' : "No pictures: GitHub isn't connected (your gh login can push, but GitHub only accepts image uploads from a signed-in browser)."}</span>
+      {!data.connecting && (
+        <button
+          className="btn-ghost"
+          onClick={async () => {
+            try {
+              await api('/github/connect', { json: {} });
+              toast('A browser window is opening: sign in to GitHub there');
+              reload();
+            } catch (e) {
+              toast((e as Error).message, true);
+            }
+          }}
+        >
+          Connect GitHub
+        </button>
+      )}
+    </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { api, useApi } from '../lib/api.ts';
-import { Chamfer, ErrorBox, Loading, useToast } from '../components/ui.tsx';
+import { Chamfer, Chip, ErrorBox, Loading, useToast } from '../components/ui.tsx';
 
 type Channel = 'macos' | 'inbox' | 'slack';
 type Event = 'run' | 'fix' | 'failure' | 'proposals';
@@ -140,6 +140,7 @@ export function Settings() {
           </div>
         </section>
       </div>
+      <GitHubConnection />
       <div className="row" style={{ marginTop: 20, gap: 10 }}>
         <Chamfer tone="green" disabled={busy || !dirty} onClick={() => save(webhook.trim() ? { slack_webhook: webhook.trim() } : {})}>
           {busy ? 'Saving…' : 'Save settings'}
@@ -151,5 +152,59 @@ export function Settings() {
         )}
       </div>
     </>
+  );
+}
+
+/** GitHub session used to host before/after pictures in fix PRs (GitHub's own image hosting; nothing committed). */
+function GitHubConnection() {
+  const { data, reload } = useApi<{ login: string | null; connected: boolean; connecting: string | null }>('/github', { pollMs: 5000 });
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const act = async (path: string, msg: string) => {
+    setBusy(true);
+    try {
+      await api(path, { json: {} });
+      toast(msg);
+      reload();
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="box" style={{ marginTop: 20 }} aria-labelledby="gh-h">
+      <div className="box-head">
+        <div className="path" id="gh-h">
+          GitHub: pictures in fix PRs
+        </div>
+      </div>
+      <div className="box-body stack" style={{ ['--gap' as string]: '10px' }}>
+        <p className="small muted" style={{ margin: 0, maxWidth: 820 }}>
+          Fix PRs can show before/after pictures hosted by GitHub itself, the same as dragging an image into a PR. Nothing is committed to your repo, and only people who can see the repo can see the pictures. GitHub has no API for this, so bugbash uploads through a browser signed in to your account. Sign in once; the session stays in a private browser profile in <code>~/.bugbash/github-session</code> on this machine.
+        </p>
+        {!data ? (
+          <span className="small muted">Checking…</span>
+        ) : data.connecting ? (
+          <span className="small">
+            A sign-in window is open: sign in to GitHub there. <Link to={`/jobs/${data.connecting}`}>Watch</Link>
+          </span>
+        ) : data.connected ? (
+          <div className="row" style={{ gap: 10 }}>
+            <Chip tone="green">connected as {data.login}</Chip>
+            <button className="btn-ghost" disabled={busy} onClick={() => act('/github/disconnect', 'Disconnected from GitHub')}>
+              Disconnect
+            </button>
+          </div>
+        ) : (
+          <div className="row" style={{ gap: 10 }}>
+            <Chip tone="outline">not connected</Chip>
+            <Chamfer small disabled={busy} onClick={() => act('/github/connect', 'A browser window is opening: sign in to GitHub there')}>
+              Connect GitHub
+            </Chamfer>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }

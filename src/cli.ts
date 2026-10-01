@@ -345,6 +345,39 @@ program
   });
 
 program
+  .command('github-login')
+  .description('Sign in to GitHub once in a browser window, so fix PRs can include before/after pictures hosted by GitHub (nothing is committed)')
+  .option('--job <id>', 'Job id for progress events (used by the web app)')
+  .action(async (o) => {
+    const { githubLogin } = await import('./fix/githubImages.js');
+    const rep = o.job ? new JobReporter(join(homedir(), '.bugbash', 'web-jobs'), o.job, 'connect', { scope: 'GitHub' }) : null;
+    try {
+      const login = await githubLogin(10 * 60_000, (m) => (log(m), rep?.event('connect', m)));
+      log(`Connected to GitHub as ${login}. Fix PRs will include before/after pictures.`);
+      rep?.finish('succeeded', { summary: `Connected as ${login}` });
+    } catch (e) {
+      rep?.finish('failed', { error: (e as Error).message });
+      throw e;
+    }
+  });
+program
+  .command('github-status')
+  .description('Show which GitHub account PR pictures are uploaded with')
+  .action(async () => {
+    const { githubSession } = await import('./fix/githubImages.js');
+    const login = await githubSession();
+    console.log(login ? `Connected as ${login}` : 'Not connected (run: bugbash github-login)');
+  });
+program
+  .command('github-logout')
+  .description('Forget the saved GitHub session')
+  .action(async () => {
+    const { githubLogout } = await import('./fix/githubImages.js');
+    await githubLogout();
+    log('Disconnected from GitHub.');
+  });
+
+program
   .command('regroup')
   .description('Move a finding to another root-cause group (or "new" to split it into its own group)')
   .argument('<id>', 'BB-xxxx')

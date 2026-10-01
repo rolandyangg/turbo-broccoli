@@ -5,6 +5,7 @@ import type { JobView, RunDetail, TranscriptItem } from '../lib/types.ts';
 import { ago, dateTime, duration, targetName } from '../lib/format.ts';
 import { Box, Chamfer, Chip, Dialog, ErrorBox, JsonView, Loading, Arrow, useToast } from '../components/ui.tsx';
 import { BranchPanel, CancelButton, JobStateChip, JobTimeline, JobsTable } from '../components/Jobs.tsx';
+import { PrPicturesNote } from '../components/Actions.tsx';
 
 export function Job() {
   const { id = '' } = useParams();
@@ -35,7 +36,7 @@ export function Job() {
           )}
         </div>
         <h1 className="display" style={{ fontSize: 'clamp(28px, 4vw, 54px)', marginTop: 12 }}>
-          {job.kind === 'fix' ? `Fixing ${job.finding_ids.join(', ')}` : job.kind === 'explore' ? `Bug bash: ${targetName(target ?? '')}` : job.kind === 'reproduce' ? `Reproducing ${job.finding_ids.join(', ')}` : job.kind === 'retro' ? 'Retrospective' : job.kind === 'improve' ? `Implementing ${job.scope ?? 'improvement'}` : 'Triage'}
+          {job.kind === 'fix' ? `Fixing ${job.finding_ids.join(', ')}` : job.kind === 'explore' ? `Bug bash: ${targetName(target ?? '')}` : job.kind === 'reproduce' ? `Reproducing ${job.finding_ids.join(', ')}` : job.kind === 'retro' ? 'Retrospective' : job.kind === 'improve' ? `Implementing ${job.scope ?? 'improvement'}` : job.kind === 'connect' ? 'Connecting GitHub' : 'Triage'}
         </h1>
         <p className="mono small muted" style={{ margin: '8px 0 0' }}>
           started {dateTime(job.started_at)} ({ago(job.started_at)}) · {duration(job.started_at, job.ended_at)}
@@ -326,6 +327,7 @@ function RerunDialog({ job, mode, onClose }: { job: JobView; mode: 'continue' | 
           <input type="checkbox" checked={confirmPush} onChange={(e) => setConfirmPush(e.target.checked)} /> <span>I understand this pushes to <code>origin</code> and creates a PR visible to collaborators</span>
         </label>
       )}
+      {pr && <PrPicturesNote />}
     </Dialog>
   );
 }

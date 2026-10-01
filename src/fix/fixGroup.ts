@@ -271,11 +271,12 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     let prUrl: string | null = null;
     let publishError: string | null = null;
     if (o.pr) {
-      // Screenshots are never committed to the target repo (the .bugbash workspace stays private).
-      const assetBase: string | null = null;
-      const body = prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, assetBase, attempts: attempt });
+      // Screenshots are never committed to the target repo (the .bugbash workspace stays private); they're hosted by
+      // GitHub itself once the branch is pushed (see attachImages below).
+      let images: Map<string, string> | null = null;
       const bodyFile = join(assetsDir, 'pr-body.md');
-      writeFileSync(bodyFile, body);
+      const writeBody = () => writeFileSync(bodyFile, prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, images, attempts: attempt }));
+      writeBody();
       const prArgs = ['pr', 'create', '--base', baseBranch, '--head', branch, '--title', `fix(ui): ${clip(title, 90)}`, '--body-file', bodyFile, ...(o.draft ? ['--draft'] : [])];
       // Publishing can fail for reasons unrelated to the fix (network, auth, GitHub limits). The verified commit is
       // kept either way; the job reports what to run to finish publishing.
@@ -288,8 +289,13 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         const push = await git(worktree, ['-c', 'http.postBuffer=524288000', 'push', '-u', 'origin', branch]);
         if (push.exitCode !== 0) throw new Error(`git push failed: ${push.stderr.trim()}`);
         const existing = (await execa('gh', ['pr', 'view', branch, '--json', 'url,state', '-q', 'select(.state == "OPEN") | .url'], { cwd: worktree, reject: false })).stdout.trim();
-        if (existing) prUrl = existing;
-        else {
+        const nwo = (await execa('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'], { cwd: worktree, reject: false })).stdout.trim();
+        images = await attachImages(nwo, existing || `https://github.com/${nwo}/compare/${encodeURIComponent(baseBranch)}...${encodeURIComponent(branch)}?expand=1`, selected, o.runDir, assetsDir, say);
+        writeBody();
+        if (existing) {
+          prUrl = existing;
+          if (images) await execa('gh', ['pr', 'edit', existing, '--body-file', bodyFile], { cwd: worktree, reject: false });
+        } else {
           const pr = await execa('gh', prArgs, { cwd: worktree, reject: false });
           if (pr.exitCode !== 0) throw new Error(`gh pr create failed: ${pr.stderr.trim()}`);
           prUrl = pr.stdout.trim().split('\n').pop() ?? null;
@@ -303,7 +309,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         o.keepWorktree = true;
       }
     } else {
-      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, assetBase: null, attempts: attempt }));
+      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, images: null, attempts: attempt }));
       say('commit', `Not pushed (no PR requested). PR description draft saved.`, 'info', { pr_body: relative(o.runDir, join(assetsDir, 'pr-body.md')) });
     }
 
@@ -400,7 +406,7 @@ function fixPrompt(selected: Finding[], groups: RootCauseGroup[], others: Findin
     .join('\n\n');
 }
 
-function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: string[]; before: VerifyResult[]; after: VerifyResult[]; regressions: string[]; verified: boolean; agentSummary: string; runId: string; assetBase: string | null; attempts: number }) {
+function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: string[]; before: VerifyResult[]; after: VerifyResult[]; regressions: string[]; verified: boolean; agentSummary: string; runId: string; images: Map<string, string> | null; attempts: number }) {
   const lines: string[] = [];
   lines.push(`## Summary`, '', d.agentSummary.trim().slice(0, 3000) || '(no summary)', '');
   lines.push(`## Findings fixed`, '');
@@ -410,10 +416,10 @@ function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: s
     lines.push(`### ${f.id} — ${f.title}`, `- ${f.type}, ${f.severity}, on \`${f.page}\` (${f.browsers.join(', ')}; ${f.viewports.map((v) => v.width).join(', ')}px)`, `- Expected: ${f.reproduction.expected}`, `- Actual (before): ${f.reproduction.actual}`);
     lines.push(`- Verification: before ${b?.present === null ? 'visual-only' : b?.present ? 'present' : 'absent'} → after ${a?.present === null ? 'visual-only (please check screenshots)' : a?.present ? '**still present**' : 'fixed'}${a?.checks.length ? ` (${a.checks.map((c) => `${c.browser} ${c.width}px ${c.present ? '✗' : '✓'}`).join(', ')})` : ''}`);
     lines.push('', '<details><summary>Reproduction steps</summary>', '', ...f.reproduction.steps_human.map((s, i) => `${i + 1}. ${s}`), '', '</details>', '');
-    if (d.assetBase) {
-      const gif = f.video?.gif ? `<img src="${d.assetBase}/${f.id}-before.gif" width="420">` : `<img src="${d.assetBase}/${f.id}-before.png" width="420">`;
-      lines.push(`| Before | After |`, `|---|---|`, `| ${gif} | <img src="${d.assetBase}/${f.id}-after.png" width="420"> |`, '');
-    }
+    const img = (name: string) => d.images?.get(name);
+    const beforeImg = img(`${f.id}-before.gif`) ?? img(`${f.id}-before.png`);
+    const afterImg = img(`${f.id}-after.png`);
+    if (beforeImg || afterImg) lines.push(`| Before | After |`, `|---|---|`, `| ${beforeImg ? `<img src="${beforeImg}" width="420" alt="${f.id} before">` : '—'} | ${afterImg ? `<img src="${afterImg}" width="420" alt="${f.id} after">` : '—'} |`, '');
   }
   if (d.alsoFixed.length) lines.push(`## Also resolved (same root cause)`, '', d.alsoFixed.map((x) => `- ${x}`).join('\n'), '');
   const g = d.groups.map((x) => `- ${x.id}: ${x.summary}${x.fix_plan ? ` — plan: ${x.fix_plan}` : ''}`).join('\n');
@@ -467,5 +473,27 @@ async function shrinkImages(dir: string) {
   for (const f of readdirSync(dir).filter((x) => x.endsWith('.png'))) {
     const w = Number((await execa('sips', ['-g', 'pixelWidth', join(dir, f)], { reject: false })).stdout.match(/pixelWidth:\s*(\d+)/)?.[1] ?? 0);
     if (w > 1400) await execa('sips', ['--resampleWidth', '1400', join(dir, f)], { reject: false });
+  }
+}
+
+/**
+ * Before/after pictures hosted by GitHub (user-attachments, like dragging an image into a PR), so nothing is
+ * committed. Needs a connected GitHub session; without one, or if GitHub refuses, the PR goes out without pictures.
+ */
+async function attachImages(nwo: string, pageUrl: string, selected: Finding[], runDir: string, assetsDir: string, say: (stage: string, msg: string, level?: JobEvent['level']) => void) {
+  if (!nwo) return null;
+  const files = selected.flatMap((f) => [
+    ...(f.video?.gif ? [{ path: join(runDir, f.video.gif), name: `${f.id}-before.gif` }] : f.screenshots.annotated ? [{ path: join(runDir, f.screenshots.annotated), name: `${f.id}-before.png` }] : []),
+    { path: join(assetsDir, `${f.id}-after.png`), name: `${f.id}-after.png` },
+  ]);
+  try {
+    const { uploadToGitHub } = await import('./githubImages.js');
+    say('pr', `Uploading ${files.length} before/after image(s) to GitHub's image hosting (not committed)`);
+    const images = await uploadToGitHub(pageUrl, files);
+    say('pr', `Attached ${images.size} image(s)`, 'success');
+    return images;
+  } catch (e) {
+    say('pr', `No pictures in the PR: ${(e as Error).message}`, 'warn');
+    return null;
   }
 }

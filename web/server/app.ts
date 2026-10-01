@@ -22,6 +22,7 @@ import { branchInfo } from './git.ts';
 import { dashboard } from './dashboard.ts';
 import { agentsOverview } from './agentStats.ts';
 import { compareRuns } from './compare.ts';
+import { githubStatus, connectGitHub, disconnectGitHub } from './github.ts';
 import { schedulesOverview, previewCron, createSchedule, toggleSchedule, deleteSchedule, runScheduleNow } from './schedules.ts';
 import { publicSettings, saveSettings, inbox, readMany, sendTest } from './notifications.ts';
 import { improvementsOverview, decideProposal, launchRetro, launchImplement } from './improvements.ts';
@@ -134,6 +135,9 @@ app.post('/runs/:ws/:run/fix', async (c) => {
   return c.json(launchJob('fix', args, { run_dir: dir, finding_ids: ids, scope: ids.join(','), branch: b.mode === 'continue' ? (b.branch ?? null) : null, options: { pr: !!b.pr, draft: b.draft !== false, base: b.base ?? null, mode: b.mode ?? 'new', branch: b.branch ?? null } }), 202);
 });
 
+app.get('/github', async (c) => c.json(await githubStatus(c.req.query('fresh') === '1')));
+app.post('/github/connect', (c) => c.json(connectGitHub(), 202));
+app.post('/github/disconnect', async (c) => c.json(await disconnectGitHub()));
 app.get('/notifications', (c) => c.json(inbox()));
 app.post('/notifications/read', async (c) => c.json(readMany(await c.req.json<{ ids?: string[]; all?: boolean }>().catch(() => ({})))));
 app.get('/settings', (c) => c.json(publicSettings()));
