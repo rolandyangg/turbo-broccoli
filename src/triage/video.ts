@@ -38,6 +38,8 @@ export async function recordVideo(
     selector: string | null;
     relatedSelector: string | null;
     params?: Partial<VideoParams>;
+    /** After-fix recording: green box and "After the fix" captions instead of the red BUG ones. */
+    afterFix?: boolean;
   },
 ): Promise<VideoResult> {
   const p = { ...DEFAULT_VIDEO, ...o.params };
@@ -94,26 +96,26 @@ export async function recordVideo(
   let bugFrame: string | null = null;
   try {
     await driver.page.waitForTimeout(p.settleMs);
-    await caption(driver, `BUG: ${o.title}`);
+    await caption(driver, o.afterFix ? `After the fix: ${o.title}` : `BUG: ${o.title}`);
     const shown = await driver.page
       .evaluate(
-        ([sel, rel, label]) => {
+        ([sel, rel, label, color]) => {
           const bb = (window as any).__bugbash;
           if (!bb) return false;
           const el = sel && document.querySelector(sel);
           if (el) el.scrollIntoView({ block: 'center' });
           if (rel) bb.drawBox(rel, 'related', '#ff9100');
-          return sel ? bb.drawBox(sel, label) : false;
+          return sel ? bb.drawBox(sel, label, color) : false;
         },
-        [o.selector, o.relatedSelector, o.title.slice(0, 60)] as const,
+        [o.selector, o.relatedSelector, (o.afterFix ? `after fix: ${o.title}` : o.title).slice(0, 60), o.afterFix ? '#00c853' : '#ff1744'] as const,
       )
       .catch(() => false);
     bugAt = since(driver);
-    chapters.push({ t_ms: bugAt, step_index: null, label: `BUG: ${o.title}`, kind: 'bug' });
+    chapters.push({ t_ms: bugAt, step_index: null, label: o.afterFix ? `After the fix: ${o.title}` : `BUG: ${o.title}`, kind: 'bug' });
     bugFrame = join(tmp, 'frame-bug.png');
     await driver.page.screenshot({ path: bugFrame }).catch(() => (bugFrame = null));
     if (bugFrame) frames.push(bugFrame);
-    if (!shown) await caption(driver, `BUG (see highlighted area): ${o.title}`);
+    if (!shown) await caption(driver, o.afterFix ? `After the fix (the element isn't on the page any more): ${o.title}` : `BUG (see highlighted area): ${o.title}`);
     await driver.page.waitForTimeout(p.holdMs);
   } finally {
     await driver.context.tracing.stop({ path: join(o.runDir, 'traces', `${o.id}.zip`) }).catch(() => {});

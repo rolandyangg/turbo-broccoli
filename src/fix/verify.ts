@@ -3,12 +3,21 @@ import type { Config } from '../config.js';
 import { BrowserPool, replay, checkPresence, DETECTABLE, type DefectSpec } from '../triage/replay.js';
 import { runDetectors, settle, type Candidate } from '../detect/index.js';
 import { annotateDefect } from '../triage/annotate.js';
+import { recordVideo } from '../triage/video.js';
+import { runClaude } from '../llm/claude.js';
+import { existsSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 export interface VerifyResult {
   id: string;
   verifiable: boolean;
-  present: boolean | null; // null = not auto-verifiable
+  /** true = still there; false = gone (every check agrees, or the visual review says so); null = couldn't tell. */
+  present: boolean | null;
+  method: 'detector' | 'visual-review' | 'none';
   checks: { browser: string; width: number; height: number; present: boolean | null; error: string | null }[];
+  review: { fixed: boolean; confidence: number; reasoning: string } | null;
+  /** After-fix stills taken for the review (absolute paths), when one ran. */
+  after: { annotated: string; crop: string; full: string; element_found: boolean } | null;
 }
 
 export function specOf(f: Finding): DefectSpec {
@@ -35,39 +44,125 @@ export function checkViewports(f: Finding) {
   return pick.map((w) => byW.get(w)!);
 }
 
-export async function verifyFinding(f: Finding, o: { baseUrl: string; guardrails: Config['guardrails']; pool: BrowserPool }): Promise<VerifyResult> {
+export interface VerifyOptions {
+  baseUrl: string;
+  guardrails: Config['guardrails'];
+  pool: BrowserPool;
+  /** When detectors can't settle it: capture after-fix stills here and have a model compare them with the before. */
+  review?: { runDir: string; outDir: string; model?: string | null; transcriptDir?: string } | null;
+}
+
+export async function verifyFinding(f: Finding, o: VerifyOptions): Promise<VerifyResult> {
   const steps = f.reproduction.steps_minimal.length ? f.reproduction.steps_minimal : f.reproduction.steps_original;
   const spec = specOf(f);
-  const res: VerifyResult = { id: f.id, verifiable: DETECTABLE.has(f.type) && f.reproduction.rate != null && f.reproduction.rate !== '0/1', present: null, checks: [] };
-  if (!res.verifiable) return res;
-  const browsers = f.browsers.length ? f.browsers : [f.reproduction.environment.browser];
-  for (const browser of browsers) {
-    for (const vp of checkViewports(f)) {
-      const { driver, error } = await replay(atViewport(steps, vp), { baseUrl: o.baseUrl, browser, initialViewport: vp, variant: f.reproduction.environment.variant, guardrails: o.guardrails, pool: o.pool });
-      try {
-        const r = error ? { presence: 'absent' as const } : await checkPresence(driver, spec);
-        res.checks.push({ browser, width: vp.width, height: vp.height, present: r.presence === 'present', error });
-      } finally {
-        await driver.close();
+  const res: VerifyResult = { id: f.id, verifiable: DETECTABLE.has(f.type) && f.reproduction.rate != null && f.reproduction.rate !== '0/1', present: null, method: 'none', checks: [], review: null, after: null };
+  if (res.verifiable) {
+    const browsers = f.browsers.length ? f.browsers : [f.reproduction.environment.browser];
+    for (const browser of browsers) {
+      for (const vp of checkViewports(f)) {
+        const { driver, error } = await replay(atViewport(steps, vp), { baseUrl: o.baseUrl, browser, initialViewport: vp, variant: f.reproduction.environment.variant, guardrails: o.guardrails, pool: o.pool });
+        try {
+          // A replay that breaks (steps no longer apply) or a check that can't decide is NOT evidence of a fix.
+          const r = error ? null : await checkPresence(driver, spec);
+          res.checks.push({ browser, width: vp.width, height: vp.height, present: !r || r.presence === 'unverifiable' ? null : r.presence === 'present', error: error ?? (r?.presence === 'unverifiable' ? 'not checkable here' : null) });
+        } finally {
+          await driver.close();
+        }
       }
     }
+    if (res.checks.some((c) => c.present === true)) res.present = true;
+    else if (res.checks.length && res.checks.every((c) => c.present === false)) res.present = false;
+    if (res.present !== null) res.method = 'detector';
   }
-  // The reproduction environment is authoritative; other widths are "affected range" samples.
-  const envCheck = res.checks.find((c) => c.browser === f.reproduction.environment.browser && c.width === f.reproduction.environment.viewport.width);
-  res.present = res.checks.some((c) => c.present) || !!envCheck?.present;
+  // Visual bugs (and inconclusive detector checks): compare before/after images of the same spot.
+  if (res.present === null && o.review) {
+    try {
+      const base = join(o.review.outDir, `${f.id}-after`);
+      const shot = await captureAfter(f, `${base}.png`, o);
+      res.after = { annotated: `${base}.png`, crop: `${base}-crop.png`, full: `${base}-full.png`, element_found: shot.found };
+      const review = await visualReview(f, o.review.runDir, res.after, o.review);
+      if (review) {
+        res.review = review;
+        if (review.confidence >= 0.6) {
+          res.present = !review.fixed;
+          res.method = 'visual-review';
+        }
+      }
+    } catch {}
+  }
   return res;
 }
 
-/** Screenshot of the finding's area after replaying its steps (for before/after evidence). */
+const REVIEW_SCHEMA = {
+  type: 'object',
+  properties: {
+    fixed: { type: 'boolean', description: 'Is the described defect gone in the AFTER images?' },
+    confidence: { type: 'number', description: '0..1' },
+    reasoning: { type: 'string', description: '1-3 sentences: what you compared and what you saw' },
+  },
+  required: ['fixed', 'confidence', 'reasoning'],
+};
+
+/** A model compares the before and after images of the same spot, in the same environment, for the described bug. */
+async function visualReview(f: Finding, runDir: string, after: { annotated: string; crop: string; full: string; element_found: boolean }, o: { model?: string | null; transcriptDir?: string }) {
+  const before = [f.screenshots.crop, f.screenshots.annotated, f.video?.filmstrip].filter(Boolean).map((p) => join(runDir, p!)).filter((p) => existsSync(p));
+  const afterFiles = [after.crop, after.annotated].filter((p) => existsSync(p));
+  if (!before.length || !afterFiles.length) return null;
+  const prompt = [
+    `Decide whether a UI bug is fixed by comparing BEFORE and AFTER screenshots of the same page, browser, size and settings.`,
+    `Bug ${f.id}: ${f.title}`,
+    `Type: ${f.type}. Page: ${f.page}. Expected: ${f.reproduction.expected}. Actual before: ${f.reproduction.actual}.`,
+    `BEFORE (red box marks the defect): ${before.join(', ')}`,
+    `AFTER (green box marks the same element${after.element_found ? '' : '; it was NOT found after the fix, a blue box marks its old position'}): ${afterFiles.join(', ')}`,
+    f.video ? 'This is a time-based bug (it happens during or after loading or interaction); the before filmstrip shows it over time. A still AFTER image can only partly confirm a fix; lower your confidence accordingly.' : '',
+    `Read every image. Say fixed only if the specific defect described is clearly gone and nothing equally broken replaced it. If you can't tell, give low confidence.`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const r = await runClaude({ prompt, tools: ['Read'], allowedTools: ['Read'], addDirs: [runDir, dirname(after.annotated)], jsonSchema: REVIEW_SCHEMA, model: o.model ?? null, timeoutMs: 4 * 60_000, transcriptPath: o.transcriptDir ? join(o.transcriptDir, `review-${f.id}.jsonl`) : undefined, agentName: 'fix reviewer' }).catch(() => null);
+  const out = r?.ok ? (r.structured as { fixed?: boolean; confidence?: number; reasoning?: string } | null) : null;
+  if (!out || typeof out.fixed !== 'boolean') return null;
+  return { fixed: out.fixed, confidence: Math.max(0, Math.min(1, Number(out.confidence) || 0)), reasoning: String(out.reasoning ?? '').slice(0, 800) };
+}
+
+/**
+ * After-fix stills of the finding's spot: same steps, browser, size and settings as the "before" evidence, the same
+ * element boxed in green (blue at its old position if it's gone). Time-based bugs wait as long as triage did.
+ */
 export async function captureAfter(f: Finding, file: string, o: { baseUrl: string; guardrails: Config['guardrails']; pool: BrowserPool }) {
   const steps = f.reproduction.steps_minimal.length ? f.reproduction.steps_minimal : f.reproduction.steps_original;
+  mkdirSync(dirname(file), { recursive: true });
   const { driver } = await replay(steps, { baseUrl: o.baseUrl, browser: f.reproduction.environment.browser, initialViewport: f.reproduction.environment.viewport, variant: f.reproduction.environment.variant, guardrails: o.guardrails, pool: o.pool });
   try {
-    await annotateDefect(driver.page, { selector: f.element.selector, relatedSelector: null, fallbackBBox: f.element.bbox, label: `${f.id} after fix`, files: { annotated: file, crop: file.replace(/\.png$/, '-crop.png'), full: file.replace(/\.png$/, '-full.png') } });
+    await settle(driver.page, f.type === 'layout-shift' || f.video ? 2500 : 300);
+    return await annotateDefect(driver.page, { selector: f.element.selector, relatedSelector: null, fallbackBBox: f.element.bbox, label: `${f.id}: after fix`, color: '#00c853', files: { annotated: file, crop: file.replace(/\.png$/, '-crop.png'), full: file.replace(/\.png$/, '-full.png') } });
   } finally {
     await driver.close();
   }
 }
+
+/** Narrated after-fix video (same steps and pacing as the "before" one) for time-based or behaviour bugs. */
+export async function recordAfterVideo(f: Finding, outDir: string, o: { baseUrl: string; guardrails: Config['guardrails']; pool: BrowserPool }) {
+  const steps = f.reproduction.steps_minimal.length ? f.reproduction.steps_minimal : f.reproduction.steps_original;
+  const v = await recordVideo(steps, {
+    id: `${f.id}-after`,
+    runDir: outDir,
+    title: f.title,
+    selector: f.element.selector,
+    relatedSelector: null,
+    afterFix: true,
+    baseUrl: o.baseUrl,
+    browser: f.reproduction.environment.browser,
+    initialViewport: f.reproduction.environment.viewport,
+    variant: f.reproduction.environment.variant,
+    guardrails: o.guardrails,
+    pool: o.pool,
+  });
+  return { mp4: v.mp4, gif: v.gif, filmstrip: v.filmstrip };
+}
+
+/** Bugs whose behaviour over time matters: they get an after-fix video, not just a still. */
+export const needsVideo = (f: Finding) => !!f.video?.mp4 || !!f.video?.webm || f.evidence_kind === 'temporal' || ['layout-shift', 'broken-state'].includes(f.type);
 
 /** High-confidence detector candidates on a page at a few widths (for regression comparison). */
 export async function pageSnapshot(path: string, o: { baseUrl: string; guardrails: Config['guardrails']; pool: BrowserPool; widths?: number[] }): Promise<Map<string, Candidate>> {
