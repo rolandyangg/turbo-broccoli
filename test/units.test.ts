@@ -287,3 +287,30 @@ describe('fix worktree dependencies', () => {
     expect(events.join(' ')).toMatch(/Cloned node_modules/);
   });
 });
+
+describe('private workspace', () => {
+  it('keeps .bugbash out of git: * in its .gitignore (upgrading old ones) and a local info/exclude entry', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execFileSync } = await import('node:child_process');
+    const { keepPrivate } = await import('../src/store/store.js');
+    const repo = mkdtempSync(join(tmpdir(), 'bb-priv-'));
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    const ws = join(repo, '.bugbash');
+    mkdirSync(join(ws, 'memory'), { recursive: true });
+    mkdirSync(join(ws, 'improvements'), { recursive: true });
+    writeFileSync(join(ws, '.gitignore'), 'runs/\ntmp/\njobs/\n'); // the old, too-narrow version
+    writeFileSync(join(ws, 'memory', 'lessons.md'), 'x');
+    writeFileSync(join(ws, 'improvements', 'r.json'), '{}');
+    writeFileSync(join(repo, 'app.css'), 'a{}');
+    keepPrivate(ws);
+    keepPrivate(ws); // idempotent
+    expect(readFileSync(join(ws, '.gitignore'), 'utf8')).toMatch(/^\*$/m);
+    const exclude = readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf8');
+    expect(exclude.match(/^\/\.bugbash\/$/gm)).toHaveLength(1);
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    const staged = execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: repo, encoding: 'utf8' }).trim().split('\n');
+    expect(staged).toEqual(['app.css']);
+  });
+});

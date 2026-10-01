@@ -113,7 +113,7 @@ app.get('/runs/:ws/:run/files/*', (c) => {
 // ---------- actions ----------
 app.post('/runs/:ws/:run/fix', async (c) => {
   const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
-  const b = await c.req.json<{ ids: string[]; pr?: boolean; draft?: boolean; base?: string; maxAttempts?: number; keepWorktree?: boolean; prAssets?: boolean; confirmPush?: boolean }>();
+  const b = await c.req.json<{ ids: string[]; pr?: boolean; draft?: boolean; base?: string; maxAttempts?: number; keepWorktree?: boolean; confirmPush?: boolean }>();
   const ids = (b.ids ?? []).map((x) => String(x).toUpperCase());
   if (!ids.length || !ids.every((x) => ID.test(x))) throw new HttpError(400, 'ids must be BB-/RC- ids');
   if (b.pr && !b.confirmPush) throw new HttpError(400, 'Opening a PR pushes to GitHub: confirmPush must be true');
@@ -127,7 +127,6 @@ app.post('/runs/:ws/:run/fix', async (c) => {
   if (b.pr && b.draft !== false) args.push('--draft');
   if (b.base) args.push('--base', b.base);
   if (b.keepWorktree) args.push('--keep-worktree');
-  if (b.prAssets === false) args.push('--no-pr-assets');
   return c.json(launchJob('fix', args, { run_dir: dir, finding_ids: ids, scope: ids.join(','), options: { pr: !!b.pr, draft: b.draft !== false, base: b.base ?? null } }), 202);
 });
 

@@ -73,7 +73,7 @@ open <workspace>/latest/report.html
 ./bin/bugbash.js schedule list | run-now <id> | disable <id> | remove <id>
 ```
 
-The workspace defaults to `<repo>/.bugbash` (or `./.bugbash` for URLs). Use `--out <dir>` to choose another location. Useful `explore` flags: `--budget-sessions`, `--parallel`, `--max-calls`, `--time-limit <min>`, `--browsers`, `--start /a,/b`, `--model`, `--dev-command`, `--no-lead`, `--no-code-intel`. Defaults can also go in `bugbash.config.json` in the target repo (see `src/config.ts`).
+The workspace defaults to `<repo>/.bugbash` (or `./.bugbash` for URLs). It's private to this machine: bugbash git-ignores it (its own `.gitignore` is `*`, plus an entry in the repo's local `.git/info/exclude`) and never commits or pushes anything from it. Use `--out <dir>` to choose another location. Useful `explore` flags: `--budget-sessions`, `--parallel`, `--max-calls`, `--time-limit <min>`, `--browsers`, `--start /a,/b`, `--model`, `--dev-command`, `--no-lead`, `--no-code-intel`. Defaults can also go in `bugbash.config.json` in the target repo (see `src/config.ts`).
 
 In Claude Code, the `bugbash` skill (`.claude/skills/bugbash`) wraps all of this, so you can ask it in plain language: "bug bash localhost:3000", "BB-9 is intentional", "fix RC-002 as a draft PR".
 
@@ -110,7 +110,7 @@ The *everyday* tool set has no page or environment editing (no text rewriting, s
 
 **Triage.** Findings are clustered across sessions, widths and browsers. Each is replayed 3× in fresh browsers for a reproduction rate and delta-debugged down to its minimal steps. Then it is annotated (a red box on the defect, orange on the related element). Timing bugs get a narrated video: step captions, a ring on each clicked element, the bug boxed and held, plus mp4, GIF, filmstrip and a Playwright trace. An independent reviewer (fresh context, no explorer reasoning) judges each finding from the evidence alone. Findings are grouped by root cause with source files, and scored as a blend of explorer, reviewer, detector and reproduction signals, then calibrated from your labels. Known false-positive patterns are suppressed.
 
-**Fix.** A git worktree on `bugbash/<scope>-<slug>` is created. The fix agent (Read/Grep/Glob/Edit only) gets the findings, evidence and group context. Verification replays the repro at every affected viewport and browser and compares detector snapshots of the touched pages to catch regressions, retrying with feedback. It then commits, optionally pushes and opens a PR with before/after images, and records per-finding fix status. It also reports other findings in the group that the change happened to resolve.
+**Fix.** A git worktree on `bugbash/<scope>-<slug>` is created. The fix agent (Read/Grep/Glob/Edit only) gets the findings, evidence and group context. Verification replays the repro at every affected viewport and browser and compares detector snapshots of the touched pages to catch regressions, retrying with feedback. It then commits, optionally pushes and opens a PR, and records per-finding fix status. It also reports other findings in the group that the change happened to resolve.
 
 ## Output (per run: `<workspace>/runs/<timestamp>/`)
 

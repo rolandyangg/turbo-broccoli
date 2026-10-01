@@ -41,7 +41,7 @@ To show the user a bug live: `./bin/bugbash.js reproduce BB-0007` opens a real b
 - Never run `fix` unless the user asks to fix specific findings or groups.
 - `fix BB-0007` fixes only that finding. `fix BB-0007 BB-0011` fixes those together on one branch. `fix RC-002` fixes the whole root-cause group.
 - It works in a separate git worktree from the last commit: uncommitted changes in the target repo are left alone and not included (the job warns about them, and warns if the fix edits a file the user also changed).
-- **Ask before adding `--pr`**, because it pushes a branch and opens a GitHub PR. Suggest `--draft`. Mention that before/after images are committed under `.bugbash/pr-assets/` in a separate commit unless `--no-pr-assets` is used.
+- **Ask before adding `--pr`**, because it pushes a branch and opens a GitHub PR. Suggest `--draft`. Nothing from `.bugbash` is ever committed or pushed: the workspace is private to this machine.
 - Report the result: whether it was verified, the branch, the PR URL, and any other findings the fix also resolved.
 
 ## Learning loop — the user approves, not you

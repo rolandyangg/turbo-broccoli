@@ -1,15 +1,43 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, symlinkSync, unlinkSync, lstatSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, symlinkSync, unlinkSync, lstatSync, realpathSync } from 'node:fs';
+import { join, resolve, dirname, relative } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { FindingsFile, SCHEMA_VERSION, type Finding, type RootCauseGroup } from './schema.js';
 
 export function workspaceFor(repoPath: string | null, out?: string | null): string {
   const ws = resolve(out ?? (repoPath ? join(repoPath, '.bugbash') : '.bugbash'));
   mkdirSync(join(ws, 'runs'), { recursive: true });
-  const gi = join(ws, '.gitignore');
-  if (!existsSync(gi)) writeFileSync(gi, 'runs/\ntmp/\njobs/\n');
+  keepPrivate(ws);
   registerWorkspace(ws);
   return ws;
+}
+
+/**
+ * A workspace (runs, screenshots, memory, proposals) is private to this machine and must never be committed to the
+ * target repo. `*` in its own .gitignore ignores everything inside (the file included); older workspaces that only
+ * ignored runs/ tmp/ jobs/ are upgraded. The repo's local, uncommitted .git/info/exclude also gets an entry.
+ */
+export function keepPrivate(ws: string) {
+  const gi = join(ws, '.gitignore');
+  const want = '# bugbash workspace: private to this machine, never commit\n*\n';
+  try {
+    if (!existsSync(gi) || readFileSync(gi, 'utf8') !== want) writeFileSync(gi, want);
+  } catch {}
+  try {
+    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: ws, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    // --git-common-dir is relative to the cwd unless asked for an absolute path (worktrees share the main exclude).
+    const gitDir = resolve(ws, execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: ws, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+    // Compare real paths: symlinked (/var → /private/var) or differently-cased folders otherwise look unrelated.
+    const rel = relative(realpathSync.native(top), realpathSync.native(ws)).split('\\').join('/');
+    if (!rel || rel.startsWith('..')) return;
+    const exclude = join(gitDir, 'info', 'exclude');
+    const cur = existsSync(exclude) ? readFileSync(exclude, 'utf8') : '';
+    const line = `/${rel}/`;
+    if (!cur.split('\n').includes(line)) {
+      mkdirSync(dirname(exclude), { recursive: true });
+      writeFileSync(exclude, `${cur}${cur && !cur.endsWith('\n') ? '\n' : ''}# bugbash workspace (private)\n${line}\n`);
+    }
+  } catch {} // not a git repo: nothing to protect
 }
 
 export const REGISTRY = join(homedir(), '.bugbash', 'workspaces.json');

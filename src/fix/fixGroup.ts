@@ -21,7 +21,6 @@ export interface FixOptions {
   base?: string | null;
   maxAttempts: number;
   keepWorktree: boolean;
-  prAssets: boolean;
   log: (m: string) => void;
   jobId?: string | null;
 }
@@ -43,7 +42,7 @@ export async function fixFindings(o: FixOptions) {
     run_dir: o.runDir,
     finding_ids: o.ids,
     scope: o.ids.join(','),
-    options: { pr: o.pr, draft: o.draft, base: o.base ?? null, maxAttempts: o.maxAttempts, prAssets: o.prAssets },
+    options: { pr: o.pr, draft: o.draft, base: o.base ?? null, maxAttempts: o.maxAttempts },
   });
   const say = (stage: string, msg: string, level: JobEvent['level'] = 'info', data?: Record<string, unknown>) => {
     if (level !== 'agent') o.log(msg);
@@ -211,7 +210,10 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     // ---- commit ----
     const title = scopeIsGroup ? groups.get(o.ids[0])!.summary : selected.length === 1 ? selected[0].title : `${selected.length} UI fixes: ${selected.map((f) => f.id).join(', ')}`;
     const commitMsg = `fix(ui): ${clip(title, 64)}\n\nFixes ${selected.map((f) => f.id).join(', ')}${alsoFixed.length ? ` (also resolves ${alsoFixed.join(', ')})` : ''} found by bugbash run ${info.run_id}.\n${verified ? 'Verified: repro checks pass at all affected viewports/browsers; no new layout defects on touched pages.' : 'NOT fully verified — see PR description.'}\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`;
-    await git(worktree, ['add', '-A', '--', '.', ':(exclude)node_modules']);
+    await git(worktree, ['add', '-A', '--', '.', ':(exclude)node_modules', ':(exclude).bugbash', ':(exclude)**/.bugbash']);
+    // Never commit a bugbash workspace into the target repo, whatever its .gitignore says.
+    const staged = (await git(worktree, ['diff', '--cached', '--name-only'])).stdout.split('\n').filter((p) => /(^|\/)\.bugbash\//.test(p));
+    if (staged.length) await git(worktree, ['reset', '-q', '--', ...staged]);
     const c = await git(worktree, ['commit', '-m', commitMsg]);
     if (c.exitCode !== 0) throw new Error(`git commit failed: ${c.stderr || c.stdout}`);
     const sha = (await git(worktree, ['rev-parse', 'HEAD'])).stdout.trim();
@@ -224,22 +226,8 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     let prUrl: string | null = null;
     let publishError: string | null = null;
     if (o.pr) {
-      let assetBase: string | null = null;
-      if (o.prAssets) {
-        const rel = join('.bugbash', 'pr-assets', branch.replace(/\//g, '__'));
-        mkdirSync(join(worktree, rel), { recursive: true });
-        for (const f of selected) {
-          const b = join(o.runDir, f.screenshots.annotated ?? '');
-          if (f.screenshots.annotated && existsSync(b)) copyFileSync(b, join(worktree, rel, `${f.id}-before.png`));
-          if (existsSync(join(assetsDir, `${f.id}-after.png`))) copyFileSync(join(assetsDir, `${f.id}-after.png`), join(worktree, rel, `${f.id}-after.png`));
-          if (f.video?.gif && existsSync(join(o.runDir, f.video.gif))) copyFileSync(join(o.runDir, f.video.gif), join(worktree, rel, `${f.id}-before.gif`));
-        }
-        await shrinkImages(join(worktree, rel));
-        await git(worktree, ['add', '-f', rel]);
-        await git(worktree, ['commit', '-m', `chore(bugbash): before/after evidence for PR review\n\nSafe to drop before merging.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`]);
-        const nwo = (await execa('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'], { cwd: worktree, reject: false })).stdout.trim();
-        if (nwo) assetBase = `https://github.com/${nwo}/raw/${branch}/${rel}`;
-      }
+      // Screenshots are never committed to the target repo (the .bugbash workspace stays private).
+      const assetBase: string | null = null;
       const body = prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, assetBase, attempts: attempt });
       const bodyFile = join(assetsDir, 'pr-body.md');
       writeFileSync(bodyFile, body);
@@ -247,6 +235,8 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       // Publishing can fail for reasons unrelated to the fix (network, auth, GitHub limits). The verified commit is
       // kept either way; the job reports what to run to finish publishing.
       try {
+        const leaked = (await git(worktree, ['log', '--name-only', '--format=', `${baseBranch}..${branch}`])).stdout.split('\n').filter((p) => /(^|\/)\.bugbash\//.test(p));
+        if (leaked.length) throw new Error(`refusing to push: the branch contains .bugbash files (${leaked.slice(0, 3).join(', ')}); they must stay private`);
         say('push', `Pushing ${branch} to origin`);
         // HTTPS pushes over git's 1 MiB default buffer go out chunked, which GitHub sometimes rejects with
         // "RPC failed; HTTP 400" (evidence images easily exceed it): send them in one request instead.
@@ -380,7 +370,6 @@ function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: s
   const g = d.groups.map((x) => `- ${x.id}: ${x.summary}${x.fix_plan ? ` — plan: ${x.fix_plan}` : ''}`).join('\n');
   lines.push(`## Root-cause group`, '', g, '');
   lines.push(`## Verification`, '', d.verified ? `✅ Repro checks pass at every affected viewport/browser and the touched pages have no new layout defects (${d.attempts} attempt${d.attempts > 1 ? 's' : ''}).` : `⚠️ Not fully verified.${d.regressions.length ? `\nNew layout candidates on touched pages:\n${d.regressions.map((r) => `- ${r}`).join('\n')}` : ''}`, '');
-  if (d.assetBase) lines.push(`_Evidence images are committed under \`.bugbash/pr-assets/\` in a separate commit — drop it before merging if you prefer._`, '');
   lines.push(`Found and fixed by bugbash (run \`${d.runId}\`).`, '', '🤖 Generated with [Claude Code](https://claude.com/claude-code)');
   return lines.join('\n');
 }

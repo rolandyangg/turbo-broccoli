@@ -199,12 +199,11 @@ program
   .option('--base <branch>', 'Base branch (default: current branch)')
   .option('--max-attempts <n>', 'Fix/verify attempts', int, 3)
   .option('--keep-worktree', 'Keep the git worktree after finishing')
-  .option('--no-pr-assets', 'Do not commit before/after images for the PR description')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
   .action(async (ids: string[], o) => {
     const runDir = findRunDir(o);
     const { fixFindings } = await import('./fix/fixGroup.js');
-    await fixFindings({ runDir, ids: ids.map((x) => x.toUpperCase()), pr: !!o.pr, draft: !!o.draft, base: o.base, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, prAssets: o.prAssets !== false, log, jobId: o.job });
+    await fixFindings({ runDir, ids: ids.map((x) => x.toUpperCase()), pr: !!o.pr, draft: !!o.draft, base: o.base, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
   });
 
 program

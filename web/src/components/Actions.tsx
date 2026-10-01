@@ -80,9 +80,6 @@ export function FixDialog({ open, onClose, ws, run, ids, title, onStarted }: { o
           <label className="check" style={{ color: 'var(--sev-major)' }}>
             <input type="checkbox" checked={confirmPush} onChange={(e) => setConfirmPush(e.target.checked)} /> I understand this pushes to <code>origin</code> and creates a PR visible to collaborators
           </label>
-          <p className="small muted" style={{ margin: 0 }}>
-            Before/after images are committed under <code>.bugbash/pr-assets/</code> in a separate commit so they render in the PR description.
-          </p>
         </div>
       )}
     </Dialog>
