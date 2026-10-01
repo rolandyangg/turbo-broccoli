@@ -937,3 +937,54 @@
   min-width: 220px;
   flex: 1;
 }
+
+/* ---------- launcher ---------- */
+.launcher {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.launch-sec {
+  border: 1px dashed var(--line);
+  padding: 10px 12px;
+}
+.launch-sec > summary {
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.launch-sec[open] > summary {
+  margin-bottom: 6px;
+}
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 760px) {
+  .grid-3,
+  .grid-4 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 480px) {
+  .grid-3,
+  .grid-4 {
+    grid-template-columns: 1fr;
+  }
+}
+.launcher-summary {
+  margin-right: auto;
+  max-width: 60%;
+}
+.launch-presets {
+  border-top: 1px dashed var(--line);
+  padding-top: 12px;
+}

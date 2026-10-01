@@ -6,10 +6,16 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readRun, readFindings, findById, renameRun } from '../../src/store/store.ts';
 import { FindingStatus } from '../../src/store/schema.ts';
+import { Config, pickConfig } from '../../src/config.ts';
+import { PERSONA_REGISTRY } from '../../src/explore/personas.ts';
+import { DEVICE_PROFILES } from '../../src/explore/devices.ts';
+import { STRATEGIES } from '../../src/explore/strategies.ts';
+import { listPresets, getPreset, savePreset, deletePreset, DEFAULT_PRESET } from '../../src/presets.ts';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { workspaces, workspaceById, runDirOf, addWorkspace, HttpError } from './workspaces.ts';
 import { listAllRuns, runDetail, transcriptFor, findFinding, sessionTail } from './runs.ts';
 import { safePath, fileResponse } from './files.ts';
-import { listJobs, getJob, launchJob, cancelJob, readEvents, CLI, REPO_ROOT } from './jobs.ts';
+import { listJobs, getJob, launchJob, cancelJob, readEvents, CLI, REPO_ROOT, WEB_JOBS } from './jobs.ts';
 import { branchInfo } from './git.ts';
 import { dashboard } from './dashboard.ts';
 
@@ -167,21 +173,53 @@ app.post('/runs/:ws/:run/regroup', async (c) => {
   return c.json(await cli(args));
 });
 
+/** Everything the launcher needs to build its form: personas, devices, strategies, browsers, defaults. */
+app.get('/catalog', (c) => {
+  const defaults = Config.parse({});
+  return c.json({
+    personas: PERSONA_REGISTRY.map((p) => ({ ...p, enabledByDefault: !defaults.disabledPersonas.includes(p.id) })),
+    devices: DEVICE_PROFILES,
+    strategies: Object.entries(STRATEGIES).map(([id, label]) => ({ id, label, group: id.split('.')[0] })),
+    browsers: ['chromium', 'webkit', 'firefox'],
+    defaults: { denylist: defaults.guardrails.denylist },
+  });
+});
+
+app.get('/presets', (c) => c.json({ presets: listPresets(), default: DEFAULT_PRESET }));
+app.post('/presets', async (c) => {
+  const b = await c.req.json<{ id?: string; name: string; description?: string; config: Record<string, unknown> }>();
+  if (!b.name?.trim()) throw new HttpError(400, 'name is required');
+  const parsed = pickConfig(b.config ?? {});
+  if (!parsed.ok) throw new HttpError(400, `Invalid config: ${parsed.error}`);
+  return c.json(savePreset({ id: b.id, name: b.name, description: b.description, config: parsed.config }));
+});
+app.delete('/presets/:id', (c) => {
+  try {
+    return c.json({ deleted: deletePreset(c.req.param('id')) });
+  } catch (e) {
+    throw new HttpError(400, (e as Error).message);
+  }
+});
+
+/** Start a bug bash: a preset plus explicit settings (validated, written to a config file the CLI layers on top). */
 app.post('/explore', async (c) => {
-  const b = await c.req.json<{ target: string; repo?: string; out?: string; browsers?: string[]; budgetSessions?: number; parallel?: number; maxCalls?: number; timeLimit?: number; noLead?: boolean; codeIntel?: boolean; thenTriage?: boolean; model?: string; start?: string }>();
+  const b = await c.req.json<{ target: string; repo?: string; out?: string; name?: string; preset?: string; config?: Record<string, unknown>; thenTriage?: boolean }>();
   if (!b.target?.trim()) throw new HttpError(400, 'target is required');
-  const args = ['explore', b.target.trim()];
+  if (b.preset && !getPreset(b.preset)) throw new HttpError(400, `Unknown preset ${b.preset}`);
+  const parsed = pickConfig(b.config ?? {});
+  if (!parsed.ok) throw new HttpError(400, `Invalid settings: ${parsed.error}`);
+  const args = ['explore', b.target.trim(), '--preset', b.preset ?? DEFAULT_PRESET];
+  if (Object.keys(parsed.config).length) {
+    mkdirSync(join(WEB_JOBS, 'configs'), { recursive: true });
+    const file = join(WEB_JOBS, 'configs', `${Date.now()}-${Math.random().toString(16).slice(2, 8)}.json`);
+    writeFileSync(file, JSON.stringify(parsed.config, null, 2));
+    args.push('--config', file);
+  }
   if (b.repo) args.push('--repo', b.repo);
   if (b.out) args.push('--out', b.out);
-  const browsers = (b.browsers ?? []).filter((x) => ['chromium', 'webkit', 'firefox'].includes(x));
-  if (browsers.length) args.push('--browsers', browsers.join(','));
-  for (const [flag, v] of [['--budget-sessions', b.budgetSessions], ['--parallel', b.parallel], ['--max-calls', b.maxCalls], ['--time-limit', b.timeLimit]] as const) if (v && Number.isFinite(v)) args.push(flag, String(Math.round(v)));
-  if (b.noLead) args.push('--no-lead');
-  if (b.codeIntel === false) args.push('--no-code-intel');
+  if (b.name?.trim()) args.push('--name', b.name.trim().slice(0, 80));
   if (b.thenTriage !== false) args.push('--then-triage');
-  if (b.model && /^[\w.-]+$/.test(b.model)) args.push('--model', b.model);
-  if (b.start) args.push('--start', b.start);
-  return c.json(launchJob('explore', args, { options: { target: b.target, thenTriage: b.thenTriage !== false } }), 202);
+  return c.json(launchJob('explore', args, { options: { target: b.target, preset: b.preset ?? DEFAULT_PRESET, name: b.name ?? null, thenTriage: b.thenTriage !== false } }), 202);
 });
 
 // ---------- jobs ----------

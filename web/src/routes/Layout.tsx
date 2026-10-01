@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { NavLink, Outlet, Link } from 'react-router';
 import { Logo, Chamfer, ThemeToggle } from '../components/ui.tsx';
-import { LauncherDialog } from '../components/Actions.tsx';
+import { LauncherDialog } from '../components/Launcher.tsx';
 import { useApi } from '../lib/api.ts';
 import type { JobView } from '../lib/types.ts';
 

@@ -4,7 +4,7 @@ import { useApi, api } from '../lib/api.ts';
 import type { RunSummary } from '../lib/types.ts';
 import { ago, targetName } from '../lib/format.ts';
 import { Arrow, Box, Chamfer, Chip, ErrorBox, FileIcon, Loading, Section, useToast } from '../components/ui.tsx';
-import { LauncherDialog } from '../components/Actions.tsx';
+import { LauncherDialog } from '../components/Launcher.tsx';
 import { RunName } from '../components/RunName.tsx';
 
 export function Runs() {

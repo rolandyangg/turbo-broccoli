@@ -9,6 +9,7 @@ const ws = join(root, 'ws');
 const jobsDir = join(root, 'web-jobs');
 process.env.BUGBASH_WORKSPACES = ws;
 process.env.BUGBASH_WEB_JOBS = jobsDir;
+process.env.BUGBASH_PRESETS_FILE = join(root, 'presets.json');
 
 const RUN = '2026-01-01T00-00-00Z';
 let app: typeof import('../server/app.ts').app;
@@ -120,5 +121,28 @@ describe('bugbash web API', () => {
     expect(runs.find((x: { run: string }) => x.run === RUN).name).toBe('Nightly pricing check');
     expect((await post({ name: 42 })).status).toBe(400);
     expect((await (await post({ name: null })).json()).name).toBeNull();
+  });
+
+  it('serves the launcher catalog and manages presets', async () => {
+    const cat = await (await get('/catalog')).json();
+    expect(cat.personas.find((p: { id: string }) => p.id === 'low-vision-user').enabledByDefault).toBe(false);
+    expect(cat.devices.length).toBeGreaterThan(8);
+    expect(cat.strategies.some((s: { id: string }) => s.id === 'size.devices')).toBe(true);
+    const json = (method: string, path: string, body?: unknown) => app.request(`/api${path}`, { method, body: body ? JSON.stringify(body) : undefined, headers: { 'content-type': 'application/json' } });
+    const saved = await (await json('POST', '/presets', { name: 'Night shift', config: { personas: ['phone-user'], budgetSessions: 3 } })).json();
+    expect(saved.id).toBe('night-shift');
+    const list = await (await get('/presets')).json();
+    expect(list.default).toBe('standard');
+    expect(list.presets.map((p: { id: string }) => p.id)).toContain('night-shift');
+    expect((await json('POST', '/presets', { name: 'bad', config: { budgetSessions: 'lots' } })).status).toBe(400);
+    expect((await json('DELETE', '/presets/standard')).status).toBe(400);
+    expect((await (await json('DELETE', '/presets/night-shift')).json()).deleted).toBe(true);
+  });
+
+  it('validates bug bash launches before starting anything', async () => {
+    const json = (body: unknown) => app.request('/api/explore', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
+    expect((await json({ target: '' })).status).toBe(400);
+    expect((await json({ target: 'http://x.test', preset: 'nope' })).status).toBe(400);
+    expect((await json({ target: 'http://x.test', config: { parallel: 0 } })).status).toBe(400);
   });
 });

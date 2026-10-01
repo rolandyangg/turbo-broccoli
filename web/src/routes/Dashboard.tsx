@@ -6,7 +6,7 @@ import { ago, pct, targetName } from '../lib/format.ts';
 import { Arrow, Chamfer, Chip, ErrorBox, Loading, SevChip, Stat, StatusChip } from '../components/ui.tsx';
 import { ChartCard, DataTable, HBars, StackedColumns, type StackSeries } from '../components/Charts.tsx';
 import { JobStateChip } from '../components/Jobs.tsx';
-import { LauncherDialog } from '../components/Actions.tsx';
+import { LauncherDialog } from '../components/Launcher.tsx';
 
 interface Dashboard {
   kpis: { active: number; critical: number; major: number; fixing: number; fixed: number; false_positive: number; targets: number; runs: number; running_jobs: number; with_video: number };
