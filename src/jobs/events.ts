@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
  *   <runDir>/jobs/<jobId>/status.json   current state (rewritten on every change)
  *   <runDir>/jobs/<jobId>/events.jsonl  append-only event stream
  */
-export type JobKind = 'fix' | 'explore' | 'triage' | 'reproduce';
+export type JobKind = 'fix' | 'explore' | 'triage' | 'reproduce' | 'retro' | 'improve';
 export type JobState = 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export interface JobEvent {

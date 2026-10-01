@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFindings, allFindings, readRun } from './store/store.js';
@@ -78,6 +79,8 @@ export function scoreRun(runDir: string, opts: { label?: boolean } = {}) {
     controls: controlsHit,
     sessions: (info.jobs as unknown[]).length,
     stop_reason: info.stop_reason,
+    ...agentVersion(),
+    scored_at: new Date().toISOString(),
   };
   if (opts.label) {
     const memory = new Memory(info.workspace);
@@ -92,4 +95,58 @@ export function scoreRun(runDir: string, opts: { label?: boolean } = {}) {
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, `${info.run_id}.json`), JSON.stringify(result, null, 2));
   return result;
+}
+
+/** Version of the agent code that produced a bench run: the git tree hash of src/ (+ "-dirty" with local edits). */
+export function agentVersion(): { agent_version: string | null; agent_commit: string | null } {
+  try {
+    const tree = execFileSync('git', ['rev-parse', 'HEAD:src'], { cwd: root, encoding: 'utf8' }).trim().slice(0, 10);
+    const commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+    const dirty = execFileSync('git', ['status', '--porcelain', '--', 'src'], { cwd: root, encoding: 'utf8' }).trim().length > 0;
+    return { agent_version: dirty ? `${tree}-dirty` : tree, agent_commit: commit };
+  } catch {
+    return { agent_version: null, agent_commit: null };
+  }
+}
+
+export interface BenchVersion {
+  version: string;
+  commit: string | null;
+  runs: { run: string; recall: number; precision: number | null; at: string | null }[];
+  best_recall: number;
+  mean_recall: number;
+  /** Set when this version's best recall is below the previous version's (a change lowered recall). */
+  regression: { from: string; drop: number } | null;
+}
+
+/** Bench results grouped by agent version (oldest first), with recall regressions flagged. */
+export function benchHistory(dir = join(root, 'bench', 'results')): BenchVersion[] {
+  if (!existsSync(dir)) return [];
+  const results = readdirSync(dir)
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => {
+      try {
+        return JSON.parse(readFileSync(join(dir, f), 'utf8'));
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => String(a.run).localeCompare(String(b.run)));
+  const byVersion = new Map<string, BenchVersion>();
+  for (const r of results) {
+    const v = r.agent_version ?? 'unversioned';
+    const e: BenchVersion = byVersion.get(v) ?? { version: v, commit: r.agent_commit ?? null, runs: [], best_recall: 0, mean_recall: 0, regression: null };
+    e.runs.push({ run: r.run, recall: r.recall, precision: r.precision_vs_manifest ?? null, at: r.scored_at ?? null });
+    byVersion.set(v, e);
+  }
+  const out = [...byVersion.values()];
+  for (const [i, v] of out.entries()) {
+    v.best_recall = Math.max(...v.runs.map((x) => x.recall));
+    v.mean_recall = Math.round((v.runs.reduce((a, x) => a + x.recall, 0) / v.runs.length) * 100) / 100;
+    const prev = out[i - 1];
+    // One seeded bug is 1/11 ≈ 0.09 recall: flag a drop of at least one bug.
+    if (prev && prev.best_recall - v.best_recall >= 0.09) v.regression = { from: prev.version, drop: Math.round((prev.best_recall - v.best_recall) * 100) / 100 };
+  }
+  return out;
 }

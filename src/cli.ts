@@ -131,6 +131,11 @@ exploreOpts(program.command('explore').description('Agentically bug-bash a site 
       if (o.thenTriage) {
         const { triageRun } = await import('./triage/triage.js');
         await triageRun({ runDir, baseUrl: target.baseUrl, log: logf, video: config.triage.video, review: config.triage.review });
+        if (config.retrospective) {
+          // Proposals only: nothing is applied until approved on the Improvements page.
+          const { runRetro } = await import('./learn/retro.js');
+          await runRetro({ runDir, model: config.model, log: logf }).catch((e) => logf(`Retrospective failed: ${(e as Error).message}`));
+        }
       } else logf(`Next: bugbash triage --run ${runDir}`);
       rep.finish('succeeded', { summary: o.thenTriage ? 'Explored and triaged' : 'Explored' });
     } catch (e) {
@@ -358,6 +363,61 @@ program
     console.log(`Fitted on ${labels.length} labels (${Object.keys(model.per_type).length} per-type curves${model.global ? ' + global' : ', not enough for a global curve yet (need 8)'}).`);
     console.table(model.table.map((r) => ({ 'raw confidence': r.bin, labeled: r.count, precision: r.precision == null ? '—' : `${Math.round(r.precision * 100)}%` })));
     console.log('New triage runs will use it; re-run `bugbash triage` to rescore an existing run.');
+  });
+
+program
+  .command('retro')
+  .description('Post-mortem a triaged run: propose lessons, strategy priors, detector suggestions and prompt/config tweaks (applied only when you approve them)')
+  .option('--run <id|path>', 'Run id or path (default: latest)')
+  .option('--out <dir>', 'Workspace directory')
+  .option('--model <model>')
+  .option('--job <id>', 'Job id for progress events (used by the web app)')
+  .action(async (o) => {
+    const runDir = findRunDir(o);
+    const { runRetro } = await import('./learn/retro.js');
+    const r = await runRetro({ runDir, model: o.model, log, jobId: o.job });
+    for (const p of r.added) console.log(`${p.id} [${p.kind}] ${p.title}`);
+    console.log(`Review them in the web app (Improvements) or with: bugbash improvements approve|reject <id>`);
+  });
+
+program
+  .command('improvements')
+  .description('List, approve or reject improvement proposals, and show the backlog')
+  .argument('[action]', 'list | approve | reject | backlog', 'list')
+  .argument('[id]', 'Proposal id (P-…)')
+  .option('--out <dir>', 'Workspace directory')
+  .option('--repo <path>', 'Repo whose workspace to use')
+  .option('--note <text>', 'Reason (kept with the decision)')
+  .action(async (action: string, id: string | undefined, o) => {
+    const ws = workspaceFor(o.repo ?? null, o.out);
+    const P = await import('./learn/proposals.js');
+    if (action === 'list') {
+      for (const f of P.listImprovementRuns(ws)) for (const p of f.proposals) console.log(`${p.id.padEnd(14)} ${p.status.padEnd(9)} [${p.kind}] ${p.title}`);
+    } else if (action === 'backlog') {
+      for (const b of P.backlog(ws)) console.log(`${b.id.padEnd(5)} ${b.status.padEnd(12)} [${b.kind}] ${b.title}${b.branch ? ` (${b.branch})` : ''}`);
+    } else if (action === 'approve' || action === 'reject') {
+      if (!id) throw new Error('Pass a proposal id');
+      const run = P.listImprovementRuns(ws).find((f) => f.proposals.some((p) => p.id === id))?.run;
+      if (!run) throw new Error(`No proposal ${id}`);
+      console.log(P.decide(ws, run, id, { action, note: o.note ?? null }).applied);
+    } else throw new Error(`Unknown action ${action}`);
+  });
+
+program
+  .command('improve')
+  .description('Implement an approved backlog item (detector suggestion or prompt/config tweak) on a new branch of this repo, verified by typecheck and tests')
+  .argument('<id>', 'Backlog id (B-…)')
+  .option('--out <dir>', 'Workspace directory the backlog lives in')
+  .option('--repo <path>', 'Repo whose workspace to use')
+  .option('--pr', 'Push the branch and open a PR (gh)')
+  .option('--max-attempts <n>', 'Implement/verify attempts', int, 2)
+  .option('--keep-worktree', 'Keep the git worktree after finishing')
+  .option('--job <id>', 'Job id for progress events (used by the web app)')
+  .action(async (id: string, o) => {
+    const ws = workspaceFor(o.repo ?? null, o.out);
+    const { implementBacklogItem } = await import('./learn/implement.js');
+    const r = await implementBacklogItem({ ws, id, pr: !!o.pr, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
+    console.log(r.verified ? `Implemented on ${r.branch} (typecheck + tests pass)` : `Committed on ${r.branch}, but verification failed`);
   });
 
 program
