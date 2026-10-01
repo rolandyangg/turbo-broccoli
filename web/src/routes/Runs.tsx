@@ -5,6 +5,7 @@ import type { RunSummary } from '../lib/types.ts';
 import { ago, targetName } from '../lib/format.ts';
 import { Arrow, Box, Chamfer, Chip, ErrorBox, FileIcon, Loading, Section, useToast } from '../components/ui.tsx';
 import { LauncherDialog } from '../components/Actions.tsx';
+import { RunName } from '../components/RunName.tsx';
 
 export function Runs() {
   const { data, error, reload } = useApi<RunSummary[]>('/runs', { pollMs: 8000 });
@@ -76,7 +77,7 @@ function RunCard({ r }: { r: RunSummary }) {
       head={
         <>
           <FileIcon />
-          {r.run}
+          <RunName ws={r.ws} run={r.run} name={r.name} fallback={r.run} />
         </>
       }
       chip={r.live ? <Chip tone="green live">live</Chip> : r.triaged ? <Chip>triaged</Chip> : <Chip tone="outline">not triaged</Chip>}
@@ -113,6 +114,7 @@ function RunCard({ r }: { r: RunSummary }) {
           </div>
         </div>
         <p className="small muted" style={{ margin: '12px 0 0' }}>
+          {r.name ? <span className="mono">{r.run} · </span> : null}
           {ago(r.started_at)} · {r.sessions} session{r.sessions === 1 ? '' : 's'} · {r.triaged ? `${r.counts.total} findings` : `${r.raw_findings} raw findings`}
           {r.counts.by_status.fixing ? ` · ${r.counts.by_status.fixing} being fixed` : ''}
         </p>

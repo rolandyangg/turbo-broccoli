@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { readRun, readFindings, findById } from '../../src/store/store.ts';
+import { readRun, readFindings, findById, renameRun } from '../../src/store/store.ts';
 import { FindingStatus } from '../../src/store/schema.ts';
 import { workspaces, workspaceById, runDirOf, addWorkspace, HttpError } from './workspaces.ts';
 import { listAllRuns, runDetail, transcriptFor, findFinding, sessionTail } from './runs.ts';
@@ -44,6 +44,15 @@ app.get('/runs/:ws/:run', (c) => {
   return c.json(runDetail(w.id, w.path, c.req.param('run')));
 });
 
+app.post('/runs/:ws/:run/rename', async (c) => {
+  const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
+  const b = await c.req.json<{ name?: unknown }>().catch(() => ({}) as { name?: unknown });
+  if (b.name !== null && typeof b.name !== 'string') throw new HttpError(400, 'name must be a string (or null to clear)');
+  if (typeof b.name === 'string' && b.name.length > 200) throw new HttpError(400, 'name is too long');
+  const info = renameRun(dir, b.name as string | null);
+  return c.json({ run: info.run_id, name: info.name ?? null });
+});
+
 app.get('/runs/:ws/:run/bugs/:id', (c) => {
   const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
   const id = c.req.param('id').toUpperCase();
@@ -62,7 +71,7 @@ app.get('/runs/:ws/:run/bugs/:id', (c) => {
     after_shot: afterShot,
     pr_body: prBody,
     jobs: listJobs({ runDir: dir }).filter((j) => j.finding_ids.includes(id) || j.scope?.split(/[+,]/).includes(hit.group.id)),
-    run: { target: readRun(dir).target, repo_path: readRun(dir).repo_path, base_url: readRun(dir).base_url },
+    run: { target: readRun(dir).target, name: readRun(dir).name ?? null, repo_path: readRun(dir).repo_path, base_url: readRun(dir).base_url },
   });
 });
 

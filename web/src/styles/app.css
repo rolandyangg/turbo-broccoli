@@ -805,3 +805,36 @@
   text-decoration: none;
   color: inherit;
 }
+
+/* ---------- run names ---------- */
+.run-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.run-name-pencil {
+  background: none;
+  border: 0;
+  padding: 0 4px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.45em;
+  opacity: 0.55;
+  line-height: 1;
+}
+.box-head .run-name-pencil {
+  font-size: 13px;
+}
+.run-name:hover .run-name-pencil,
+.run-name-pencil:focus-visible {
+  opacity: 1;
+  color: var(--ink);
+}
+.run-title {
+  font-size: clamp(34px, 5.5vw, 72px);
+}
+.run-name-edit .input {
+  min-width: 220px;
+  flex: 1;
+}

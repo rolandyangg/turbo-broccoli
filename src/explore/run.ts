@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { writeFileSync } from 'node:fs';
 import { loadConfig, type Config } from '../config.js';
 import type { ResolvedTarget } from '../target/resolve.js';
-import { workspaceFor, newRunId, createRunDir, writeRun, type RunInfo } from '../store/store.js';
+import { workspaceFor, newRunId, createRunDir, writeRun, cleanRunName, type RunInfo } from '../store/store.js';
 import { scanRepo } from './codeIntel.js';
 import { Campaign } from './campaign.js';
 import { Memory } from '../memory/siteMemory.js';
@@ -16,6 +16,7 @@ export interface ExploreOptions {
   codeIntel?: boolean;
   log: (m: string) => void;
   onRun?: (runDir: string, runId: string) => void;
+  name?: string | null;
 }
 
 export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; runId: string; workspace: string }> {
@@ -29,6 +30,7 @@ export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; r
   if (intel) writeFileSync(join(runDir, 'code-intel.json'), JSON.stringify(intel, null, 2));
   const info: RunInfo = {
     run_id: runId,
+    name: cleanRunName(o.name),
     target: o.targetArg,
     base_url: target.baseUrl,
     target_kind: target.kind,

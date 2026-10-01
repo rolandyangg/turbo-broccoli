@@ -89,13 +89,14 @@ const exploreOpts = (c: Command) =>
 
 exploreOpts(program.command('explore').description('Agentically bug-bash a site (lead agent + explorer agents across sizes, browsers, personas)').argument('<target>', 'URL, local static folder, or local repo with a dev/start script'))
   .option('--then-triage', 'Run triage right after exploring')
+  .option('--name <name>', 'Display name for the run')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
   .action(async (targetArg: string, o) => {
     const target = await resolveTarget(targetArg, { repo: o.repo, devCommand: o.devCommand, devPort: o.devPort, log });
     const ws = workspaceFor(target.repoPath, o.out);
     const { rep, logf } = jobLogger(ws, o.job, 'explore', { options: { target: targetArg, repo: o.repo ?? null, thenTriage: !!o.thenTriage, browsers: o.browsers ?? null, budgetSessions: o.budgetSessions ?? null, noLead: o.lead === false, codeIntel: o.codeIntel !== false } });
     try {
-      const { runDir } = await exploreRun({ targetArg, target, out: ws, overrides: overrides(o), noLead: o.lead === false, codeIntel: o.codeIntel, log: logf, onRun: (runDir) => rep.update({ run_dir: runDir }) });
+      const { runDir } = await exploreRun({ targetArg, target, out: ws, overrides: overrides(o), noLead: o.lead === false, codeIntel: o.codeIntel, name: o.name, log: logf, onRun: (runDir) => rep.update({ run_dir: runDir }) });
       rememberRun(runDir);
       if (o.thenTriage) {
         const { triageRun } = await import('./triage/triage.js');
@@ -173,6 +174,18 @@ program
     const runDir = findRunDir(o);
     const { reproduce } = await import('./repro/reproduce.js');
     await reproduce({ runDir, id: id.toUpperCase(), mode: o.mode === 'start' ? 'start' : 'full', slow: !!o.slow, browser: o.browser ? BrowserName.parse(o.browser) : null, guardrails: o.guardrails !== false, jobId: o.job, log });
+  });
+
+program
+  .command('rename')
+  .description('Give a run a display name (its id and folder stay the same). Pass "" to clear it.')
+  .argument('<run>', 'Run id or path')
+  .argument('<name>', 'New display name')
+  .option('--out <dir>', 'Workspace directory')
+  .action(async (run: string, name: string, o) => {
+    const { renameRun } = await import('./store/store.js');
+    const info = renameRun(findRunDir({ run, out: o.out }), name);
+    log(info.name ? `${info.run_id} → "${info.name}"` : `${info.run_id}: name cleared`);
   });
 
 program

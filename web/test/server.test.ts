@@ -111,4 +111,14 @@ describe('bugbash web API', () => {
     expect(one.kpis.targets).toBe(1);
     expect((await get(`/dashboard?ws=${wsId}&run=nope`)).status).toBe(404);
   });
+
+  it('renames a run without changing its id, and validates input', async () => {
+    const post = (body: unknown) => app.request(`/api/runs/${wsId}/${RUN}/rename`, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } });
+    const r = await (await post({ name: '  Nightly\n  pricing check  ' })).json();
+    expect(r).toEqual({ run: RUN, name: 'Nightly pricing check' });
+    const runs = await (await get('/runs')).json();
+    expect(runs.find((x: { run: string }) => x.run === RUN).name).toBe('Nightly pricing check');
+    expect((await post({ name: 42 })).status).toBe(400);
+    expect((await (await post({ name: null })).json()).name).toBeNull();
+  });
 });

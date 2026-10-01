@@ -158,3 +158,12 @@ describe('personas', () => {
     expect(EVERYDAY_TOOLS).toEqual(expect.arrayContaining(['click', 'type', 'press', 'set_device', 'sweep_devices']));
   });
 });
+
+describe('run names', () => {
+  it('sanitises names to one trimmed line and clears empty ones', async () => {
+    const { cleanRunName } = await import('../src/store/store.js');
+    expect(cleanRunName('  Nightly\n\tpricing  ')).toBe('Nightly pricing');
+    expect(cleanRunName('   ')).toBeNull();
+    expect(cleanRunName('x'.repeat(200))!.length).toBe(80);
+  });
+});

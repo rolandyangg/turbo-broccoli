@@ -45,7 +45,7 @@ export function Bug() {
     <>
       <div className="run-head">
         <div className="label">
-          <Link to="/runs">Runs</Link> / <Link to={`/runs/${ws}/${encodeURIComponent(run)}`}>{run}</Link> / <Link to={`/runs/${ws}/${encodeURIComponent(run)}#${data.group.id}`}>{data.group.id}</Link> / {f.id}
+          <Link to="/runs">Runs</Link> / <Link to={`/runs/${ws}/${encodeURIComponent(run)}`}>{data.run.name ?? run}</Link> / <Link to={`/runs/${ws}/${encodeURIComponent(run)}#${data.group.id}`}>{data.group.id}</Link> / {f.id}
         </div>
         <div className="row" style={{ marginTop: 14, gap: 8 }}>
           <span className="mono" style={{ fontWeight: 700 }}>

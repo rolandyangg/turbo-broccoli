@@ -15,14 +15,14 @@ export interface Dashboard {
   by_type: { key: string; count: number }[];
   by_page: { key: string; count: number }[];
   by_browser: { key: string; count: number }[];
-  trend: { run: string; ws: string; target: string; at: string; active: number; critical: number; major: number; minor: number; cosmetic: number; triaged: boolean }[];
+  trend: { run: string; name: string | null; ws: string; target: string; at: string; active: number; critical: number; major: number; minor: number; cosmetic: number; triaged: boolean }[];
   attention: { id: string; ws: string; run: string; target: string; title: string; severity: string; status: string; type: string; page: string; confidence: number; thumb: string | null; widths: number[]; browsers: string[] }[];
   targets: { target: string; latest: RunSummary; runs: number; active: number; critical: number; major: number }[];
   jobs: ReturnType<typeof listJobs>;
   /** null = all targets (latest triaged run of each); otherwise the single run the numbers come from. */
-  scope: { ws: string; run: string; target: string; started_at: string; triaged: boolean } | null;
+  scope: { ws: string; run: string; name: string | null; target: string; started_at: string; triaged: boolean } | null;
   /** Every run, for the run filter. */
-  runs: { ws: string; run: string; target: string; target_key: string; started_at: string; triaged: boolean; active: number }[];
+  runs: { ws: string; run: string; name: string | null; target: string; target_key: string; started_at: string; triaged: boolean; active: number }[];
 }
 
 function tally<T>(xs: T[], key: (x: T) => string | string[], top = 8) {
@@ -80,14 +80,14 @@ export function dashboard(only: { ws: string; run: string } | null = null): Dash
     trend: [...runs]
       .filter((r) => !scoped || r.target_key === scoped.target_key)
       .reverse()
-      .map((r) => ({ run: r.run, ws: r.ws, target: r.target, at: r.started_at, active: r.counts.active, critical: r.counts.by_severity.critical ?? 0, major: r.counts.by_severity.major ?? 0, minor: r.counts.by_severity.minor ?? 0, cosmetic: r.counts.by_severity.cosmetic ?? 0, triaged: r.triaged })),
+      .map((r) => ({ run: r.run, name: r.name, ws: r.ws, target: r.target, at: r.started_at, active: r.counts.active, critical: r.counts.by_severity.critical ?? 0, major: r.counts.by_severity.major ?? 0, minor: r.counts.by_severity.minor ?? 0, cosmetic: r.counts.by_severity.cosmetic ?? 0, triaged: r.triaged })),
     attention: active
       .sort((a, b) => sevRank(a.f.severity) - sevRank(b.f.severity) || b.f.confidence - a.f.confidence)
       .slice(0, 8)
       .map(({ f, r }) => ({ id: f.id, ws: r.ws, run: r.run, target: r.target, title: f.title, severity: f.severity, status: f.status, type: f.type, page: f.page, confidence: f.confidence, thumb: f.screenshots.crop ?? f.screenshots.annotated, widths: [...new Set(f.viewports.map((v) => v.width))].sort((a, b) => a - b), browsers: f.browsers })),
     targets: targets.sort((a, b) => b.latest.started_at.localeCompare(a.latest.started_at)),
     jobs: jobs.slice(0, 8),
-    scope: scoped ? { ws: scoped.ws, run: scoped.run, target: scoped.target, started_at: scoped.started_at, triaged: scoped.triaged } : null,
-    runs: runs.map((r) => ({ ws: r.ws, run: r.run, target: r.target, target_key: r.target_key, started_at: r.started_at, triaged: r.triaged, active: r.counts.active })),
+    scope: scoped ? { ws: scoped.ws, run: scoped.run, name: scoped.name, target: scoped.target, started_at: scoped.started_at, triaged: scoped.triaged } : null,
+    runs: runs.map((r) => ({ ws: r.ws, run: r.run, name: r.name, target: r.target, target_key: r.target_key, started_at: r.started_at, triaged: r.triaged, active: r.counts.active })),
   };
 }

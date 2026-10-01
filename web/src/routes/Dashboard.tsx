@@ -39,7 +39,7 @@ export function Dashboard() {
       header={(data) => (
         <div className="run-head spread" style={{ alignItems: 'flex-end' }}>
           <div>
-            <div className="label">{scope ? `Run · ${targetName(data.scope?.target ?? '')}` : 'Overview · latest triaged run of each target'}</div>
+            <div className="label">{scope ? `Run · ${targetName(data.scope?.target ?? '')} · ${data.scope ? runLabel(data.scope) : ''}` : 'Overview · latest triaged run of each target'}</div>
             <h1 className="page-title">Dashboard</h1>
           </div>
           <div className="row">

@@ -8,6 +8,7 @@ export interface RunSummary {
   ws: string;
   ws_path: string;
   run: string;
+  name: string | null;
   target: string;
   target_key: string;
   base_url: string;
@@ -51,6 +52,7 @@ export interface RunDetail {
   summary: RunSummary;
   run: {
     run_id: string;
+    name?: string | null;
     target: string;
     base_url: string;
     target_kind: string;
@@ -103,7 +105,7 @@ export interface BugDetail {
   after_shot: string | null;
   pr_body: string | null;
   jobs: JobView[];
-  run: { target: string; repo_path: string | null; base_url: string };
+  run: { target: string; name: string | null; repo_path: string | null; base_url: string };
 }
 
 export interface TranscriptItem {

@@ -8,6 +8,7 @@ import { BugCard } from '../components/BugCard.tsx';
 import { FixDialog } from '../components/Actions.tsx';
 import { JobsTable } from '../components/Jobs.tsx';
 import { DashboardView } from './Dashboard.tsx';
+import { RunName } from '../components/RunName.tsx';
 
 type Tab = 'overview' | 'bugs' | 'campaign' | 'coverage' | 'hypotheses' | 'intel' | 'jobs';
 
@@ -44,14 +45,13 @@ export function Run() {
     <>
       <div className="run-head">
         <div className="label">
-          <Link to="/runs">Runs</Link> / {targetName(s.target)}
+          <Link to="/runs">Runs</Link> / {targetName(s.target)}{data.run.name ? ` / ${data.run.name}` : ''}
         </div>
         <div className="spread" style={{ alignItems: 'flex-end' }}>
           <div>
-            <h1 className="display h1" style={{ fontSize: 'clamp(34px, 5.5vw, 72px)' }}>
-              {targetName(s.target)}
-            </h1>
+            <RunName as="h1" className="display h1 run-title" ws={ws} run={run} name={data.run.name} fallback={targetName(s.target)} onSaved={() => void reload()} />
             <p className="mono small muted" style={{ margin: '8px 0 0' }}>
+              {data.run.name ? `${targetName(s.target)} · ` : ''}
               {data.run.run_id} · {data.run.base_url} · {dateTime(data.run.started_at)}
               {data.run.head_commit ? ` · ${data.run.head_commit.slice(0, 10)}` : ''} · {data.run.stages?.explore?.note ?? ''}
             </p>

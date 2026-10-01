@@ -13,6 +13,7 @@ export interface RunSummary {
   ws: string;
   ws_path: string;
   run: string;
+  name: string | null;
   target: string;
   /** Stable grouping key: the source path for local targets, the URL otherwise. */
   target_key: string;
@@ -57,6 +58,7 @@ export function summarizeRun(wsIdV: string, wsPath: string, run: string): RunSum
     ws: wsIdV,
     ws_path: wsPath,
     run,
+    name: info.name ?? null,
     target: info.target,
     target_key: info.target_kind === 'url' ? info.target.replace(/\/+$/, '') : (info.repo_path ?? info.target),
     base_url: info.base_url,

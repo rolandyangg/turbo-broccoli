@@ -70,6 +70,8 @@ export function resolveRunDir(ws: string, run?: string | null): string {
 
 export interface RunInfo {
   run_id: string;
+  /** Human-friendly display name; the run id/folder never changes. */
+  name?: string | null;
   target: string;
   base_url: string;
   target_kind: string;
@@ -120,4 +122,17 @@ export function writeFindings(runDir: string, ff: Omit<FindingsFile, 'schemaVers
 export function findById(ff: FindingsFile, id: string): { finding: Finding; group: RootCauseGroup } | null {
   for (const g of ff.groups) for (const f of g.findings) if (f.id === id) return { finding: f, group: g };
   return null;
+}
+
+/** Sanitises a run display name (single line, no control characters, max 80 chars). Empty → null. */
+export function cleanRunName(name: string | null | undefined): string | null {
+  const n = (name ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+  return n || null;
+}
+
+export function renameRun(runDir: string, name: string | null | undefined): RunInfo {
+  const info = readRun(runDir);
+  info.name = cleanRunName(name);
+  writeRun(runDir, info);
+  return info;
 }
