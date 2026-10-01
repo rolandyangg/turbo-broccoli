@@ -28,6 +28,7 @@ export const DETECTABLE = new Set([
   'distorted-image',
   'misalignment',
   'truncated-no-tooltip',
+  'mirrored-text',
 ]);
 const ALIASES: Record<string, string[]> = {
   'text-overflow': ['text-overflow', 'spill-out'],
@@ -119,7 +120,7 @@ export async function checkPresence(driver: Driver, spec: DefectSpec): Promise<{
   else await settle(driver.page, 200);
   await driver.refreshVariant();
   const types = ALIASES[spec.type] ?? [spec.type];
-  const cands = await runDetectors(driver.page, { only: types }).catch(() => [] as Candidate[]);
+  const cands = await runDetectors(driver.page, { only: types, scan: spec.selector ? { selector: spec.selector } : 'page' }).catch(() => [] as Candidate[]);
   const c = matchCandidate(cands, spec);
   return { presence: c ? 'present' : 'absent', candidate: c };
 }

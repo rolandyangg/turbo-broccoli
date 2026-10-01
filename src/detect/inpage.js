@@ -28,7 +28,34 @@
       if (ps.display === 'none' || ps.visibility === 'hidden' || Number(ps.opacity) === 0) return false;
       p = p.parentElement;
     }
+    // The hidden side of a flip card (turned away, backface-visibility: hidden) isn't meant to be seen.
+    if (hiddenFace(el)) return false;
     return true;
+  }
+
+  /** Cumulative 2D/3D transform of an element (translation ignored; enough to tell mirrored / turned away). */
+  function cumulativeMatrix(el) {
+    let M = new DOMMatrix();
+    const chain = [];
+    for (let p = el; p && p !== document.documentElement; p = p.parentElement) chain.unshift(p);
+    for (const p of chain) {
+      const t = cs(p).transform;
+      if (t && t !== 'none') {
+        try {
+          M = M.multiply(new DOMMatrix(t));
+        } catch {}
+      }
+    }
+    return M;
+  }
+  /** The element (or an ancestor) that is a turned-away face with backface-visibility: hidden, if any. */
+  function hiddenFace(el) {
+    for (let p = el; p && p !== document.body; p = p.parentElement) {
+      const s = cs(p);
+      const bv = s.backfaceVisibility || s.webkitBackfaceVisibility;
+      if (bv === 'hidden' && s.transform !== 'none' && cumulativeMatrix(p).m33 < 0) return p;
+    }
+    return null;
   }
 
   function directText(el) {
@@ -236,6 +263,35 @@
     return items;
   }
 
+  /** Things that are meant to sit on top of content: menus, dialogs, popovers, tooltips, toasts, fixed/sticky bars. */
+  const OVERLAY_RE = /(^|[-_\s])(modal|dialog|drawer|dropdown|menu|popover|popup|tooltip|toast|snackbar|overlay|backdrop|lightbox|sheet|flyout)([-_\s]|$)/i;
+  function isOverlayLike(el) {
+    for (let p = el; p && p !== document.body; p = p.parentElement) {
+      if (p.matches('dialog, [popover], [role=dialog], [role=alertdialog], [role=menu], [role=listbox], [role=tooltip], [aria-modal=true]')) return true;
+      const pos = cs(p).position;
+      if (pos === 'fixed' || pos === 'sticky') return true;
+      if (OVERLAY_RE.test(typeof p.className === 'string' ? p.className : '')) return true;
+    }
+    return false;
+  }
+  /** Does `el` (or a non-transparent ancestor up to `stopAt`) actually paint pixels at a point? */
+  function paints(el, stopAt) {
+    for (let p = el; p && p !== document.body && !(stopAt && p.contains(stopAt)); p = p.parentElement) {
+      if (/^(IMG|SVG|svg|CANVAS|VIDEO|PICTURE|INPUT|TEXTAREA|SELECT|BUTTON)$/.test(p.tagName) || directText(p) || isOpaqueBg(p)) return p;
+      const s = cs(p);
+      if (s.backgroundImage && s.backgroundImage !== 'none') return p;
+    }
+    return null;
+  }
+  /** "What we do"-style label for the section an element lives in (its nearest heading). */
+  function sectionLabel(el) {
+    for (let p = el; p && p !== document.body; p = p.parentElement) {
+      const h = p.querySelector && p.querySelector('h1, h2, h3');
+      if (h && h.textContent.trim()) return h.textContent.trim().slice(0, 40);
+    }
+    return null;
+  }
+
   function coveringSurface(topEl, other) {
     // Walk up from the topmost element to the first ancestor that is not also an ancestor of `other`;
     // return the first opaque surface on that path, if any.
@@ -282,9 +338,12 @@
           // A control (button/link/input) sitting on top of text is a collision; a large surface (menu, card,
           // popover, dialog) covering content is usually intentional layering.
           const isControl = cover.matches('button, a[href], input, select, textarea, [role=button]') || !!cover.closest('button, a[href], [role=button]');
-          if (!isControl && (ratio > 2.5 || /menu|listbox|dialog|tooltip/.test(role) || cover.matches('[popover], dialog'))) continue;
-          confidence = isControl ? 0.75 : 0.7;
-          message = isControl ? 'A control is drawn on top of other content, hiding part of it.' : 'Element partially hides other content underneath it.';
+          // Only real overlays (menus, dialogs, popovers, fixed bars) may cover content. A card or panel drawn over
+          // text from elsewhere is a collision, however big it is.
+          if (!isControl && (isOverlayLike(cover) || /menu|listbox|dialog|tooltip/.test(role))) continue;
+          const big = ratio > 2.5;
+          confidence = isControl ? 0.75 : big ? 0.8 : 0.7;
+          message = isControl ? 'A control is drawn on top of other content, hiding part of it.' : big ? `A card/panel is drawn over other content, hiding it${sectionLabel(lower.el) && sectionLabel(lower.el) !== sectionLabel(upper.el) ? ` (covers "${sectionLabel(lower.el)}")` : ''}.` : 'Element partially hides other content underneath it.';
         }
         const key = [selectorFor(upper.el), selectorFor(lower.el)].sort().join('|');
         if (seen.has(key)) continue;
@@ -420,6 +479,63 @@
     }
     return out;
   }
+
+  // ---------- text hidden under other content ----------
+  /**
+   * For each block of text in view, sample points across it and ask the browser what is painted on top there.
+   * Text covered by another section's content (cards, images, panels) is a collision even when no detector of
+   * individual boxes sees it. Real overlays (menus, dialogs, fixed bars) are excused.
+   */
+  function detectOccludedText(els) {
+    const out = [];
+    const texts = els.filter((el) => directText(el).length >= 12).slice(0, 700);
+    for (const el of texts) {
+      if (!isVisible(el)) continue;
+      const tr = textRect(el);
+      if (!tr || tr.width < 20 || tr.height < 8) continue;
+      if (tr.bottom < 0 || tr.top > innerHeight || tr.right < 0 || tr.left > innerWidth) continue;
+      const pts = [];
+      for (const fx of [0.12, 0.38, 0.62, 0.88]) for (const fy of [0.25, 0.75]) pts.push([tr.left + tr.width * fx, tr.top + tr.height * fy]);
+      let inView = 0;
+      let covered = 0;
+      let by = null;
+      for (const [x, y] of pts) {
+        if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+        inView++;
+        const top = document.elementFromPoint(x, y);
+        if (!top || el.contains(top) || top.contains(el) || top.closest('[data-bugbash-overlay]')) continue;
+        if (isOverlayLike(top)) continue;
+        if (Number(cs(top).opacity) < 0.15) continue;
+        const painter = paints(top, el);
+        if (!painter) continue; // a transparent wrapper: nothing is drawn over the text
+        covered++;
+        by = by || painter;
+      }
+      if (inView < 3 || covered < 2 || !by) continue;
+      const share = covered / inView;
+      const from = sectionLabel(el);
+      const over = sectionLabel(by);
+      out.push(cand('overlap', el, Math.min(0.92, 0.55 + share * 0.4), `Text is hidden under other content: ${Math.round(share * 100)}% of it is covered by ${by.tagName.toLowerCase()}${by.className && typeof by.className === 'string' ? '.' + by.className.split(/\s+/)[0] : ''}${from && over && from !== over ? ` (from "${over}", over "${from}")` : ''}.`, { occluded_share: Math.round(share * 100) / 100, occluded_by: selectorFor(by), text_section: from, covering_section: over }, by));
+    }
+    return out.slice(0, 30);
+  }
+
+  /** Turned-away faces (backface-visibility: hidden) in view: candidates for the painted-back-face check. */
+  function flipFaces() {
+    const out = [];
+    for (const el of allElements()) {
+      if (out.length >= 8) break;
+      const s = cs(el);
+      const bv = s.backfaceVisibility || s.webkitBackfaceVisibility;
+      if (bv !== 'hidden' || s.transform === 'none' || !directTextDeep(el)) continue;
+      if (cumulativeMatrix(el).m33 >= 0) continue;
+      const r = rectOf(el);
+      if (r.width < 20 || r.height < 20 || r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) continue;
+      out.push({ selector: selectorFor(el), text: textOf(el), bbox: { x: Math.max(0, r.x), y: Math.max(0, r.y), width: Math.min(r.width, innerWidth - Math.max(0, r.x)), height: Math.min(r.height, innerHeight - Math.max(0, r.y)) }, signature: signatureOf(el), page_bbox: r2(r) });
+    }
+    return out;
+  }
+  const directTextDeep = (el) => (el.textContent || '').trim().length > 3;
 
   // ---------- focus & keyboard ----------
   const FOCUS_TYPES = ['focus-invisible', 'focus-obscured', 'focus-escape'];
@@ -860,6 +976,7 @@
       ...run('small-tap-target', () => detectTapTargets(els, o)),
       ...run('broken-image', () => detectMisc(els)),
       ...run('layout-shift', () => detectLayoutShift()),
+      ...run('overlap', () => detectOccludedText(els)),
       ...(!o.only || o.only.some((t) => FOCUS_TYPES.includes(t)) ? detectFocus().filter((c) => !o.only || o.only.includes(c.type)) : []),
       ...(!o.only || o.only.some((t) => ['overlay-overflow', 'hidden-by-sticky'].includes(t)) ? detectOverlays().filter((c) => !o.only || o.only.includes(c.type)) : []),
       ...(!o.only || o.only.some((t) => ['hover-only', 'overlap', 'scroll-trap'].includes(t)) ? detectTouch(els).filter((c) => !o.only || o.only.includes(c.type)) : []),
@@ -904,5 +1021,5 @@
     return allElements().filter((e) => isVisible(e) && signatureOf(e) === signature).slice(0, 50).map((e) => ({ selector: selectorFor(e), text: textOf(e), bbox: r2(rectOf(e)) }));
   }
 
-  window.__bugbash = { version: 1, detect, detectFocus, selectorFor, signatureOf, interactives, domHash, elementInfo, findBySignature, drawBox, caption, ring, clearOverlay, shifts, resetShifts: () => (shifts.length = 0) };
+  window.__bugbash = { version: 1, detect, detectFocus, flipFaces, selectorFor, signatureOf, interactives, domHash, elementInfo, findBySignature, drawBox, caption, ring, clearOverlay, shifts, resetShifts: () => (shifts.length = 0) };
 })();

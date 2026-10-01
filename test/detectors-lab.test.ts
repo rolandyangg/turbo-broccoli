@@ -129,3 +129,21 @@ describe('visual polish detectors', () => {
     expect(has(c, 'low-contrast', /ok-text/)).toBe(false);
   });
 });
+
+describe('section collisions and hidden faces', () => {
+  it('LAB-S1: text covered by a card section is found even below the fold (whole-page scan)', async () => {
+    const c = await at('/sections.html'); // loaded at the top; the collision is a screenful down
+    expect(has(c, 'overlap', /covered\b|#covered/)).toBe(true);
+    expect(c.find((x) => x.type === 'overlap' && /covered/.test(x.selector ?? ''))?.message).toMatch(/hidden under|card\/panel/i);
+  });
+
+  it('does not report text under a real overlay (open menu)', async () => {
+    expect(has(await at('/sections.html'), 'overlap', /under-menu/)).toBe(false);
+  });
+
+  it('LAB-S2: a correctly hidden back face is neither "clipped text" nor "mirrored text"', async () => {
+    const c = await at('/sections.html');
+    expect(has(c, 'text-overflow', /back/)).toBe(false);
+    expect(c.some((x) => x.type === 'mirrored-text')).toBe(false);
+  });
+});

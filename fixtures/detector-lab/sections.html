@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Section collision lab</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 0; color: #eee; background: #1d1f2b; }
+  .hero { height: 900px; padding: 24px; background: #2a2d3e; }
+  /* LAB-S1: a card section positioned absolutely, sliding over the next section's text (below the fold). */
+  .about { position: relative; padding: 24px; }
+  .about p { max-width: 520px; }
+  .tracks { position: absolute; top: 120px; left: 24px; display: flex; gap: 16px; }
+  .card { width: 180px; height: 220px; background: #12131c; border: 2px solid #5a7bb5; border-radius: 10px; padding: 12px; }
+  /* Control: a dropdown menu legitimately covering text. */
+  .menu { position: absolute; top: 40px; left: 600px; width: 220px; background: #fff; color: #111; padding: 8px; }
+  /* LAB-S2: flip cards done right (back face hidden) — must not be reported as clipped or mirrored. */
+  .flip { perspective: 900px; display: inline-block; margin: 24px; }
+  .flip .inner { position: relative; width: 160px; height: 120px; transform-style: preserve-3d; }
+  .flip .face { position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; background: #333; overflow: hidden; height: 120px; }
+  .flip .back { transform: rotateY(180deg); }
+</style>
+</head>
+<body>
+<section class="hero"><h1>Hero</h1><p>Welcome to the lab.</p></section>
+<section class="about">
+  <h2>What we do</h2>
+  <p id="covered">Students spend 36 hours developing technical projects with mentors and workshops, then demo them to judges and sponsors.</p>
+  <p id="covered2">Technical and educational sessions run during the weekend so everyone can learn something new.</p>
+  <div class="tracks" aria-label="Tracks"><div class="card">Sustain the Spark</div><div class="card">Catalyst for Care</div><div class="card">Light the Way</div></div>
+  <ul class="menu" role="menu"><li role="menuitem">Settings</li><li role="menuitem">Log out</li></ul>
+  <p id="under-menu" style="position: absolute; top: 48px; left: 610px; width: 200px">Text under an open menu is fine.</p>
+</section>
+<section class="flips">
+  <h2>Flip cards</h2>
+  <div class="flip"><div class="inner"><div class="face front">Front side</div><div class="face back" id="back">This back face has far too much text for its fixed height so it overflows and is clipped but nobody can see it.</div></div></div>
+</section>
+</body>
+</html>

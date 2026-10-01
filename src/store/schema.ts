@@ -24,6 +24,7 @@ export const FindingType = z.enum([
   'low-contrast',
   'distorted-image',
   'truncated-no-tooltip',
+  'mirrored-text',
   'other',
 ]);
 export type FindingType = z.infer<typeof FindingType>;
