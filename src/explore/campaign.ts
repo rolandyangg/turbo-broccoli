@@ -10,6 +10,7 @@ import type { BrowserName, RawFinding } from '../store/schema.js';
 import { mergeAll, summarize, pageKey } from './coverage.js';
 import { summarizeIntel, type CodeIntel } from './codeIntel.js';
 import { Memory } from '../memory/siteMemory.js';
+import { addProposals, priorsText } from '../learn/proposals.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(here, '..');
@@ -224,6 +225,8 @@ export class Campaign {
     const notesFile = join(this.o.runDir, 'notes.md');
     const notes = existsSync(notesFile) ? readFileSync(notesFile, 'utf8').slice(-2500) : '';
     const cov = summarize(mergeAll(this.o.runDir), this.cfg.viewports.widths, this.cfg.browsers).filter((c) => job.pages.map(pageKey).includes(c.page));
+    const lessons = this.memory.lessons().slice(-1500).trim();
+    const priors = priorsText(this.o.workspace);
     return [
       `# Your assignment (${job.id})`,
       `Goal: ${job.goal}`,
@@ -232,6 +235,8 @@ export class Campaign {
       job.hypotheses.length ? `\nHypotheses to test first (from the lead / code analysis):\n${job.hypotheses.map((h) => `- ${h}`).join('\n')}` : '',
       cov.length ? `\nCoverage so far on your pages (from other explorers):\n${JSON.stringify(cov.map((c) => ({ page: c.page, widths_untested: c.widths_untested, strategies_untried: c.strategies_untried.slice(0, 12), untried_examples: c.untried_examples.slice(0, 6) })))}` : '',
       notes ? `\nShared notes from other explorers:\n${notes}` : '',
+      lessons ? `\nApproved lessons from past runs on this site:\n${lessons}` : '',
+      priors ? `\nApproved strategy priors:\n${priors}` : '',
       `\nYou have about ${job.maxToolCalls} tool calls. Start with observe().`,
     ]
       .filter(Boolean)
@@ -378,9 +383,14 @@ export class Campaign {
             break;
           case '/memory':
             if (args.action === 'write' && args.text) {
-              this.memory.appendLessons(this.o.runId, args.text);
-              out = { ok: true };
-            } else out = { text: this.memory.summary() };
+              // Lessons are proposals until a person approves them on the Improvements page.
+              const text = String(args.text).trim();
+              const r = addProposals(this.o.workspace, this.o.runId, 'lead', [{ kind: 'lesson', title: text.split('\n')[0].slice(0, 120), body: text }]);
+              out = { text: r.added.length ? `Saved as a lesson proposal (${r.added[0].id}); it reaches future runs once a person approves it.` : `Not saved: ${r.skipped[0]?.reason ?? 'duplicate'}.` };
+            } else {
+              const pri = priorsText(this.o.workspace);
+              out = { text: this.memory.summary() + (pri ? `\nApproved strategy priors (follow these when planning):\n${pri}` : '') };
+            }
             break;
           case '/hunt': {
             const j = this.huntSiblings(args.finding_index);
