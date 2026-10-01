@@ -319,6 +319,30 @@ program
   });
 
 program
+  .command('mark')
+  .description('Sort findings for yourself: to do / in progress / done (marks fixed) / unsorted, and archive or unarchive')
+  .argument('<ids...>', 'BB-xxxx ids')
+  .option('--run <id|path>')
+  .option('--out <dir>')
+  .option('--todo')
+  .option('--doing', 'In progress')
+  .option('--done', 'Done (marks the finding fixed; moving it back restores its status)')
+  .option('--unsorted', 'Clear your to do / in progress / done choice')
+  .option('--archive', 'Move to the run\'s archive (kept, but out of the active lists and counts)')
+  .option('--unarchive')
+  .action(async (ids: string[], o) => {
+    const states = [o.todo && 'todo', o.doing && 'in_progress', o.done && 'done', o.unsorted && 'unsorted'].filter(Boolean) as string[];
+    if (states.length > 1) throw new Error('Pick one of --todo, --doing, --done, --unsorted');
+    if (o.archive && o.unarchive) throw new Error('Pick --archive or --unarchive');
+    if (!states.length && !o.archive && !o.unarchive) throw new Error('Nothing to do: pass a state and/or --archive / --unarchive');
+    const { setWorkflow } = await import('./store/workflow.js');
+    const runDir = findRunDir(o);
+    const hits = setWorkflow(runDir, ids, { ...(states.length ? { state: states[0] === 'unsorted' ? null : (states[0] as 'todo' | 'in_progress' | 'done') } : {}), ...(o.archive || o.unarchive ? { archived: !!o.archive } : {}) });
+    writeReport(runDir);
+    for (const f of hits) log(`${f.id} → ${f.workflow.state ?? 'unsorted'}${f.workflow.archived ? ', archived' : ''} (status ${f.status})`);
+  });
+
+program
   .command('regroup')
   .description('Move a finding to another root-cause group (or "new" to split it into its own group)')
   .argument('<id>', 'BB-xxxx')

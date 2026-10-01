@@ -44,6 +44,10 @@ open <workspace>/latest/report.html
 ./bin/bugbash.js group                         # redo root-cause grouping for a run (findings untouched)
 ./bin/bugbash.js calibrate                     # fit confidence calibration from labels
 
+# Sort for yourself while going through bugs (done marks it fixed; archived bugs stay in the run)
+./bin/bugbash.js mark BB-0003 BB-0004 --todo   # or --doing / --done / --unsorted
+./bin/bugbash.js mark BB-0009 --archive        # or --unarchive
+
 # Fix, only when you want to
 ./bin/bugbash.js fix BB-0007                   # just this finding
 ./bin/bugbash.js fix BB-0007 BB-0011           # these together, one branch
@@ -162,6 +166,7 @@ It finds every workspace automatically: the CLI records each one in `~/.bugbash/
 - **Fix:** starts `bugbash fix` as a background job on a new branch. You follow it live: a stage timeline, the agent's actions, and per-browser/width verify results. A branch panel shows commits, changed files, the diff, and PR status and checks.
   - Opening a PR requires an explicit "this pushes to origin" confirmation.
 - **Reproduce:** "▶ Reproduce in a new window" opens a real browser window on your machine with the bug's exact browser, device or size, and settings. It replays the steps with captions, highlights the bug, and leaves the window open for you to try things. Guardrails stay on by default, and closing the window ends the job.
+- **Sort and archive:** mark bugs To do / In progress / Done on each card, the bug page, or for many at once from the selection bar. Pills on the Bugs tab filter by your progress. Archived bugs move to the run's Archived tab: they're kept, but left out of the active lists and counts.
 - **Label and regroup:** confirm, mark false positive (with a suppression scope), or move a finding to another group.
 - **New bug bash / re-triage:** launch explore (with optional triage) with a preset or every option set by hand, and watch explorer sessions live.
 - **Agents tab** (dashboard and run overview): API-equivalent cost and tokens by phase, an explorer leaderboard, results by persona/browser/device, the discovery curve, a page × size coverage heatmap, strategy and tool usage, triage quality, reliability and accuracy.

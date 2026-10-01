@@ -136,6 +136,11 @@ function carryOver(runDir: string, findings: Finding[], log: (m: string) => void
     if (!p) continue;
     if (p.fix) f.fix = p.fix;
     if (p.label_note) f.label_note = p.label_note;
+    // The person's own sorting (to do / in progress / done / archived) survives re-triage.
+    if (p.workflow && (p.workflow.state || p.workflow.archived)) {
+      f.workflow = p.workflow;
+      n++;
+    }
     if (KEEP_STATUS.has(p.status)) {
       f.status = p.status;
       n++;

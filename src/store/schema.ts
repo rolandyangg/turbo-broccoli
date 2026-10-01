@@ -186,6 +186,17 @@ export const Finding = z.object({
   fix_hint: z.string().default(''),
   likely_cause: z.string().default(''),
   label_note: z.string().nullable().default(null),
+  /** The person's own sorting while going through bugs (separate from what the agents decide). */
+  workflow: z
+    .object({
+      state: z.enum(['todo', 'in_progress', 'done']).nullable().default(null),
+      archived: z.boolean().default(false),
+      archived_at: z.string().nullable().default(null),
+      /** Status before the person marked it done (restored if they move it back). */
+      prev_status: z.string().nullable().default(null),
+      updated_at: z.string().nullable().default(null),
+    })
+    .default(() => ({ state: null, archived: false, archived_at: null, prev_status: null, updated_at: null })),
   fix: z
     .object({
       branch: z.string(),
@@ -200,6 +211,14 @@ export const Finding = z.object({
     .default(null),
 });
 export type Finding = z.infer<typeof Finding>;
+export type WorkflowState = 'unsorted' | 'todo' | 'in_progress' | 'done';
+
+/** Where a finding sits on the person's board: their own choice, else derived from fix progress. */
+export function workflowStateOf(f: Pick<Finding, 'status'> & { workflow?: Finding['workflow'] }): WorkflowState {
+  if (f.workflow?.state) return f.workflow.state;
+  return f.status === 'fixed' ? 'done' : f.status === 'fixing' ? 'in_progress' : 'unsorted';
+}
+export const isArchived = (f: { workflow?: Finding['workflow'] }) => !!f.workflow?.archived;
 
 export const RootCauseGroup = z.object({
   id: z.string(), // RC-002

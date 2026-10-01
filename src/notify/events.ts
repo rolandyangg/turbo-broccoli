@@ -18,8 +18,8 @@ export function notifyRunDone(runDir: string) {
       notifyDetached({ event: 'run', level: 'info', title: `Bug bash finished: ${label}`, body: `${raw} raw finding(s) recorded. Triage it next to dedupe and verify them.`, path });
       return;
     }
-    const active = allFindings(ff).filter((f) => ACTIVE.has(f.status) && (f.category ?? categoryOf(f.type)) === 'layout');
-    const functional = allFindings(ff).filter((f) => ACTIVE.has(f.status) && (f.category ?? categoryOf(f.type)) === 'ux-functional').length;
+    const active = allFindings(ff).filter((f) => ACTIVE.has(f.status) && !f.workflow?.archived && (f.category ?? categoryOf(f.type)) === 'layout');
+    const functional = allFindings(ff).filter((f) => ACTIVE.has(f.status) && !f.workflow?.archived && (f.category ?? categoryOf(f.type)) === 'ux-functional').length;
     const crit = active.filter((f) => f.severity === 'critical');
     const major = active.filter((f) => f.severity === 'major');
     const newHigh = [...crit, ...major].filter((f) => f.history_tag === 'new');

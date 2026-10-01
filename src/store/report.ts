@@ -51,13 +51,13 @@ function findingCard(f: Finding, run: string) {
   const env = f.reproduction.environment;
   const variant = Object.entries(env.variant).filter(([k, val]) => !(k === 'colorScheme' && val === 'light') && !(k === 'fontScale' && val === 1) && !(k === 'zoom' && val === 1) && !(k === 'dpr' && val === 1) && !(k === 'reducedMotion' && !val) && !(k === 'network' && val === 'online') && !(k === 'blocked' && !(val as string[]).length));
   return `
-<article class="finding" data-status="${f.status}" data-type="${f.type}" data-sev="${f.severity}" data-conf="${f.confidence}" data-browsers="${f.browsers.join(' ')}" data-persona="${esc(f.found_by.persona ?? '')}">
+<article class="finding" data-status="${f.workflow?.archived ? 'archived' : f.status}" data-type="${f.type}" data-sev="${f.severity}" data-conf="${f.confidence}" data-browsers="${f.browsers.join(' ')}" data-persona="${esc(f.found_by.persona ?? '')}">
   <div class="media">${media}</div>
   <div class="body">
     <header>
       <span class="id">${f.id}</span>
       <span class="pill sev-${f.severity}">${f.severity}</span>
-      <span class="pill st-${f.status}">${f.status.replace('_', ' ')}</span>
+      <span class="pill st-${f.status}">${f.status.replace('_', ' ')}</span>${f.workflow?.archived ? '<span class="pill st-archived">archived</span>' : ''}
       ${f.history_tag !== 'new' ? `<span class="pill hist">${f.history_tag}</span>` : ''}
       <span class="conf" title="${esc(JSON.stringify(f.confidence_breakdown))}">confidence ${(f.confidence * 100).toFixed(0)}%</span>
     </header>
@@ -120,7 +120,7 @@ function renderHtml(d: {
   jobs: { id: string; goal: string; persona: string | null; browser: string; status: string; newFindings?: number; totalFindings?: number; result?: { toolCalls: number; durationMs: number } }[];
 }) {
   const { info, groups, findings } = d;
-  const active = findings.filter((f) => ['new', 'confirmed', 'fixing'].includes(f.status));
+  const active = findings.filter((f) => ['new', 'confirmed', 'fixing'].includes(f.status) && !f.workflow?.archived);
   const bySev = (s: string) => active.filter((f) => f.severity === s).length;
   const uniq = (xs: string[]) => [...new Set(xs)].sort();
   const opts = (xs: string[]) => xs.map((x) => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
@@ -152,7 +152,7 @@ code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:12.5px;w
 .id{font-family:ui-monospace,Menlo,monospace;font-weight:700;font-size:13px}
 .pill{font-size:11.5px;padding:1px 8px;border-radius:999px;border:1px solid currentColor;text-transform:uppercase;letter-spacing:.03em}
 .sev-critical{color:var(--crit)}.sev-major{color:var(--major)}.sev-minor{color:var(--minor)}.sev-cosmetic{color:var(--cos)}
-.st-new,.st-confirmed{color:var(--accent)}.st-fixed{color:var(--ok)}.st-low_confidence,.st-flaky,.st-suppressed,.st-false_positive{color:var(--muted)}.hist{color:var(--major)}
+.st-new,.st-confirmed{color:var(--accent)}.st-fixed{color:var(--ok)}.st-low_confidence,.st-flaky,.st-suppressed,.st-false_positive,.st-archived{color:var(--muted)}.hist{color:var(--major)}
 .conf{margin-left:auto;font-size:13px;color:var(--muted)}
 .ea{display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13.5px;margin:6px 0}@media (max-width:760px){.ea{grid-template-columns:1fr}}
 .ea div{background:var(--code);border-radius:8px;padding:6px 10px}
@@ -226,10 +226,10 @@ function renderMd(d: { info: ReturnType<typeof readRun>; groups: RootCauseGroup[
   const { info, groups } = d;
   const lines: string[] = [];
   lines.push(`# Bug bash summary — ${info.target}`, '', `Run \`${info.run_id}\` · ${info.base_url} · stop reason: ${info.stop_reason ?? 'n/a'}`, '');
-  const active = d.findings.filter((f) => ['new', 'confirmed', 'fixing'].includes(f.status));
+  const active = d.findings.filter((f) => ['new', 'confirmed', 'fixing'].includes(f.status) && !f.workflow?.archived);
   lines.push(`**${active.length} active findings** in ${groups.length} root-cause groups (${d.findings.length} total incl. low-confidence/flaky/suppressed). Full report: \`report.html\`.`, '');
   for (const g of groups) {
-    const act = g.findings.filter((f) => ['new', 'confirmed', 'fixing', 'fixed'].includes(f.status));
+    const act = g.findings.filter((f) => ['new', 'confirmed', 'fixing', 'fixed'].includes(f.status) && !f.workflow?.archived);
     if (!act.length) continue;
     lines.push(`## ${g.id} — ${g.summary}`, '');
     if (g.fix_plan) lines.push(`Fix plan: ${g.fix_plan}${g.files.length ? ` (files: ${g.files.map((f) => `\`${f}\``).join(', ')})` : ''}`, '');
@@ -245,10 +245,10 @@ function renderMd(d: { info: ReturnType<typeof readRun>; groups: RootCauseGroup[
       lines.push('');
     }
   }
-  const others = d.findings.filter((f) => !['new', 'confirmed', 'fixing', 'fixed'].includes(f.status));
+  const others = d.findings.filter((f) => !['new', 'confirmed', 'fixing', 'fixed'].includes(f.status) || f.workflow?.archived);
   if (others.length) {
     lines.push('## Not shown above (low confidence / flaky / suppressed / false positive)', '');
-    for (const f of others) lines.push(`- ${f.id} [${f.status}, ${(f.confidence * 100).toFixed(0)}%] ${f.title}`);
+    for (const f of others) lines.push(`- ${f.id} [${f.workflow?.archived ? 'archived, ' : ''}${f.status}, ${(f.confidence * 100).toFixed(0)}%] ${f.title}`);
   }
   return lines.join('\n') + '\n';
 }

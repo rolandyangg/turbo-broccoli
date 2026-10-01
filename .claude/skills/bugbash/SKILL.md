@@ -30,6 +30,10 @@ When the user says something like "BB-0009 is intentional" or "that's not a bug"
 This suppresses matching findings in future runs and feeds confidence calibration. `confirmed` works the same way. After enough labels, run `./bin/bugbash.js calibrate`.
 Moving a finding between groups: `./bin/bugbash.js regroup BB-0012 RC-005` (or `new`). Redo all grouping for a run: `./bin/bugbash.js group`.
 
+## Sorting and archiving (the user's own progress)
+When the user says what they've done or want to park ("BB-3 is done", "archive BB-9", "put these on my to-do list"):
+`./bin/bugbash.js mark <ids...> --todo|--doing|--done|--unsorted` and/or `--archive|--unarchive`. Done marks the finding fixed (moving it back restores its status). Archived findings stay in the run but leave the active lists and counts. This is separate from labeling: archiving is not "false positive" and teaches the agents nothing.
+
 ## Reproducing
 To show the user a bug live: `./bin/bugbash.js reproduce BB-0007` opens a real browser window with the bug's exact browser, device and settings, replays it, and highlights the bug. It opens a window on their screen, so only run it when they ask to see a bug. Use `--mode start` to just open the page in that environment.
 
