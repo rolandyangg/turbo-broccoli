@@ -165,6 +165,17 @@ describe('bugbash web API', () => {
     expect(got.deliveries).toEqual([]);
   });
 
+  it('guards reports, unverified publishing and reproducing a fix branch', async () => {
+    const post = (p: string, body: unknown) => app.request(`/api${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await post(`/runs/${wsId}/${RUN}/bugs/BB-0001/report`, { category: 'nonsense' })).status).toBe(400);
+    expect((await post(`/runs/${wsId}/${RUN}/bugs/BB-9999/report`, { category: 'missed' })).status).toBe(404);
+    expect((await post(`/runs/${wsId}/${RUN}/fix`, { ids: ['BB-0001'], mode: 'continue', branch: 'bugbash/x', pr: true, confirmPush: true, publishUnverified: true })).status).toBe(400); // needs confirmUnverified
+    expect((await post(`/runs/${wsId}/${RUN}/fix`, { ids: ['BB-0001'], mode: 'verify', branch: 'main' })).status).toBe(400);
+    expect((await post(`/runs/${wsId}/${RUN}/bugs/BB-0001/reproduce`, { branch: 'main' })).status).toBe(400); // only bugbash/* branches
+    const bug = await (await get(`/runs/${wsId}/${RUN}/bugs/BB-0001`)).json();
+    expect(bug.reports).toEqual([]);
+  });
+
   it('validates fix retry / continue requests', async () => {
     const fix = (body: unknown) => app.request(`/api/runs/${wsId}/${RUN}/fix`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     expect((await fix({ ids: ['BB-0001'], mode: 'resume' })).status).toBe(400);

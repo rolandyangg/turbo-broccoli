@@ -6,7 +6,10 @@ import { describeStep, suffixFromLastGoto } from '../triage/steps.js';
 import { deviceById } from '../explore/devices.js';
 import { JobReporter, newJobId } from '../jobs/events.js';
 import type { BrowserName, Step } from '../store/schema.js';
-import { join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { execa } from 'execa';
+import { provideDependencies } from '../fix/fixGroup.js';
 
 export interface ReproduceOptions {
   runDir: string;
@@ -16,6 +19,8 @@ export interface ReproduceOptions {
   slow: boolean;
   browser?: BrowserName | null;
   guardrails: boolean;
+  /** Reproduce on the fixed version: serve the app from this fix branch instead of the original. */
+  branch?: string | null;
   jobId?: string | null;
   log: (m: string) => void;
 }
@@ -26,16 +31,18 @@ export interface ReproduceOptions {
  * captions, highlights the defect, and then hands the window to the user until they close it.
  */
 export async function reproduce(o: ReproduceOptions) {
-  const rep = new JobReporter(join(o.runDir, 'jobs'), o.jobId ?? newJobId('reproduce'), 'reproduce', { run_dir: o.runDir, finding_ids: [o.id], scope: o.id, options: { mode: o.mode, slow: o.slow, browser: o.browser ?? null, guardrails: o.guardrails } });
+  const rep = new JobReporter(join(o.runDir, 'jobs'), o.jobId ?? newJobId('reproduce'), 'reproduce', { run_dir: o.runDir, finding_ids: [o.id], scope: o.branch ? `${o.id} on ${o.branch}` : o.id, branch: o.branch ?? null, options: { mode: o.mode, slow: o.slow, browser: o.browser ?? null, guardrails: o.guardrails, branch: o.branch ?? null } });
   const say = (stage: string, msg: string, level: 'info' | 'success' | 'warn' | 'error' = 'info', data?: Record<string, unknown>) => {
     o.log(msg);
     rep.event(stage, msg, level, data);
   };
   let stop: (() => Promise<void>) | null = null;
+  let removeWorktree: (() => Promise<void>) | null = null;
   let driver: Driver | null = null;
   const cleanup = async () => {
     await driver?.close().catch(() => {});
     await stop?.().catch(() => {});
+    await removeWorktree?.().catch(() => {});
   };
   process.on('SIGTERM', async () => {
     await cleanup();
@@ -52,8 +59,32 @@ export async function reproduce(o: ReproduceOptions) {
     const browser = o.browser ?? env.browser;
     const config = Config.parse(info.config);
 
-    say('serve', `Starting ${info.target_kind === 'url' ? 'target' : 'the app'} for ${f.id}`);
-    const target = await resolveTarget(info.target_kind === 'url' ? info.base_url : (info.repo_path ?? info.target), { repo: info.repo_path, log: (m) => say('serve', m) });
+    let target: Awaited<ReturnType<typeof resolveTarget>>;
+    if (o.branch) {
+      // The fixed version: the app served from the fix branch (its kept worktree, or a temporary checkout).
+      if (!info.repo_path) throw new Error('This run has no local repository, so there is no fixed version to serve');
+      const repo = realpathSync.native(info.repo_path);
+      const gitRoot = realpathSync.native((await execa('git', ['rev-parse', '--show-toplevel'], { cwd: repo })).stdout.trim());
+      const list = (await execa('git', ['worktree', 'list', '--porcelain'], { cwd: gitRoot })).stdout.split('\n\n');
+      const existing = list.find((w) => w.includes(`branch refs/heads/${o.branch}`))?.match(/^worktree (.+)$/m)?.[1] ?? null;
+      let wt = existing;
+      if (!wt) {
+        wt = join(dirname(gitRoot), `${basename(gitRoot)}-bugbash-worktrees`, `repro__${o.branch.replace(/\//g, '__')}__${Date.now().toString(36)}`);
+        const add = await execa('git', ['worktree', 'add', '--detach', wt, o.branch], { cwd: gitRoot, reject: false });
+        if (add.exitCode !== 0) throw new Error(`Couldn't check out ${o.branch}: ${add.stderr}`);
+        const made = wt;
+        removeWorktree = async () => {
+          await execa('git', ['worktree', 'remove', '--force', made], { cwd: gitRoot, reject: false });
+        };
+      }
+      const appDir = join(wt, relative(gitRoot, repo));
+      say('serve', `Starting the fixed version from ${o.branch}${existing ? ' (kept worktree)' : ''}`, 'info', { branch: o.branch });
+      await provideDependencies(repo, appDir, (_st, m) => say('serve', m));
+      target = await resolveTarget(appDir, { devCommand: config.devCommand, devPort: null, log: (m) => say('serve', m) });
+    } else {
+      say('serve', `Starting ${info.target_kind === 'url' ? 'target' : 'the app'} for ${f.id}`);
+      target = await resolveTarget(info.target_kind === 'url' ? info.base_url : (info.repo_path ?? info.target), { repo: info.repo_path, log: (m) => say('serve', m) });
+    }
     stop = target.stop;
 
     const all = f.reproduction.steps_minimal.length ? f.reproduction.steps_minimal : f.reproduction.steps_original;

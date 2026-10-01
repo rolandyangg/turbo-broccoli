@@ -22,6 +22,7 @@ import { branchInfo } from './git.ts';
 import { dashboard } from './dashboard.ts';
 import { agentsOverview } from './agentStats.ts';
 import { compareRuns } from './compare.ts';
+import { addReport, readReports, REPORT_CATEGORIES } from '../../src/learn/investigate.ts';
 import { postMessage, readMessages } from '../../src/jobs/inbox.ts';
 import { listPRs } from './prs.ts';
 import { githubStatus, connectGitHub, disconnectGitHub } from './github.ts';
@@ -93,6 +94,7 @@ app.get('/runs/:ws/:run/bugs/:id', (c) => {
     after_shot: afterShot,
     pr_body: prBody,
     jobs: listJobs({ runDir: dir }).filter((j) => j.finding_ids.includes(id) || j.scope?.split(/[+,]/).includes(hit.group.id)),
+    reports: readReports(readRun(dir).workspace).filter((r) => r.run === c.req.param('run') && r.bug === id).reverse(),
     run: { target: readRun(dir).target, name: readRun(dir).name ?? null, repo_path: readRun(dir).repo_path, base_url: readRun(dir).base_url },
   });
 });
@@ -191,16 +193,32 @@ app.post('/backlog/:ws/:id/implement', async (c) => {
   return c.json(launchImplement(c.req.param('ws'), c.req.param('id'), b), 202);
 });
 
+app.post('/runs/:ws/:run/bugs/:id/report', async (c) => {
+  const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
+  const id = c.req.param('id').toUpperCase();
+  if (!/^BB-\d{3,5}$/.test(id)) throw new HttpError(400, 'Bad finding id');
+  findFinding(dir, id);
+  const b = await c.req.json<{ category?: string; text?: string }>().catch(() => ({}) as { category?: string; text?: string });
+  if (!b.category || !(b.category in REPORT_CATEGORIES)) throw new HttpError(400, `category must be one of ${Object.keys(REPORT_CATEGORIES).join(', ')}`);
+  const text = String(b.text ?? '').trim().slice(0, 4000);
+  const info = readRun(dir);
+  const report = addReport(info.workspace, { run: info.run_id, bug: id, category: b.category as keyof typeof REPORT_CATEGORIES, text });
+  const job = launchJob('investigate', ['report-problem', id, '--run', dir, '--category', b.category, '--text', text, '--report-id', report.id], { run_dir: dir, finding_ids: [id], scope: `${id}: ${REPORT_CATEGORIES[b.category as keyof typeof REPORT_CATEGORIES]}`, options: { report_id: report.id } });
+  return c.json({ report, job }, 202);
+});
+
 app.post('/runs/:ws/:run/bugs/:id/reproduce', async (c) => {
   const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
   const id = c.req.param('id').toUpperCase();
   if (!/^BB-\d{3,5}$/.test(id)) throw new HttpError(400, 'Bad finding id');
   findFinding(dir, id);
-  const b = await c.req.json<{ mode?: string; slow?: boolean; browser?: string; guardrails?: boolean }>().catch(() => ({}) as { mode?: string; slow?: boolean; browser?: string; guardrails?: boolean });
+  const b = await c.req.json<{ mode?: string; slow?: boolean; browser?: string; guardrails?: boolean; branch?: string }>().catch(() => ({}) as { mode?: string; slow?: boolean; browser?: string; guardrails?: boolean; branch?: string });
+  if (b.branch !== undefined && !/^bugbash\/[\w./-]+$/.test(b.branch)) throw new HttpError(400, 'Bad branch (must be a bugbash/… fix branch)');
   const args = ['reproduce', id, '--run', dir, '--mode', b.mode === 'start' ? 'start' : 'full'];
   if (b.slow) args.push('--slow');
   if (b.browser && ['chromium', 'webkit', 'firefox'].includes(b.browser)) args.push('--browser', b.browser);
   if (b.guardrails === false) args.push('--no-guardrails');
+  if (b.branch) args.push('--branch', b.branch);
   return c.json(launchJob('reproduce', args, { run_dir: dir, finding_ids: [id], scope: id, options: { mode: b.mode ?? 'full', slow: !!b.slow } }), 202);
 });
 

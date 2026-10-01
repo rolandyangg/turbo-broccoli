@@ -224,11 +224,12 @@ program
   .option('--slow', 'Slow motion')
   .option('--browser <name>', 'Override the browser engine (chromium, webkit, firefox)')
   .option('--no-guardrails', 'Let the page make real requests and navigate anywhere (manual testing)')
+  .option('--branch <branch>', 'Reproduce on the fixed version: serve the app from this fix branch')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
   .action(async (id: string, o) => {
     const runDir = findRunDir(o);
     const { reproduce } = await import('./repro/reproduce.js');
-    await reproduce({ runDir, id: id.toUpperCase(), mode: o.mode === 'start' ? 'start' : 'full', slow: !!o.slow, browser: o.browser ? BrowserName.parse(o.browser) : null, guardrails: o.guardrails !== false, jobId: o.job, log });
+    await reproduce({ runDir, id: id.toUpperCase(), mode: o.mode === 'start' ? 'start' : 'full', slow: !!o.slow, browser: o.browser ? BrowserName.parse(o.browser) : null, guardrails: o.guardrails !== false, branch: o.branch ?? null, jobId: o.job, log });
   });
 
 program
@@ -380,6 +381,27 @@ program
     const { githubLogout } = await import('./fix/githubImages.js');
     await githubLogout();
     log('Disconnected from GitHub.');
+  });
+
+program
+  .command('report-problem')
+  .description('Report a problem with a finding; an agent investigates which stage went wrong and proposes improvements (for your approval)')
+  .argument('<id>', 'BB-xxxx')
+  .requiredOption('--category <c>', 'not-a-bug | missed | evidence | classification | fix | other')
+  .option('--text <text>', 'What is wrong', '')
+  .option('--run <id|path>')
+  .option('--out <dir>')
+  .option('--model <model>')
+  .option('--report-id <id>', 'Investigate an existing report (used by the web app)')
+  .option('--job <id>', 'Job id for progress events (used by the web app)')
+  .action(async (id: string, o) => {
+    const runDir = findRunDir(o);
+    const info = readRun(runDir);
+    const I = await import('./learn/investigate.js');
+    if (!(o.category in I.REPORT_CATEGORIES)) throw new Error(`category must be one of ${Object.keys(I.REPORT_CATEGORIES).join(', ')}`);
+    const reportId = o.reportId ?? I.addReport(info.workspace, { run: info.run_id, bug: id.toUpperCase(), category: o.category, text: o.text ?? '' }).id;
+    const r = await I.investigateReport({ ws: info.workspace, reportId, runDir, model: o.model, jobId: o.job, log });
+    console.log(`${r.diagnosis.stage}: ${r.diagnosis.summary}\nRecommended: ${r.diagnosis.recommended_action}\n${r.proposals.length} proposal(s) on the Improvements page.`);
   });
 
 program

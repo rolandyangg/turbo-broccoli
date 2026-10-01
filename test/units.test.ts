@@ -385,3 +385,45 @@ describe('messages to running agents', () => {
     expect(readMessages(dir).deliveries.map((d) => d.agent)).toEqual(['s-001', 'lead', 's-001']);
   });
 });
+
+describe('fix verification flags', () => {
+  const finding = (id: string, extra: Record<string, unknown> = {}) => ({ id, type: 'overlap', evidence_kind: 'static', video: null, ...extra }) as never;
+  it('flags inconclusive, still-present, visual-only, partial checks, missing evidence and regressions', async () => {
+    const { verificationFlags } = await import('../src/fix/fixGroup.js');
+    const after = [
+      { id: 'BB-1', present: null, method: 'none', checks: [], review: null, after: null, verifiable: false },
+      { id: 'BB-2', present: false, method: 'visual-review', checks: [], review: { fixed: true, confidence: 0.7, reasoning: '' }, after: null, verifiable: false },
+      { id: 'BB-3', present: false, method: 'detector', checks: [{ browser: 'webkit', width: 1280, height: 800, present: null, error: 'replay broke' }, { browser: 'chromium', width: 1280, height: 800, present: false, error: null }], review: null, after: null, verifiable: true },
+      { id: 'BB-4', present: true, method: 'detector', checks: [], review: null, after: null, verifiable: true },
+    ];
+    const ev = new Map<string, never>([
+      ['BB-2', { after: { annotated: 'a.png', element_found: false }, after_video: null } as never],
+      ['BB-3', { after: { annotated: 'a.png', element_found: true }, after_video: null } as never],
+      ['BB-4', { after: { annotated: 'a.png', element_found: true }, after_video: null } as never],
+    ]);
+    const flags = verificationFlags([finding('BB-1'), finding('BB-2'), finding('BB-3', { type: 'layout-shift' }), finding('BB-4')], after as never, ev, ['/ @320px: new overlap']);
+    expect(flags).toEqual([
+      "BB-1: couldn't confirm the fix automatically",
+      'BB-1: no after-fix screenshot',
+      'BB-2: verified only by a visual review (70% confident), not by a detector',
+      "BB-2: the after-fix screenshot couldn't find the element, so it shows its old position",
+      'BB-3: some checks were inconclusive (webkit 1280px: replay broke)',
+      'BB-3: behaviour bug without an after-fix video',
+      'BB-4: the bug is still present',
+      '1 new layout problem(s) on the pages it touched',
+    ]);
+  });
+});
+
+describe('bug reports', () => {
+  it('stores reports per workspace', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { addReport, readReports } = await import('../src/learn/investigate.js');
+    const ws = mkdtempSync(join(tmpdir(), 'bb-report-'));
+    const r = addReport(ws, { run: 'r1', bug: 'BB-0050', category: 'missed', text: ' Cards cover the What we do text ' });
+    expect(r).toMatchObject({ status: 'investigating', text: 'Cards cover the What we do text', proposals: [] });
+    expect(readReports(ws).map((x) => x.id)).toEqual([r.id]);
+  });
+});

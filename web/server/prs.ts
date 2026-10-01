@@ -29,7 +29,7 @@ export interface PrRow {
   number: number | null;
   branch: string | null;
   run: { ws: string; run: string; name: string | null; target: string };
-  bugs: { id: string; title: string; severity: string; status: string; side_effect: boolean }[];
+  bugs: { id: string; title: string; severity: string; status: string; side_effect: boolean; verified: boolean; flags: string[] }[];
   jobs: { id: string; state: string; started_at: string; verified: boolean | null }[];
   opened_at: string | null;
   status: PrStatus | null;
@@ -98,7 +98,7 @@ export async function listPRs(scope: { ws: string; run: string } | null, fresh =
     for (const f of fs) {
       if (!f.fix?.pr_url) continue;
       const e = row(f.fix.pr_url, f.fix.branch);
-      if (!e.bugs.some((b) => b.id === f.id)) e.bugs.push({ id: f.id, title: f.title, severity: f.severity, status: f.status, side_effect: /side effect/.test(f.fix.fixed_by ?? '') });
+      if (!e.bugs.some((b) => b.id === f.id)) e.bugs.push({ id: f.id, title: f.title, severity: f.severity, status: f.status, side_effect: /side effect/.test(f.fix.fixed_by ?? ''), verified: !!f.fix.verified && !!f.fix.verification && !(f.fix.flags ?? []).length, flags: f.fix.flags ?? (f.fix.verification ? [] : ['checked before the stricter verification']) });
       if (!e.opened_at || f.fix.at < e.opened_at) e.opened_at = f.fix.at;
     }
     for (const j of jobs) {
@@ -111,7 +111,7 @@ export async function listPRs(scope: { ws: string; run: string } | null, fresh =
         if (!e.jobs.some((x) => x.id === j.id)) e.jobs.push({ id: j.id, state: j.state, started_at: j.started_at, verified: j.verified });
         for (const id of j.finding_ids) if (!e.bugs.some((b) => b.id === id)) {
           const f = fs.find((x) => x.id === id);
-          if (f) e.bugs.push({ id, title: f.title, severity: f.severity, status: f.status, side_effect: false });
+          if (f) e.bugs.push({ id, title: f.title, severity: f.severity, status: f.status, side_effect: false, verified: !!f.fix?.verified && !!f.fix?.verification && !(f.fix?.flags ?? []).length, flags: f.fix?.flags ?? [] });
         }
       }
     }
