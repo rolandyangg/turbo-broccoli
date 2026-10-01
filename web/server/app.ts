@@ -26,7 +26,7 @@ import { listPRs } from './prs.ts';
 import { githubStatus, connectGitHub, disconnectGitHub } from './github.ts';
 import { schedulesOverview, previewCron, createSchedule, toggleSchedule, deleteSchedule, runScheduleNow } from './schedules.ts';
 import { publicSettings, saveSettings, inbox, readMany, sendTest } from './notifications.ts';
-import { improvementsOverview, decideProposal, launchRetro, launchImplement } from './improvements.ts';
+import { improvementsOverview, decideProposal, launchRetro, launchImplement, launchImplementBatch } from './improvements.ts';
 
 const exec = promisify(execFile);
 const ID = /^(BB|RC)-\d{3,5}$/i;
@@ -175,6 +175,10 @@ app.post('/runs/:ws/:run/retro', (c) => {
   const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
   if (!readFindings(dir)) throw new HttpError(409, 'Triage this run before running a retrospective.');
   return c.json(launchRetro(c.req.param('ws'), c.req.param('run'), dir), 202);
+});
+app.post('/backlog/:ws/implement', async (c) => {
+  const b = await c.req.json<{ ids?: string[]; all?: boolean; pr?: boolean; confirmPush?: boolean }>().catch(() => ({}));
+  return c.json(launchImplementBatch(c.req.param('ws'), b), 202);
 });
 app.post('/backlog/:ws/:id/implement', async (c) => {
   const b = await c.req.json<{ pr?: boolean; confirmPush?: boolean }>().catch(() => ({}));

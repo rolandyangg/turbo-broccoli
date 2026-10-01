@@ -63,13 +63,29 @@ export function launchRetro(wsParam: string, run: string, runDir: string) {
   return launchJob('retro', ['retro', '--run', runDir], { run_dir: runDir, scope: run });
 }
 
+/** Several backlog items (or every open/failed one) on one branch, one commit each. */
+export function launchImplementBatch(wsParam: string, b: { ids?: string[]; all?: boolean; pr?: boolean; confirmPush?: boolean }) {
+  if (b.pr && !b.confirmPush) throw new HttpError(400, 'Opening a PR pushes to GitHub: confirmPush must be true');
+  const w = workspaceById(wsParam);
+  const items = backlog(w.path);
+  const ids = b.all ? items.filter((x) => x.status === 'open' || x.status === 'failed').map((x) => x.id) : (b.ids ?? []).map((x) => String(x).toUpperCase());
+  if (!ids.length) throw new HttpError(400, b.all ? 'Nothing open on the backlog' : 'Pick at least one backlog item');
+  if (ids.length > 30 || !ids.every((x) => /^B-\d+$/.test(x))) throw new HttpError(400, 'Bad backlog ids');
+  for (const id of ids) if (!items.some((x) => x.id === id)) throw new HttpError(404, `No backlog item ${id}`);
+  const busy = listJobs().find((j) => j.kind === 'improve' && j.alive && ((j.options as { backlog_ids?: string[] }).backlog_ids ?? [(j.options as { backlog_id?: string }).backlog_id]).some((x) => x && ids.includes(x)));
+  if (busy) throw new HttpError(409, `Some of these are already being implemented (${busy.id})`);
+  const args = ['improve', ...ids, '--out', w.path];
+  if (b.pr) args.push('--pr');
+  return launchJob('improve', args, { scope: ids.length === 1 ? ids[0] : `${ids.length} items: ${ids.join(', ')}`, options: { pr: !!b.pr, backlog_ids: ids, ws: w.id } });
+}
+
 export function launchImplement(wsParam: string, id: string, b: { pr?: boolean; confirmPush?: boolean }) {
   if (!/^B-\d+$/.test(id)) throw new HttpError(400, 'Bad backlog id');
   if (b.pr && !b.confirmPush) throw new HttpError(400, 'Opening a PR pushes to GitHub: confirmPush must be true');
   const w = workspaceById(wsParam);
   const item = backlog(w.path).find((x) => x.id === id);
   if (!item) throw new HttpError(404, `No backlog item ${id}`);
-  const busy = listJobs().find((j) => j.kind === 'improve' && j.alive && (j.options as { backlog_id?: string }).backlog_id === id);
+  const busy = listJobs().find((j) => j.kind === 'improve' && j.alive && ((j.options as { backlog_ids?: string[] }).backlog_ids ?? [(j.options as { backlog_id?: string }).backlog_id]).includes(id));
   if (busy) throw new HttpError(409, `${id} is already being implemented (${busy.id})`);
   const args = ['improve', id, '--out', w.path];
   if (b.pr) args.push('--pr');

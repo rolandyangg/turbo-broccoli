@@ -224,6 +224,11 @@ describe('bugbash web API', () => {
     expect((await post('P-nope-99', { action: 'approve' })).status).toBe(404);
     expect((await post(added[0].id, { action: 'delete' })).status).toBe(400);
 
+    const batch = (body: unknown) => app.request(`/api/backlog/${wsId}/implement`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await batch({ ids: ['B-1'], pr: true })).status).toBe(400); // pushing needs confirmation
+    expect((await batch({ ids: [] })).status).toBe(400);
+    expect((await batch({ ids: ['B-1', 'B-99'] })).status).toBe(404);
+    expect((await batch({ ids: ['../x'] })).status).toBe(400);
     const impl = (id: string, body: unknown) => app.request(`/api/backlog/${wsId}/${id}/implement`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     expect((await impl('B-1', { pr: true })).status).toBe(400); // pushing needs explicit confirmation
     expect((await impl('B-99', {})).status).toBe(404);

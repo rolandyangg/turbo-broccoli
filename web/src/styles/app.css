@@ -1654,3 +1654,14 @@
     letter-spacing: 0.06em;
   }
 }
+
+/* Improvements: backlog batch bar */
+.backlog-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+  border: 1px dashed var(--line);
+  background: var(--panel);
+}

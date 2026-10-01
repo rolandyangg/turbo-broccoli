@@ -477,65 +477,24 @@ program
 
 program
   .command('improve')
-  .description('Implement an approved backlog item (detector suggestion or prompt/config tweak) on a new branch of this repo, verified by typecheck and tests')
-  .argument('<id>', 'Backlog id (B-…)')
+  .description('Implement approved backlog items (detector suggestions, prompt/config tweaks) on ONE new branch of this repo: one commit per item, each verified by typecheck and tests')
+  .argument('[ids...]', 'Backlog ids (B-…), implemented in order')
+  .option('--all', 'Every open or failed backlog item')
   .option('--out <dir>', 'Workspace directory the backlog lives in')
   .option('--repo <path>', 'Repo whose workspace to use')
   .option('--pr', 'Push the branch and open a PR (gh)')
-  .option('--max-attempts <n>', 'Implement/verify attempts', int, 2)
+  .option('--max-attempts <n>', 'Implement/verify attempts per item', int, 2)
   .option('--keep-worktree', 'Keep the git worktree after finishing')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
-  .action(async (id: string, o) => {
+  .action(async (ids: string[], o) => {
     const ws = workspaceFor(o.repo ?? null, o.out);
-    const { implementBacklogItem } = await import('./learn/implement.js');
-    const r = await implementBacklogItem({ ws, id, pr: !!o.pr, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
-    console.log(r.verified ? `Implemented on ${r.branch} (typecheck + tests pass)` : `Committed on ${r.branch}, but verification failed`);
+    const { implementBacklogItems } = await import('./learn/implement.js');
+    const { backlog } = await import('./learn/proposals.js');
+    const list = o.all ? backlog(ws).filter((b) => b.status === 'open' || b.status === 'failed').map((b) => b.id) : ids.map((x) => x.toUpperCase());
+    if (!list.length) throw new Error(o.all ? 'Nothing open on the backlog' : 'Pass backlog ids or --all');
+    const r = await implementBacklogItems({ ws, ids: list, pr: !!o.pr, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
+    console.log(`${r.done.length}/${list.length} implemented${r.done.length ? ` on ${r.branch}` : ''}${r.failed.length ? `; not implemented: ${r.failed.map((f) => `${f.item.id} (${f.error})`).join(', ')}` : ''}${r.prUrl ? `\nPR: ${r.prUrl}` : ''}`);
   });
-
-const schedule = program.command('schedule').description('Scheduled bug bashes via macOS launchd (run only while the Mac is awake and you are logged in)');
-schedule
-  .command('add')
-  .description('Add a schedule (installs a LaunchAgent)')
-  .requiredOption('--target <target>', 'URL, local static folder, or local repo')
-  .requiredOption('--cron <expr>', 'minute hour day month weekday, e.g. "0 2 * * 1-5" (numbers, lists and ranges; no */n)')
-  .option('--preset <id>', 'Run preset', 'standard')
-  .option('--name <name>', 'Display name')
-  .option('--repo <path>', 'Source repo (white-box + fixes)')
-  .option('--disabled', 'Save without installing')
-  .action(async (o) => {
-    const S = await import('./schedule/schedule.js');
-    const s = await S.addSchedule({ target: o.target, cron: o.cron, preset: o.preset, name: o.name, repo: o.repo, enabled: !o.disabled });
-    console.log(`Added ${s.id}: ${s.name} — ${S.describeCron(s.cron)}${s.enabled ? `, next ${S.nextRun(s.cron)?.toLocaleString()}` : ' (disabled)'}\n${s.enabled ? `LaunchAgent: ${S.plistPath(s.id)}` : ''}`);
-  });
-schedule
-  .command('list')
-  .description('List schedules')
-  .action(async () => {
-    const S = await import('./schedule/schedule.js');
-    const all = S.listSchedules();
-    if (!all.length) console.log('No schedules.');
-    for (const s of all) {
-      const last = S.lastResult(s.id);
-      console.log(`${s.id}  ${s.enabled ? (await S.isLoaded(s.id)) ? 'on ' : 'on (not loaded!)' : 'off'}  ${s.name} — ${S.describeCron(s.cron)} · ${s.preset} · ${s.target}${s.enabled ? ` · next ${S.nextRun(s.cron)?.toLocaleString()}` : ''}${last ? ` · last: ${last.state} ${last.at}` : ''}`);
-    }
-  });
-for (const [cmd, desc] of [
-  ['enable', 'Install the LaunchAgent'],
-  ['disable', 'Uninstall the LaunchAgent (keeps the schedule)'],
-  ['remove', 'Uninstall and delete the schedule'],
-  ['run-now', 'Run it now (detached, same command and log as launchd)'],
-] as const)
-  schedule
-    .command(cmd)
-    .description(desc)
-    .argument('<id>')
-    .action(async (id: string) => {
-      const S = await import('./schedule/schedule.js');
-      if (cmd === 'enable' || cmd === 'disable') await S.setEnabled(id, cmd === 'enable');
-      else if (cmd === 'remove') await S.removeSchedule(id);
-      else console.log(`Started (pid ${S.runNow(id).pid}); log: ${S.logPath(id)}`);
-      if (cmd !== 'run-now') console.log(`${cmd}d ${id}`);
-    });
 
 program
   .command('bench')
