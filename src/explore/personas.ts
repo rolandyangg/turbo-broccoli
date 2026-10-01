@@ -38,6 +38,7 @@ export const EVERYDAY_TOOLS = [
   'type',
   'select',
   'press',
+  'check_focus',
   'scroll',
   'resize',
   'set_device',

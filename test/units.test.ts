@@ -249,3 +249,19 @@ describe('tool-call telemetry', () => {
     expect(typeof lines[0].at).toBe('string');
   });
 });
+
+describe('finding categories and focus strategy', () => {
+  it('keeps behaviour bugs out of the layout category unless the explorer says otherwise', async () => {
+    const { categoryOf } = await import('../src/store/schema.js');
+    expect(categoryOf('broken-state')).toBe('ux-functional');
+    expect(categoryOf('console-error')).toBe('ux-functional');
+    expect(categoryOf('low-contrast')).toBe('layout');
+    expect(categoryOf('focus-invisible')).toBe('layout');
+  });
+
+  it('maps check_focus to the keyboard strategy so it can be turned off per run', async () => {
+    const { strategiesOfCall, STRATEGY_IDS } = await import('../src/explore/strategies.js');
+    expect(strategiesOfCall('check_focus', {}, () => null)).toEqual(['chaos.keyboard']);
+    for (const id of ['overlay.fit', 'touch.hover-only', 'visual.contrast', 'visual.polish']) expect(STRATEGY_IDS).toContain(id);
+  });
+});

@@ -42,6 +42,10 @@ function runSelectionBlock(name: string, args: Record<string, unknown>): string 
 }
 
 let calls = 0;
+/** Process rule: after this many probe calls (tools that exercise a strategy) the explorer must log_hypothesis. */
+const PROBES_PER_HYPOTHESIS = 8;
+let probesSinceHypothesis = 0;
+const isProbe = (name: string, args: Record<string, unknown>) => strategiesOfCall(name, args, (id) => deviceById(id)?.kind ?? null).length > 0;
 const WRAP_UP_TOOLS = new Set(['record_finding', 'log_hypothesis', 'notes']);
 
 type Content = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string };
@@ -64,7 +68,7 @@ async function timed<A>(name: string, fn: (args: A) => Promise<string | ToolResu
   const t0 = Date.now();
   const res = await run(name, fn, args);
   const text = res.content.find((c) => c.type === 'text')?.text ?? '';
-  const blocked = /is not available to your persona/.test(text) ? 'persona' : /is turned off for this run|isn't selected for this run/.test(text) ? 'selection' : /^BLOCKED by guardrails/.test(text) ? 'guardrail' : /BUDGET EXHAUSTED|Session over/.test(text) ? 'budget' : undefined;
+  const blocked = /is not available to your persona/.test(text) ? 'persona' : /is turned off for this run|isn't selected for this run/.test(text) ? 'selection' : /^Log a hypothesis first/.test(text) ? 'process' : /^BLOCKED by guardrails/.test(text) ? 'guardrail' : /BUDGET EXHAUSTED|Session over/.test(text) ? 'budget' : undefined;
   try {
     session.logTool({ name, ms: Date.now() - t0, ok: !res.isError && !blocked, ...(res.isError && !blocked ? { error: text.slice(0, 160) } : {}), ...(blocked ? { blocked } : {}) });
   } catch {}
@@ -75,6 +79,9 @@ async function run<A>(name: string, fn: (args: A) => Promise<string | ToolResult
   if (!allowed(name)) return { content: [{ type: 'text', text: `"${name}" is not available to your persona (normal mouse + keyboard use only). Use the normal interaction tools.` }], isError: true };
   const blockedBySelection = runSelectionBlock(name, (args ?? {}) as Record<string, unknown>);
   if (blockedBySelection) return { content: [{ type: 'text', text: blockedBySelection }], isError: true };
+  const probe = isProbe(name, (args ?? {}) as Record<string, unknown>);
+  if (probe && probesSinceHypothesis >= PROBES_PER_HYPOTHESIS)
+    return { content: [{ type: 'text', text: `Log a hypothesis first: you've run ${probesSinceHypothesis} probes since the last log_hypothesis. Call log_hypothesis with what you were testing, the strategy id and the outcome (confirmed / refuted / inconclusive), then continue.` }], isError: true };
   {
     calls++;
     const over = calls - maxCalls;
@@ -85,6 +92,8 @@ async function run<A>(name: string, fn: (args: A) => Promise<string | ToolResult
     try {
       await session.start();
       const r = await fn(args);
+      if (probe) probesSinceHypothesis++;
+      if (name === 'log_hypothesis' || name === 'record_finding') probesSinceHypothesis = 0;
       const res: ToolResult = typeof r === 'string' ? { content: [{ type: 'text', text: r }] } : r;
       if (maxCalls - calls === 10) res.content.push({ type: 'text', text: '⏳ 10 tool calls left in your budget — start wrapping up.' });
       return res;
@@ -138,6 +147,14 @@ server.registerTool(
   wrap('stress_fill', ({ ref, kind }: { ref: string; kind: (typeof STRESS_KINDS)[number] }) => session.stressFill(ref, kind)),
 );
 server.registerTool('select', { description: 'Choose an option in a <select>.', inputSchema: { ref, value: z.string() } }, wrap('select', ({ ref, value }: { ref: string; value: string }) => session.select(ref, value)));
+server.registerTool(
+  'check_focus',
+  {
+    description: 'Walk the keyboard tab order: presses Tab (or Shift+Tab with reverse) up to `steps` times and checks every stop for an invisible focus indicator, focus hidden under a sticky/fixed bar, and focus escaping an open dialog. Returns the focus order and candidates for record_finding.',
+    inputSchema: { steps: z.number().int().min(1).max(40).optional().describe('Tab presses (default 15)'), reverse: z.boolean().optional() },
+  },
+  wrap('check_focus', ({ steps, reverse }: { steps?: number; reverse?: boolean }) => session.checkFocus({ steps, reverse })),
+);
 server.registerTool('press', { description: 'Press a key (Tab, Shift+Tab, Enter, Escape, ArrowDown...). Returns the focused element.', inputSchema: { key: z.string() } }, wrap('press', ({ key }: { key: string }) => session.press(key)));
 server.registerTool(
   'scroll',
@@ -207,8 +224,9 @@ server.registerTool(
       confidence: z.number().min(0).max(1).describe('How sure you are this is a real, user-visible defect'),
       candidate_id: z.string().optional(),
       ref: z.string().optional(),
-      hypothesis: z.string().optional(),
-      strategy: z.string().optional().describe(`Strategy id, one of: ${STRATEGY_IDS.join(', ')}`),
+      hypothesis: z.string().min(8).describe('Required: what you suspected would break and why (e.g. "the price row has no wrap, so long German labels will clip at phone widths")'),
+      strategy: z.enum(STRATEGY_IDS as [string, ...string[]]).describe('Required: the strategy id that found it'),
+      category: z.enum(['layout', 'ux-functional']).optional().describe('layout (default) for visual/UI defects; ux-functional for behaviour bugs: broken flows, wrong results, errors'),
       seeded_by_code_intel: z.boolean().optional(),
       temporal: z.boolean().optional().describe('True if the defect is time-based (flicker, shift, transition)'),
     },
@@ -217,7 +235,7 @@ server.registerTool(
 );
 server.registerTool(
   'log_hypothesis',
-  { description: 'Log a hypothesis you tested and its outcome (also for refuted ones).', inputSchema: { hypothesis: z.string(), strategy: z.string().optional(), outcome: z.enum(['confirmed', 'refuted', 'inconclusive']), note: z.string().optional() } },
+  { description: 'Log a hypothesis you tested and its outcome (also for refuted ones).', inputSchema: { hypothesis: z.string().min(8), strategy: z.enum(STRATEGY_IDS as [string, ...string[]]).describe('Strategy id this probe batch exercised'), outcome: z.enum(['confirmed', 'refuted', 'inconclusive']), note: z.string().optional() } },
   wrap('log_hypothesis', (a: Parameters<BrowserSession['logHypothesis']>[0]) => session.logHypothesis(a)),
 );
 server.registerTool('coverage', { description: 'Coverage across all explorer sessions in this run: states, untried elements, untested widths/browsers/strategies per page.', inputSchema: { page: z.string().optional() } }, wrap('coverage', ({ page }: { page?: string }) => session.coverageReport(page)));

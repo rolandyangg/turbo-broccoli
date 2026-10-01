@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Driver } from '../replay/driver.js';
-import { runDetectors, settle, temporalSignals, type Candidate } from '../detect/index.js';
+import { ensureDetectors, runDetectors, settle, temporalSignals, type Candidate } from '../detect/index.js';
 import { Coverage, mergeAll, pageKey, summarize } from '../explore/coverage.js';
 import { STRATEGIES, STRATEGY_IDS } from '../explore/strategies.js';
 import { DEVICE_PROFILES, deviceById, deviceContextOptions } from '../explore/devices.js';
@@ -16,6 +16,7 @@ import {
   type Severity,
   type Step,
   type Variant,
+  categoryOf,
 } from '../store/schema.js';
 
 export interface SessionOptions {
@@ -52,6 +53,7 @@ interface StoredCandidate {
   traceLength: number;
 }
 
+const FOCUS_TYPES = new Set<string>(['focus-invisible', 'focus-obscured', 'focus-escape']);
 const TEMPORAL_TYPES = new Set<FindingType>(['layout-shift', 'broken-state', 'hidden-by-sticky', 'focus-invisible']);
 
 export class BrowserSession {
@@ -92,7 +94,7 @@ export class BrowserSession {
   }
 
   /** Tool-call telemetry (name, duration, outcome) for observability. */
-  logTool(entry: { name: string; ms: number; ok: boolean; error?: string; blocked?: string }) {
+  logTool(entry: { name: string; ms: number; ok: boolean; error?: string; blocked?: 'persona' | 'selection' | 'guardrail' | 'budget' | 'process' }) {
     this.log({ kind: 'tool', ...entry });
   }
 
@@ -326,6 +328,42 @@ export class BrowserSession {
     return `Pressed ${key}. Focus: ${focused ?? 'body'}`;
   }
 
+  /**
+   * Keyboard focus walk: presses Tab (or Shift+Tab) up to `steps` times and checks every stop for an invisible
+   * focus indicator, focus hidden under fixed/sticky bars, and focus escaping an open dialog. Each problem becomes a
+   * candidate whose replay steps end at that Tab stop.
+   */
+  async checkFocus(opts: { steps?: number; reverse?: boolean } = {}) {
+    const n = Math.max(1, Math.min(40, opts.steps ?? 15));
+    const key = opts.reverse ? 'Shift+Tab' : 'Tab';
+    this.tagStrategy('chaos.keyboard');
+    const order: string[] = [];
+    const found: { id: string; c: Candidate; stop: number }[] = [];
+    let lostAt: number | null = null;
+    for (let i = 1; i <= n; i++) {
+      const step: Step = { action: 'press', key };
+      await this.driver.apply(step);
+      this.record(step);
+      await this.page.waitForTimeout(60);
+      await ensureDetectors(this.page);
+      const sel = (await this.page.evaluate('document.activeElement && document.activeElement !== document.body ? window.__bugbash.selectorFor(document.activeElement) : null').catch(() => null)) as string | null;
+      if (!sel) {
+        lostAt ??= i;
+        if (order.length) break; // focus left the page content (end of the tab order)
+        continue;
+      }
+      if (order.length > 2 && sel === order[0]) break; // wrapped around
+      order.push(sel);
+      const cands = ((await this.page.evaluate('window.__bugbash.detectFocus()').catch(() => [])) as Candidate[]).filter(Boolean);
+      for (const s of this.storeCandidates(cands)) found.push({ ...s, stop: i });
+    }
+    await this.afterAction();
+    const lines = [`Focus walk: ${order.length} stop(s) with ${key}${lostAt ? ` (focus on <body> at press ${lostAt})` : ''}.`, `Order: ${order.slice(0, 20).join(' → ')}${order.length > 20 ? ' …' : ''}`];
+    if (!found.length) lines.push('No focus problems detected at these stops.');
+    else lines.push('Candidates (verify on a screenshot, then record_finding with candidate_id):', ...found.map(({ id, c, stop }) => `  ${id} ${c.type} conf=${c.confidence} at Tab stop ${stop}: ${c.selector} "${c.text.slice(0, 40)}" — ${c.message}`));
+    return lines.join('\n');
+  }
+
   async scroll(to: 'top' | 'bottom' | 'right' | 'left' | { x: number; y: number }) {
     const pos = (await this.page.evaluate((t) => {
       const d = document.documentElement;
@@ -535,6 +573,7 @@ export class BrowserSession {
     ref?: string;
     hypothesis?: string;
     strategy?: string;
+    category?: 'layout' | 'ux-functional';
     seeded_by_code_intel?: boolean;
     temporal?: boolean;
   }) {
@@ -545,7 +584,18 @@ export class BrowserSession {
       // Reproduce the environment the candidate was seen in.
       if ((cand.variant.device ?? null) !== (this.driver.variant.device ?? null)) await this.setDevice(cand.variant.device ?? 'none');
       if (cand.viewport.width !== this.driver.viewport.width || cand.viewport.height !== this.driver.viewport.height) await this.resize(cand.viewport.width, cand.viewport.height);
+      // Focus-walk candidates: put focus back on that stop (as the browser would after Tab) for the screenshot.
+      if (FOCUS_TYPES.has(cand.candidate.type) && cand.candidate.selector)
+        await this.page
+          .evaluate((sel) => {
+            const el = document.querySelector(sel) as HTMLElement | null;
+            el?.scrollIntoView({ block: 'center' });
+            el?.focus({ preventScroll: true });
+          }, cand.candidate.selector)
+          .catch(() => {});
     }
+    // A focus-walk candidate is reproduced by the steps up to its Tab stop, not by the rest of the walk.
+    const trace = cand && FOCUS_TYPES.has(cand.candidate.type) ? this.trace.slice(0, cand.traceLength) : [...this.trace];
     let element: RawFinding['element'] = { selector: null, text: null, bbox: null, signature: null };
     const sel = cand?.candidate.selector ?? (input.ref ? await this.resolve(input.ref).catch(() => null) : null);
     if (sel) {
@@ -560,6 +610,7 @@ export class BrowserSession {
       session: this.opts.session,
       persona: this.opts.persona,
       type: input.type,
+      category: input.category ?? categoryOf(input.type),
       title: input.title,
       description: input.description,
       severity: input.severity,
@@ -573,7 +624,7 @@ export class BrowserSession {
       element,
       detector: cand ? { type: cand.candidate.type, confidence: cand.candidate.confidence, metrics: { ...cand.candidate.metrics, message: cand.candidate.message, related: cand.candidate.related } } : null,
       temporal_signals: temporal,
-      trace: [...this.trace],
+      trace,
       screenshot: shot,
       at: new Date().toISOString(),
     });

@@ -156,3 +156,32 @@ describe('BrowserSession exploration + replay', () => {
     await driver.close();
   });
 });
+
+describe('check_focus (keyboard focus walk)', () => {
+  let lab: ResolvedTarget;
+  beforeAll(async () => {
+    lab = await resolveTarget('fixtures/detector-lab');
+  });
+  afterAll(async () => lab?.stop());
+
+  it('walks the tab order, records an invisible-focus finding, and triage replay reproduces it', async () => {
+    const { replayAndCheck } = await import('../src/triage/replay.js');
+    const runDir = mkdtempSync(join(tmpdir(), 'bb-focus-'));
+    const s = new BrowserSession({ runDir, session: 's-001', baseUrl: lab.baseUrl, browser: 'chromium', persona: null, config, viewport: { width: 1280, height: 800 }, startPath: '/focus.html' });
+    await s.start();
+    const out = await s.checkFocus({ steps: 6 });
+    expect(out).toMatch(/Order: .*good-ring.*no-ring/);
+    const line = out.split('\n').find((l) => /focus-invisible/.test(l) && /no-ring/.test(l));
+    expect(line).toBeTruthy();
+    expect(out).toMatch(/focus-obscured .*deep-link/);
+    const candId = line!.trim().split(' ')[0];
+    expect(await s.recordFinding({ type: 'focus-invisible', title: 'No focus ring on "No focus ring" button', description: 'x', severity: 'major', confidence: 0.9, candidate_id: candId, strategy: 'chaos.keyboard', hypothesis: 'outline:none on buttons hides keyboard focus' })).toMatch(/Recorded finding/);
+    await s.close();
+
+    const f = RawFinding.parse(JSON.parse(readFileSync(join(runDir, 'agent-findings.jsonl'), 'utf8').trim().split('\n')[0]));
+    expect(f.category).toBe('layout');
+    expect(f.trace.filter((st) => st.action === 'press' && st.key === 'Tab').length).toBe(2); // trimmed to the offending stop
+    const r = await replayAndCheck(f.trace, { type: f.type, selector: f.element.selector, relatedSelector: null, signature: f.element.signature }, { baseUrl: lab.baseUrl, browser: 'chromium', initialViewport: { width: 1280, height: 800 }, guardrails: config.guardrails });
+    expect(r.presence).toBe('present');
+  });
+});

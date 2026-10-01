@@ -19,7 +19,11 @@ export const STRATEGIES = {
   'chaos.multi-open': 'Open several menus/popovers at once',
   'chaos.hover-transition': 'Hover during transitions / move pointer across gaps',
   'chaos.scroll-extremes': 'Scroll to top/bottom/far edges',
-  'chaos.keyboard': 'Keyboard-only: Tab/Shift-Tab/Enter/Escape, focus visibility & traps',
+  'chaos.keyboard': 'Keyboard-only: Tab/Shift-Tab/Enter/Escape, focus visibility & traps (check_focus walks the tab order)',
+  'overlay.fit': 'Open dialogs/menus/popovers on short or narrow viewports: do they fit, scroll, and keep focus inside?',
+  'touch.hover-only': 'On a touch device, reach hover-only menus/tooltips by tapping; check overlapping tap targets and scroll traps',
+  'visual.contrast': 'Text contrast in light and dark mode, on images and tinted surfaces',
+  'visual.polish': 'Alignment in rows/grids, stretched images, truncated text with no way to read it',
   'nav.back-forward': 'Back/forward in the middle of a flow',
   'nav.reload-mid-flow': 'Reload mid-form / mid-flow',
   'nav.deep-link': 'Deep-link straight to an inner route',
@@ -74,6 +78,8 @@ export function strategiesOfCall(tool: string, args: Record<string, unknown>, de
       return ['size.devices'];
     case 'press':
       return /^(Tab|Shift\+Tab|Escape)$/.test(String(args.key ?? '')) ? ['chaos.keyboard'] : [];
+    case 'check_focus':
+      return ['chaos.keyboard'];
     default:
       return [];
   }
