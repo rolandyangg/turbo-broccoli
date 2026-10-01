@@ -32,7 +32,11 @@ app.post('/workspaces', async (c) => {
 });
 
 app.get('/runs', (c) => c.json(listAllRuns()));
-app.get('/dashboard', (c) => c.json(dashboard()));
+app.get('/dashboard', (c) => {
+  const ws = c.req.query('ws');
+  const run = c.req.query('run');
+  return c.json(dashboard(ws && run ? { ws, run } : null));
+});
 
 app.get('/runs/:ws/:run', (c) => {
   const w = workspaceById(c.req.param('ws'));
