@@ -2,6 +2,8 @@ import type { Finding } from './types.ts';
 
 export const SEV_ORDER = { critical: 0, major: 1, minor: 2, cosmetic: 3 } as const;
 export const ACTIVE = ['new', 'confirmed', 'fixing'];
+/** Mirrors categoryOf() in the agent schema: behaviour bugs are kept apart from layout bugs. */
+export const categoryOf = (f: { type: string; category?: string | null }) => f.category ?? (f.type === 'broken-state' || f.type === 'console-error' ? 'ux-functional' : 'layout');
 
 export function widthRange(f: Pick<Finding, 'viewports'>) {
   const ws = [...new Set(f.viewports.map((v) => v.width))].sort((a, b) => a - b);

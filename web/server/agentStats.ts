@@ -345,6 +345,7 @@ export function runAgentStats(dir: string) {
     guardrail_blocks: blockedOf('guardrail'),
     persona_refusals: blockedOf('persona'),
     selection_refusals: blockedOf('selection'),
+    hypothesis_checkins: blockedOf('process'),
     budget_exhausted: explorers.filter((e) => readLines(join(dir, 'sessions', `${e.id}.jsonl`)).some((x) => x.kind === 'tool' && x.blocked === 'budget')).length,
     reviewer_unavailable: triage.reviewer.unavailable,
     tool_logging: timed,

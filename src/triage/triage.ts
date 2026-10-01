@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import pLimit from 'p-limit';
 import { Config } from '../config.js';
-import { Finding, RawFinding, type RootCauseGroup, type Step } from '../store/schema.js';
+import { Finding, RawFinding, categoryOf, type RootCauseGroup, type Step } from '../store/schema.js';
 import { readRun, writeRun, writeFindings, readFindings, allFindings } from '../store/store.js';
 import { clusterFindings, type Cluster } from './cluster.js';
 import { BrowserPool, replay, replayAndCheck as replayAndCheckRaw, minimize, checkPresence, DETECTABLE, type DefectSpec } from './replay.js';
@@ -265,6 +265,7 @@ async function triageCluster(
     id,
     fingerprint: c.fingerprint,
     type: rep.type,
+    category: rep.category ?? categoryOf(rep.type),
     title: rep.title,
     description: rep.description,
     severity: rep.severity,

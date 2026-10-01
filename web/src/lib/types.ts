@@ -20,7 +20,7 @@ export interface RunSummary {
   sessions: number;
   triaged: boolean;
   live: boolean;
-  counts: { total: number; active: number; groups: number; by_severity: Record<string, number>; by_status: Record<string, number>; with_video: number };
+  counts: { total: number; active: number; functional?: number; groups: number; by_severity: Record<string, number>; by_status: Record<string, number>; with_video: number };
   raw_findings: number;
 }
 

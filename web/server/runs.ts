@@ -3,9 +3,11 @@ import { join } from 'node:path';
 import { readRun, readFindings, allFindings, type RunInfo } from '../../src/store/store.ts';
 import { mergeAll, summarize } from '../../src/explore/coverage.ts';
 import { Config } from '../../src/config.ts';
-import type { Finding, FindingsFile } from '../../src/store/schema.ts';
+import { categoryOf, type Finding, type FindingsFile } from '../../src/store/schema.ts';
 import { workspaces, readJsonSafe, mtime, HttpError } from './workspaces.ts';
 import { listJobs } from './jobs.ts';
+
+export const isFunctional = (f: Pick<Finding, 'type' | 'category'>) => (f.category ?? categoryOf(f.type)) === 'ux-functional';
 
 const ACTIVE = new Set(['new', 'confirmed', 'fixing']);
 
@@ -26,7 +28,7 @@ export interface RunSummary {
   sessions: number;
   triaged: boolean;
   live: boolean;
-  counts: { total: number; active: number; groups: number; by_severity: Record<string, number>; by_status: Record<string, number>; with_video: number };
+  counts: { total: number; active: number; functional: number; groups: number; by_severity: Record<string, number>; by_status: Record<string, number>; with_video: number };
   raw_findings: number;
 }
 
@@ -52,7 +54,9 @@ export function summarizeRun(wsIdV: string, wsPath: string, run: string): RunSum
   const ff = safeFindings(dir);
   const fs = ff ? allFindings(ff) : [];
   const by = (k: (f: Finding) => string, pool = fs) => pool.reduce<Record<string, number>>((a, f) => ((a[k(f)] = (a[k(f)] ?? 0) + 1), a), {});
-  const active = fs.filter((f) => ACTIVE.has(f.status));
+  // Functional (behaviour) bugs are tracked separately and left out of the main layout-bug counts.
+  const active = fs.filter((f) => ACTIVE.has(f.status) && !isFunctional(f));
+  const functional = fs.filter((f) => ACTIVE.has(f.status) && isFunctional(f)).length;
   const jobs = listJobs({ runDir: dir });
   return {
     ws: wsIdV,
@@ -70,7 +74,7 @@ export function summarizeRun(wsIdV: string, wsPath: string, run: string): RunSum
     sessions: (info.jobs as unknown[])?.length || readJsonSafe<{ jobs?: unknown[] }>(join(dir, 'campaign.json'), {}).jobs?.length || 0,
     triaged: !!ff,
     live: isLive(dir, jobs),
-    counts: { total: fs.length, active: active.length, groups: ff?.groups.length ?? 0, by_severity: by((f) => f.severity, active), by_status: by((f) => f.status), with_video: fs.filter((f) => f.video).length },
+    counts: { total: fs.length, active: active.length, functional, groups: ff?.groups.length ?? 0, by_severity: by((f) => f.severity, active), by_status: by((f) => f.status), with_video: fs.filter((f) => f.video).length },
     raw_findings: countLines(join(dir, 'agent-findings.jsonl')),
   };
 }

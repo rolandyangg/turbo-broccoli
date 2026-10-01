@@ -10,7 +10,7 @@ import { JobStateChip } from '../components/Jobs.tsx';
 import { LauncherDialog } from '../components/Launcher.tsx';
 
 interface Dashboard {
-  kpis: { active: number; critical: number; major: number; fixing: number; fixed: number; false_positive: number; targets: number; runs: number; running_jobs: number; with_video: number };
+  kpis: { active: number; functional: number; critical: number; major: number; fixing: number; fixed: number; false_positive: number; targets: number; runs: number; running_jobs: number; with_video: number };
   severity: { key: string; count: number }[];
   pipeline: { key: string; count: number }[];
   by_type: { key: string; count: number }[];
@@ -157,7 +157,7 @@ export function DashboardView({ scope, header }: { scope: DashScope; header?: (d
           {scope && !data.scope?.triaged && <div className="empty" style={{ marginTop: 16 }}>This run hasn't been triaged yet, so bug counts are empty. Triage it from the run page.</div>}
 
           <div className="stats" style={{ marginTop: 20 }}>
-            <Stat n={k.active} label="Active bugs" sub={`${k.with_video} with video`} />
+            <Stat n={k.active} label="Active bugs" sub={`${k.with_video} with video${k.functional ? ` · +${k.functional} functional` : ''}`} />
             <Stat n={k.critical} label="Critical" color="var(--sev-critical)" />
             <Stat n={k.major} label="Major" color="var(--sev-major)" />
             <Stat n={k.fixing} label="Being fixed" color="var(--green)" />

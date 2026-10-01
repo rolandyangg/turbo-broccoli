@@ -143,6 +143,7 @@ interface RunStats {
     guardrail_blocks: number;
     persona_refusals: number;
     selection_refusals: number;
+    hypothesis_checkins?: number;
     budget_exhausted: number;
     reviewer_unavailable: number;
     tool_logging: boolean;
@@ -320,6 +321,8 @@ function RunAgents({ s, acc }: { s: RunStats; acc: Accuracy }) {
             <dd>{s.reliability.persona_refusals}</dd>
             <dt>Selection refusals</dt>
             <dd>{s.reliability.selection_refusals}</dd>
+            <dt>Hypothesis check-ins forced</dt>
+            <dd>{s.reliability.hypothesis_checkins ?? 0}</dd>
             <dt>Budget exhausted</dt>
             <dd>{s.reliability.budget_exhausted} sessions</dd>
             <dt>Reviewer unavailable</dt>

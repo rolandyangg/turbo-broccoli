@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { api, useApi } from '../lib/api.ts';
 import type { CampaignJob, Finding, JobView, RunDetail } from '../lib/types.ts';
-import { ACTIVE, SEV_ORDER, dateTime, duration, targetName } from '../lib/format.ts';
+import { ACTIVE, SEV_ORDER, categoryOf, dateTime, duration, targetName } from '../lib/format.ts';
 import { Chamfer, Chip, ErrorBox, Loading, Section, Stat, Tabs, useToast } from '../components/ui.tsx';
 import { BugCard } from '../components/BugCard.tsx';
 import { FixDialog } from '../components/Actions.tsx';
@@ -16,7 +16,7 @@ export function Run() {
   const { ws = '', run = '' } = useParams();
   const { data, error, reload } = useApi<RunDetail>(`/runs/${ws}/${encodeURIComponent(run)}`, { pollMs: 6000 });
   const [tab, setTab] = useState<Tab>('overview');
-  const [f, setF] = useState({ status: 'active', sev: '', type: '', browser: '', persona: '', minConf: 0, q: '' });
+  const [f, setF] = useState({ status: 'active', cat: 'layout', sev: '', type: '', browser: '', persona: '', minConf: 0, q: '' });
   const [sel, setSel] = useState<string[]>([]);
   const [fix, setFix] = useState<{ ids: string[]; title: string } | null>(null);
   const toast = useToast();
@@ -25,6 +25,7 @@ export function Run() {
   const all = useMemo(() => data?.findings?.groups.flatMap((g) => g.findings) ?? [], [data]);
   const match = (x: Finding) =>
     (f.status === 'active' ? ACTIVE.includes(x.status) : !f.status || x.status === f.status) &&
+    (!f.cat || categoryOf(x) === f.cat) &&
     (!f.sev || x.severity === f.sev) &&
     (!f.type || x.type === f.type) &&
     (!f.browser || x.browsers.includes(f.browser as never)) &&
@@ -36,7 +37,8 @@ export function Run() {
   if (!data) return <Loading what="Loading run" />;
   const s = data.summary;
   const uniq = (xs: (string | null | undefined)[]) => [...new Set(xs.filter(Boolean) as string[])].sort();
-  const active = all.filter((x) => ACTIVE.includes(x.status));
+  const active = all.filter((x) => ACTIVE.includes(x.status) && categoryOf(x) === 'layout');
+  const functional = all.filter((x) => ACTIVE.includes(x.status) && categoryOf(x) === 'ux-functional').length;
   const groups = (data.findings?.groups ?? []).map((g) => ({ ...g, shown: g.findings.filter(match) })).filter((g) => g.shown.length);
   const campaign = data.campaign;
   const liveJobs = data.jobs.filter((j) => j.state === 'running' && j.alive);
@@ -84,7 +86,7 @@ export function Run() {
       </div>
 
       <div className="stats" style={{ marginTop: 22 }}>
-        <Stat n={active.length} label="Active findings" />
+        <Stat n={active.length} label="Active findings" sub={functional ? `+${functional} functional (filtered out)` : undefined} />
         <Stat n={active.filter((x) => x.severity === 'critical').length} label="Critical" color="var(--sev-critical)" />
         <Stat n={active.filter((x) => x.severity === 'major').length} label="Major" color="var(--sev-major)" />
         <Stat n={active.filter((x) => x.severity === 'minor').length} label="Minor" color="var(--sev-minor)" />
@@ -128,6 +130,11 @@ export function Run() {
                 {uniq(all.map((x) => x.status)).map((x) => (
                   <option key={x}>{x}</option>
                 ))}
+              </select>
+              <select className="select" value={f.cat} onChange={(e) => setF({ ...f, cat: e.target.value })} aria-label="Category">
+                <option value="layout">Layout bugs</option>
+                <option value="ux-functional">Functional bugs ({functional})</option>
+                <option value="">All categories</option>
               </select>
               <select className="select" value={f.sev} onChange={(e) => setF({ ...f, sev: e.target.value })} aria-label="Severity">
                 <option value="">All severities</option>

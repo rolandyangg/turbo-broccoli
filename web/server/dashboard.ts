@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { readFindings, allFindings } from '../../src/store/store.ts';
 import type { Finding } from '../../src/store/schema.ts';
-import { listAllRuns, type RunSummary } from './runs.ts';
+import { isFunctional, listAllRuns, type RunSummary } from './runs.ts';
 import { listJobs } from './jobs.ts';
 import { HttpError } from './workspaces.ts';
 
@@ -9,7 +9,7 @@ const ACTIVE = new Set(['new', 'confirmed', 'fixing']);
 const SEV = ['critical', 'major', 'minor', 'cosmetic'] as const;
 
 export interface Dashboard {
-  kpis: { active: number; critical: number; major: number; fixing: number; fixed: number; false_positive: number; targets: number; runs: number; running_jobs: number; with_video: number };
+  kpis: { active: number; functional: number; critical: number; major: number; fixing: number; fixed: number; false_positive: number; targets: number; runs: number; running_jobs: number; with_video: number };
   severity: { key: string; count: number }[];
   pipeline: { key: string; count: number }[];
   by_type: { key: string; count: number }[];
@@ -51,17 +51,19 @@ export function dashboard(only: { ws: string; run: string } | null = null): Dash
     const ff = latest.triaged ? readFindings(join(latest.ws_path, 'runs', latest.run)) : null;
     const fs = ff ? allFindings(ff) : [];
     for (const f of fs) current.push({ f, r: latest });
-    const act = fs.filter((f) => ACTIVE.has(f.status));
+    const act = fs.filter((f) => ACTIVE.has(f.status) && !isFunctional(f));
     targets.push({ target, latest, runs: rs.length, active: act.length, critical: act.filter((f) => f.severity === 'critical').length, major: act.filter((f) => f.severity === 'major').length });
   }
   const multiTarget = byTarget.size > 1;
-  const active = current.filter(({ f }) => ACTIVE.has(f.status));
+  const active = current.filter(({ f }) => ACTIVE.has(f.status) && !isFunctional(f));
+  const functional = current.filter(({ f }) => ACTIVE.has(f.status) && isFunctional(f)).length;
   const jobs = scoped ? listJobs({ runDir: join(scoped.ws_path, 'runs', scoped.run) }) : listJobs();
   const sevRank = (s: string) => SEV.indexOf(s as (typeof SEV)[number]);
 
   return {
     kpis: {
       active: active.length,
+      functional,
       critical: active.filter(({ f }) => f.severity === 'critical').length,
       major: active.filter(({ f }) => f.severity === 'major').length,
       fixing: current.filter(({ f }) => f.status === 'fixing').length,
