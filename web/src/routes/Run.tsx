@@ -7,13 +7,14 @@ import { Chamfer, Chip, ErrorBox, Loading, Section, Stat, Tabs, useToast } from 
 import { BugCard } from '../components/BugCard.tsx';
 import { FixDialog } from '../components/Actions.tsx';
 import { JobsTable } from '../components/Jobs.tsx';
+import { DashboardView } from './Dashboard.tsx';
 
-type Tab = 'bugs' | 'campaign' | 'coverage' | 'hypotheses' | 'intel' | 'jobs';
+type Tab = 'overview' | 'bugs' | 'campaign' | 'coverage' | 'hypotheses' | 'intel' | 'jobs';
 
 export function Run() {
   const { ws = '', run = '' } = useParams();
   const { data, error, reload } = useApi<RunDetail>(`/runs/${ws}/${encodeURIComponent(run)}`, { pollMs: 6000 });
-  const [tab, setTab] = useState<Tab>('bugs');
+  const [tab, setTab] = useState<Tab>('overview');
   const [f, setF] = useState({ status: 'active', sev: '', type: '', browser: '', persona: '', minConf: 0, q: '' });
   const [sel, setSel] = useState<string[]>([]);
   const [fix, setFix] = useState<{ ids: string[]; title: string } | null>(null);
@@ -98,6 +99,7 @@ export function Run() {
           value={tab}
           onChange={setTab}
           tabs={[
+            { id: 'overview', label: 'Overview' },
             { id: 'bugs', label: `Bugs (${all.length})` },
             { id: 'campaign', label: 'Campaign' },
             { id: 'coverage', label: 'Coverage' },
@@ -209,6 +211,7 @@ export function Run() {
         </>
       )}
 
+      {tab === 'overview' && <DashboardView scope={{ ws, run }} />}
       {tab === 'campaign' && <CampaignTab data={data} />}
       {tab === 'coverage' && <CoverageTab data={data} />}
       {tab === 'hypotheses' && <HypothesesTab data={data} />}

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link } from 'react-router';
+import { useState, type ReactNode } from 'react';
+import { Link, useSearchParams } from 'react-router';
 import { fileUrl, useApi } from '../lib/api.ts';
 import type { JobView, RunSummary } from '../lib/types.ts';
 import { ago, pct, targetName } from '../lib/format.ts';
@@ -19,6 +19,70 @@ interface Dashboard {
   attention: { id: string; ws: string; run: string; target: string; title: string; severity: string; status: string; type: string; page: string; confidence: number; thumb: string | null; widths: number[]; browsers: string[] }[];
   targets: { target: string; latest: RunSummary; runs: number; active: number; critical: number; major: number }[];
   jobs: JobView[];
+  scope: { ws: string; run: string; target: string; started_at: string; triaged: boolean; name?: string | null } | null;
+  runs: { ws: string; run: string; target: string; target_key: string; started_at: string; triaged: boolean; active: number; name?: string | null }[];
+}
+
+export type DashScope = { ws: string; run: string } | null;
+
+const shortDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+export const runLabel = (r: { run: string; started_at: string; name?: string | null }) => r.name || shortDate(r.started_at);
+
+/** Dashboard page: run filter (kept in the URL as ?run=ws/run) above the scoped dashboard. */
+export function Dashboard() {
+  const [params, setParams] = useSearchParams();
+  const sel = params.get('run');
+  const scope: DashScope = sel && sel.includes('/') ? { ws: sel.split('/')[0], run: sel.split('/').slice(1).join('/') } : null;
+  return (
+    <DashboardView
+      scope={scope}
+      header={(data) => (
+        <div className="run-head spread" style={{ alignItems: 'flex-end' }}>
+          <div>
+            <div className="label">{scope ? `Run · ${targetName(data.scope?.target ?? '')}` : 'Overview · latest triaged run of each target'}</div>
+            <h1 className="page-title">Dashboard</h1>
+          </div>
+          <div className="row">
+            {data.kpis.running_jobs > 0 && (
+              <Link to="/jobs">
+                <Chip tone="green live">{data.kpis.running_jobs} running</Chip>
+              </Link>
+            )}
+            <RunFilter runs={data.runs} value={sel ?? ''} onChange={(v) => setParams(v ? { run: v } : {})} />
+            {scope && (
+              <Link className="btn-ghost" to={`/runs/${scope.ws}/${encodeURIComponent(scope.run)}`}>
+                Open run
+              </Link>
+            )}
+          </div>
+        </div>
+      )}
+    />
+  );
+}
+
+/** Select: all targets, or any single run grouped by target (newest first). */
+export function RunFilter({ runs, value, onChange }: { runs: Dashboard['runs']; value: string; onChange: (v: string) => void }) {
+  const byTarget = new Map<string, Dashboard['runs']>();
+  for (const r of runs) byTarget.set(r.target_key, [...(byTarget.get(r.target_key) ?? []), r]);
+  return (
+    <label className="row label" style={{ gap: 8 }}>
+      Run
+      <select className="select" value={value} onChange={(e) => onChange(e.target.value)} aria-label="Filter dashboard by run" style={{ maxWidth: 340 }}>
+        <option value="">All targets (latest run each)</option>
+        {[...byTarget.entries()].map(([key, rs]) => (
+          <optgroup key={key} label={targetName(rs[0].target)}>
+            {rs.map((r, i) => (
+              <option key={`${r.ws}/${r.run}`} value={`${r.ws}/${r.run}`}>
+                {i === 0 ? '★ ' : ''}
+                {runLabel(r)} · {r.triaged ? `${r.active} active` : 'not triaged'}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+    </label>
+  );
 }
 
 const SEVERITY: StackSeries[] = [
@@ -30,14 +94,16 @@ const SEVERITY: StackSeries[] = [
 
 const PIPELINE_LABEL: Record<string, string> = { new: 'New', confirmed: 'Confirmed', fixing: 'Being fixed', fixed: 'Fixed', low_confidence: 'Low confidence', flaky: 'Flaky', false_positive: 'False positive', suppressed: 'Suppressed' };
 
-export function Dashboard() {
-  const { data, error } = useApi<Dashboard>('/dashboard', { pollMs: 8000 });
+/** The dashboard body, scoped to all targets or one run. Used by the Dashboard page and the Run page's Overview tab. */
+export function DashboardView({ scope, header }: { scope: DashScope; header?: (data: Dashboard) => ReactNode }) {
+  const q = scope ? `/dashboard?ws=${scope.ws}&run=${encodeURIComponent(scope.run)}` : '/dashboard';
+  const { data, error } = useApi<Dashboard>(q, { pollMs: 8000 });
   const [launch, setLaunch] = useState(false);
   if (error) return <ErrorBox error={error} />;
   if (!data) return <Loading what="Loading dashboard" />;
   const k = data.kpis;
   const runHref = (d: { ws: string; run: string }) => `/runs/${d.ws}/${encodeURIComponent(d.run)}`;
-  const shortDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const selectedId = scope ? `${scope.ws}/${scope.run}` : null;
 
   if (!k.runs)
     return (
@@ -53,19 +119,8 @@ export function Dashboard() {
 
   return (
     <>
-      <div className="run-head spread" style={{ alignItems: 'flex-end' }}>
-        <div>
-          <div className="label">Overview · latest triaged run of each target</div>
-          <h1 className="page-title">Dashboard</h1>
-        </div>
-        <div className="row">
-          {k.running_jobs > 0 && (
-            <Link to="/jobs">
-              <Chip tone="green live">{k.running_jobs} running</Chip>
-            </Link>
-          )}
-        </div>
-      </div>
+      {header?.(data)}
+      {scope && !data.scope?.triaged && <div className="empty" style={{ marginTop: 16 }}>This run hasn't been triaged yet, so bug counts are empty. Triage it from the run page.</div>}
 
       <div className="stats" style={{ marginTop: 20 }}>
         <Stat n={k.active} label="Active bugs" sub={`${k.with_video} with video`} />
@@ -82,7 +137,7 @@ export function Dashboard() {
         <div className="span-2">
           <ChartCard
             title="Active bugs per run, by severity"
-            sub="Each column is one run (oldest → newest). Click a column to open the run."
+            sub={scope ? 'All runs of this target (oldest → newest); the selected run is highlighted. Click a column to open a run.' : 'Each column is one run (oldest → newest). Click a column to open the run.'}
             table={
               <DataTable
                 head={['Run', 'Target', 'Critical', 'Major', 'Minor', 'Cosmetic', 'Active']}
@@ -100,7 +155,7 @@ export function Dashboard() {
               />
             }
           >
-            <StackedColumns data={data.trend.map((t) => ({ ...t, id: `${t.ws}/${t.run}` }))} series={SEVERITY} xLabel={(d) => `${shortDate(String(d.at))} · ${targetName(String(d.target))}`} href={(d) => runHref(d as { ws: string; run: string })} />
+            <StackedColumns data={data.trend.map((t) => ({ ...t, id: `${t.ws}/${t.run}` }))} series={SEVERITY} highlight={selectedId} xLabel={(d) => `${runLabel({ run: String(d.run), started_at: String(d.at), name: (d as { name?: string }).name })} · ${targetName(String(d.target))}`} href={(d) => runHref(d as { ws: string; run: string })} />
           </ChartCard>
         </div>
         <ChartCard title="Severity of active bugs" table={<DataTable head={['Severity', 'Bugs']} rows={data.severity.map((s) => [s.key, s.count])} />}>
@@ -194,6 +249,8 @@ export function Dashboard() {
         </ChartCard>
       </div>
 
+      {!scope && (
+        <>
       <div className="spread" style={{ marginTop: 32 }}>
         <h2 className="h3" style={{ fontSize: 22 }}>
           Targets
@@ -240,6 +297,8 @@ export function Dashboard() {
           </div>
         ))}
       </div>
+        </>
+      )}
       <LauncherDialog open={launch} onClose={() => setLaunch(false)} />
     </>
   );

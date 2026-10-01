@@ -86,7 +86,7 @@ export interface StackSeries {
 }
 
 /** Stacked columns over time (e.g. active findings per run by severity). Legend always shown for ≥2 series. */
-export function StackedColumns({ data, series, xLabel, href, height = 200 }: { data: (Record<string, number | string | boolean> & { id: string })[]; series: StackSeries[]; xLabel: (d: Record<string, unknown>) => string; href?: (d: Record<string, unknown>) => string; height?: number }) {
+export function StackedColumns({ data, series, xLabel, href, height = 200, highlight = null }: { data: (Record<string, number | string | boolean | null | undefined> & { id: string })[]; series: StackSeries[]; xLabel: (d: Record<string, unknown>) => string; href?: (d: Record<string, unknown>) => string; height?: number; highlight?: string | null }) {
   const [tip, setTip] = useState<Tip | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const totals = data.map((d) => series.reduce((a, s) => a + (Number(d[s.key]) || 0), 0));
@@ -115,7 +115,7 @@ export function StackedColumns({ data, series, xLabel, href, height = 200 }: { d
           {data.map((d, i) => {
             const col = (
               <div
-                className={`col ${hover === d.id ? 'on' : ''}`}
+                className={`col ${hover === d.id ? 'on' : ''} ${highlight ? (highlight === d.id ? 'selected' : 'dim') : ''}`}
                 aria-label={`${xLabel(d)}: ${totals[i]} findings`}
                 onMouseMove={(e) => {
                   setHover(d.id);

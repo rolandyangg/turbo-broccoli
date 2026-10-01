@@ -100,4 +100,15 @@ describe('bugbash web API', () => {
     expect(await readUntil('event: end')).toBe(true);
     await reader.cancel();
   });
+
+  it('scopes the dashboard to one run and lists runs for the filter', async () => {
+    const all = await (await get('/dashboard')).json();
+    expect(all.scope).toBeNull();
+    expect(all.runs.some((r: { run: string }) => r.run === RUN)).toBe(true);
+    const one = await (await get(`/dashboard?ws=${wsId}&run=${RUN}`)).json();
+    expect(one.scope.run).toBe(RUN);
+    expect(one.kpis.active).toBe(1);
+    expect(one.kpis.targets).toBe(1);
+    expect((await get(`/dashboard?ws=${wsId}&run=nope`)).status).toBe(404);
+  });
 });

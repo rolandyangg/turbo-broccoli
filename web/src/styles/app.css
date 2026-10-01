@@ -689,6 +689,13 @@
 .col.on {
   background: var(--hatch-soft);
 }
+.col.dim .col-stack {
+  opacity: 0.35;
+}
+.col.selected {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
 .col-stack {
   width: 100%;
   display: flex;
