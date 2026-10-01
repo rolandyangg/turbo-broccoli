@@ -5,6 +5,8 @@ import { promisify } from 'node:util';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readRun, readFindings, findById, renameRun } from '../../src/store/store.ts';
+import { setWorkflow } from '../../src/store/workflow.ts';
+import { writeReport } from '../../src/store/report.ts';
 import { FindingStatus } from '../../src/store/schema.ts';
 import { Config, pickConfig } from '../../src/config.ts';
 import { PERSONA_REGISTRY } from '../../src/explore/personas.ts';
@@ -210,6 +212,23 @@ app.post('/runs/:ws/:run/label', async (c) => {
   if (b.pattern === false) args.push('--no-pattern');
   if (b.patternScope && /^(element|component|type-on-page)$/.test(b.patternScope)) args.push('--pattern-scope', b.patternScope);
   return c.json(await cli(args));
+});
+
+app.post('/runs/:ws/:run/workflow', async (c) => {
+  const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
+  const b = await c.req.json<{ ids: string[]; state?: string | null; archived?: boolean }>();
+  const ids = (b.ids ?? []).map((x) => String(x).toUpperCase());
+  if (!ids.length || ids.length > 500 || !ids.every((x) => /^BB-\d{3,5}$/.test(x))) throw new HttpError(400, 'ids must be BB- ids');
+  if (b.state !== undefined && b.state !== null && !['todo', 'in_progress', 'done'].includes(b.state)) throw new HttpError(400, 'state must be todo, in_progress, done or null');
+  if (b.archived !== undefined && typeof b.archived !== 'boolean') throw new HttpError(400, 'archived must be true or false');
+  if (b.state === undefined && b.archived === undefined) throw new HttpError(400, 'Nothing to change');
+  try {
+    const hits = setWorkflow(dir, ids, { ...(b.state !== undefined ? { state: b.state as 'todo' | 'in_progress' | 'done' | null } : {}), ...(b.archived !== undefined ? { archived: b.archived } : {}) });
+    writeReport(dir);
+    return c.json({ updated: hits.map((f) => ({ id: f.id, status: f.status, workflow: f.workflow })) });
+  } catch (e) {
+    throw new HttpError(/Unknown finding/.test((e as Error).message) ? 404 : 409, (e as Error).message);
+  }
 });
 
 app.post('/runs/:ws/:run/regroup', async (c) => {

@@ -7,6 +7,7 @@ import { Box, Chamfer, Chip, ConfidenceBar, CopyButton, ErrorBox, JsonView, Load
 import { ImageViewer, type ViewerImage } from '../components/ImageViewer.tsx';
 import { VideoPlayer, type Chapter } from '../components/VideoPlayer.tsx';
 import { FixDialog, LabelControls, ReproduceDialog } from '../components/Actions.tsx';
+import { WorkflowControls } from '../components/Workflow.tsx';
 import { BranchPanel, CancelButton, JobStateChip, JobTimeline } from '../components/Jobs.tsx';
 
 type Media = 'annotated' | 'crop' | 'full' | 'explorer' | 'video' | 'filmstrip' | 'after';
@@ -109,6 +110,12 @@ export function Bug() {
                   This run was made against a URL without <code>--repo</code>, so there's no code to fix.
                 </p>
               )}
+              <hr className="divider" style={{ margin: '4px 0' }} />
+              <div className="stack" style={{ ['--gap' as string]: '6px' }}>
+                <span className="label">Your progress</span>
+                <WorkflowControls ws={ws} run={run} f={f} onChanged={reload} />
+                {f.workflow?.archived && <span className="small muted">Archived{f.workflow.archived_at ? ` ${ago(f.workflow.archived_at)}` : ''}: it stays in this run's Archived tab and out of the active counts.</span>}
+              </div>
               <hr className="divider" style={{ margin: '4px 0' }} />
               <LabelControls ws={ws} run={run} id={f.id} status={f.status} groups={data.groups} currentGroup={data.group.id} onChanged={reload} />
             </div>

@@ -105,7 +105,7 @@ const SEVERITY: StackSeries[] = [
   { key: 'cosmetic', label: 'Cosmetic', color: 'var(--sev-cosmetic)' },
 ];
 
-const PIPELINE_LABEL: Record<string, string> = { new: 'New', confirmed: 'Confirmed', fixing: 'Being fixed', fixed: 'Fixed', low_confidence: 'Low confidence', flaky: 'Flaky', false_positive: 'False positive', suppressed: 'Suppressed' };
+const PIPELINE_LABEL: Record<string, string> = { new: 'New', confirmed: 'Confirmed', fixing: 'Being fixed', fixed: 'Fixed', low_confidence: 'Low confidence', flaky: 'Flaky', false_positive: 'False positive', suppressed: 'Suppressed', archived: 'Archived' };
 
 /** The dashboard body, scoped to all targets or one run. Used by the Dashboard page and the Run page's Overview tab. */
 export function DashboardView({ scope, header }: { scope: DashScope; header?: (data: Dashboard) => ReactNode }) {

@@ -45,7 +45,7 @@ function side(spec: string) {
   const groupOf = new Map<string, RootCauseGroup>();
   for (const g of ff.groups) for (const f of g.findings) groupOf.set(f.fingerprint, g);
   // Only findings that count (active or fixed); dismissed ones (false positive, flaky, …) don't take part.
-  const findings = allFindings(ff).filter((f) => ACTIVE.has(f.status) || f.status === 'fixed');
+  const findings = allFindings(ff).filter((f) => (ACTIVE.has(f.status) || f.status === 'fixed') && !f.workflow?.archived);
   return { ws, run, dir, info, findings, groupOf, stats: cachedRunStats(dir) };
 }
 

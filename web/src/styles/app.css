@@ -1378,3 +1378,105 @@
     display: none;
   }
 }
+
+/* Personal sorting: To do / In progress / Done + Archive */
+.wf {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wf-seg {
+  display: inline-flex;
+  border: 1px dashed var(--line);
+}
+.wf-btn {
+  all: unset;
+  cursor: pointer;
+  padding: 5px 10px;
+  font: 11px/1.4 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.wf-btn + .wf-btn {
+  border-left: 1px dashed var(--line);
+}
+.wf-btn:hover:not(:disabled) {
+  background: var(--panel-2);
+  color: var(--ink);
+}
+.wf-btn:focus-visible {
+  outline: 2px solid var(--green-ink);
+  outline-offset: -2px;
+}
+.wf-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.wf-btn.on {
+  background: var(--ink);
+  color: var(--on-ink);
+  font-weight: 700;
+}
+.wf-btn.on.done {
+  background: var(--green-ink);
+}
+.wf.compact .wf-btn {
+  padding: 4px 8px;
+  font-size: 10.5px;
+}
+.wf-archive {
+  font-size: 11px;
+}
+.bug-card-wf {
+  padding: 10px 16px;
+  border-top: 1px dashed var(--line-soft);
+}
+.wf-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+.wf-pill {
+  all: unset;
+  cursor: pointer;
+  padding: 6px 12px;
+  border: 1px dashed var(--line);
+  font: 12px/1.4 var(--font-mono);
+  color: var(--ink-2);
+}
+.wf-pill b {
+  margin-left: 6px;
+  color: var(--ink);
+}
+.wf-pill:hover {
+  background: var(--panel-2);
+}
+.wf-pill:focus-visible {
+  outline: 2px solid var(--green-ink);
+  outline-offset: 2px;
+}
+.wf-pill.on {
+  border-style: solid;
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--on-ink);
+}
+.wf-pill.on b {
+  color: var(--on-ink);
+}
+.sel-bar .wf-btn {
+  color: var(--on-ink);
+}
+.sel-bar .wf-seg {
+  border-color: color-mix(in srgb, var(--on-ink) 40%, transparent);
+}
+.sel-bar .wf-btn + .wf-btn {
+  border-left-color: color-mix(in srgb, var(--on-ink) 40%, transparent);
+}
+.sel-bar .wf-btn:hover {
+  background: color-mix(in srgb, var(--on-ink) 15%, transparent);
+  color: var(--on-ink);
+}

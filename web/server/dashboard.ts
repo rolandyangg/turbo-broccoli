@@ -51,12 +51,12 @@ export function dashboard(only: { ws: string; run: string } | null = null): Dash
     const ff = latest.triaged ? readFindings(join(latest.ws_path, 'runs', latest.run)) : null;
     const fs = ff ? allFindings(ff) : [];
     for (const f of fs) current.push({ f, r: latest });
-    const act = fs.filter((f) => ACTIVE.has(f.status) && !isFunctional(f));
+    const act = fs.filter((f) => ACTIVE.has(f.status) && !isFunctional(f) && !f.workflow?.archived);
     targets.push({ target, latest, runs: rs.length, active: act.length, critical: act.filter((f) => f.severity === 'critical').length, major: act.filter((f) => f.severity === 'major').length });
   }
   const multiTarget = byTarget.size > 1;
-  const active = current.filter(({ f }) => ACTIVE.has(f.status) && !isFunctional(f));
-  const functional = current.filter(({ f }) => ACTIVE.has(f.status) && isFunctional(f)).length;
+  const active = current.filter(({ f }) => ACTIVE.has(f.status) && !isFunctional(f) && !f.workflow?.archived);
+  const functional = current.filter(({ f }) => ACTIVE.has(f.status) && isFunctional(f) && !f.workflow?.archived).length;
   const jobs = scoped ? listJobs({ runDir: join(scoped.ws_path, 'runs', scoped.run) }) : listJobs();
   const sevRank = (s: string) => SEV.indexOf(s as (typeof SEV)[number]);
 
@@ -75,7 +75,10 @@ export function dashboard(only: { ws: string; run: string } | null = null): Dash
       with_video: active.filter(({ f }) => f.video).length,
     },
     severity: SEV.map((s) => ({ key: s, count: active.filter(({ f }) => f.severity === s).length })),
-    pipeline: ['new', 'confirmed', 'fixing', 'fixed', 'low_confidence', 'flaky', 'false_positive', 'suppressed'].map((s) => ({ key: s, count: current.filter(({ f }) => f.status === s).length })),
+    pipeline: [
+      ...['new', 'confirmed', 'fixing', 'fixed', 'low_confidence', 'flaky', 'false_positive', 'suppressed'].map((s) => ({ key: s, count: current.filter(({ f }) => f.status === s && !f.workflow?.archived).length })),
+      { key: 'archived', count: current.filter(({ f }) => f.workflow?.archived).length },
+    ],
     by_type: tally(active, ({ f }) => f.type),
     by_page: tally(active, ({ f, r }) => (multiTarget ? `${r.target_key.split('/').pop()}${f.page}` : f.page)),
     by_browser: tally(active, ({ f }) => f.browsers, 3),

@@ -10,8 +10,11 @@ import { JobsTable } from '../components/Jobs.tsx';
 import { DashboardView } from './Dashboard.tsx';
 import { RunName } from '../components/RunName.tsx';
 import { RetroButton } from './Improvements.tsx';
+import { WF_LABEL, isArchived, updateWorkflow, wfStateOf, type WfState } from '../components/Workflow.tsx';
 
-type Tab = 'overview' | 'bugs' | 'campaign' | 'coverage' | 'hypotheses' | 'intel' | 'jobs';
+const DISMISSED = ['false_positive', 'suppressed'];
+
+type Tab = 'overview' | 'bugs' | 'archived' | 'campaign' | 'coverage' | 'hypotheses' | 'intel' | 'jobs';
 
 export function Run() {
   const { ws = '', run = '' } = useParams();
@@ -19,13 +22,16 @@ export function Run() {
   const [tab, setTab] = useState<Tab>('overview');
   const [f, setF] = useState({ status: 'active', cat: 'layout', sev: '', type: '', browser: '', persona: '', minConf: 0, q: '' });
   const [sel, setSel] = useState<string[]>([]);
+  const [wf, setWf] = useState<'all' | WfState>('all');
   const [fix, setFix] = useState<{ ids: string[]; title: string } | null>(null);
   const toast = useToast();
   const nav = useNavigate();
 
   const all = useMemo(() => data?.findings?.groups.flatMap((g) => g.findings) ?? [], [data]);
-  const match = (x: Finding) =>
-    (f.status === 'active' ? ACTIVE.includes(x.status) : !f.status || x.status === f.status) &&
+  // Bugs the person can sort: not archived and not dismissed by triage or labels.
+  const sortable = (x: Finding) => !isArchived(x) && !DISMISSED.includes(x.status);
+  const statusOk = (x: Finding) => (f.status === 'active' ? ACTIVE.includes(x.status) : !f.status || x.status === f.status);
+  const base = (x: Finding) =>
     (!f.cat || categoryOf(x) === f.cat) &&
     (!f.sev || x.severity === f.sev) &&
     (!f.type || x.type === f.type) &&
@@ -33,13 +39,28 @@ export function Run() {
     (!f.persona || x.found_by.persona === f.persona) &&
     x.confidence >= f.minConf &&
     (!f.q || `${x.id} ${x.title} ${x.page} ${x.element.selector} ${x.description}`.toLowerCase().includes(f.q.toLowerCase()));
+  // Archived tab: only archived bugs. Bugs tab: a sort pill (to do / in progress / done / unsorted) takes over from
+  // the status filter; "All" keeps the status filter.
+  const match = (x: Finding) => base(x) && (tab === 'archived' ? isArchived(x) : !isArchived(x) && (wf === 'all' ? statusOk(x) : sortable(x) && wfStateOf(x) === wf));
 
   if (error) return <ErrorBox error={error} />;
   if (!data) return <Loading what="Loading run" />;
   const s = data.summary;
   const uniq = (xs: (string | null | undefined)[]) => [...new Set(xs.filter(Boolean) as string[])].sort();
-  const active = all.filter((x) => ACTIVE.includes(x.status) && categoryOf(x) === 'layout');
-  const functional = all.filter((x) => ACTIVE.includes(x.status) && categoryOf(x) === 'ux-functional').length;
+  const active = all.filter((x) => ACTIVE.includes(x.status) && categoryOf(x) === 'layout' && !isArchived(x));
+  const functional = all.filter((x) => ACTIVE.includes(x.status) && categoryOf(x) === 'ux-functional' && !isArchived(x)).length;
+  const archivedCount = all.filter(isArchived).length;
+  const wfCount = (st: WfState) => all.filter((x) => base(x) && sortable(x) && wfStateOf(x) === st).length;
+  const bulk = async (patch: Parameters<typeof updateWorkflow>[3], msg: string) => {
+    try {
+      await updateWorkflow(ws, run, sel, patch);
+      toast(msg);
+      setSel([]);
+      reload();
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  };
   const groups = (data.findings?.groups ?? []).map((g) => ({ ...g, shown: g.findings.filter(match) })).filter((g) => g.shown.length);
   const campaign = data.campaign;
   const liveJobs = data.jobs.filter((j) => j.state === 'running' && j.alive);
@@ -106,10 +127,11 @@ export function Run() {
       <div style={{ marginTop: 22 }}>
         <Tabs<Tab>
           value={tab}
-          onChange={setTab}
+          onChange={(t) => (setTab(t), setSel([]))}
           tabs={[
             { id: 'overview', label: 'Overview' },
-            { id: 'bugs', label: `Bugs (${all.length})` },
+            { id: 'bugs', label: `Bugs (${all.length - archivedCount})` },
+            { id: 'archived', label: `Archived (${archivedCount})` },
             { id: 'campaign', label: 'Campaign' },
             { id: 'coverage', label: 'Coverage' },
             { id: 'hypotheses', label: `Hypotheses (${data.hypotheses.length})` },
@@ -119,8 +141,23 @@ export function Run() {
         />
       </div>
 
-      {tab === 'bugs' && (
+      {(tab === 'bugs' || tab === 'archived') && (
         <>
+          {data.findings && tab === 'bugs' && (
+            <div className="wf-pills" role="group" aria-label="Sort by your progress">
+              {(['all', 'unsorted', 'todo', 'in_progress', 'done'] as const).map((k) => (
+                <button key={k} className={`wf-pill ${wf === k ? 'on' : ''}`} aria-pressed={wf === k} onClick={() => (setWf(k), setSel([]))}>
+                  {k === 'all' ? 'All' : WF_LABEL[k]}
+                  {k !== 'all' && <b>{wfCount(k)}</b>}
+                </button>
+              ))}
+            </div>
+          )}
+          {tab === 'archived' && (
+            <p className="small muted" style={{ margin: '16px 0 0' }}>
+              Archived bugs are kept with the run but left out of the active lists and counts. Unarchive one to put it back.
+            </p>
+          )}
           {!data.findings && (
             <div className="empty" style={{ marginTop: 20 }}>
               <p>
@@ -131,13 +168,15 @@ export function Run() {
           )}
           {data.findings && (
             <div className="filters">
-              <select className="select" value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} aria-label="Status">
-                <option value="active">Active</option>
-                <option value="">All statuses</option>
-                {uniq(all.map((x) => x.status)).map((x) => (
-                  <option key={x}>{x}</option>
-                ))}
-              </select>
+              {tab === 'bugs' && wf === 'all' && (
+                <select className="select" value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} aria-label="Status">
+                  <option value="active">Active</option>
+                  <option value="">All statuses</option>
+                  {uniq(all.map((x) => x.status)).map((x) => (
+                    <option key={x}>{x}</option>
+                  ))}
+                </select>
+              )}
               <select className="select" value={f.cat} onChange={(e) => setF({ ...f, cat: e.target.value })} aria-label="Category">
                 <option value="layout">Layout bugs</option>
                 <option value="ux-functional">Functional bugs ({functional})</option>
@@ -174,7 +213,11 @@ export function Run() {
               <input className="input" placeholder="Search id, title, selector…" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} style={{ flex: '1 1 200px' }} />
             </div>
           )}
-          {data.findings && !groups.length && <div className="empty" style={{ marginTop: 20 }}>No findings match these filters.</div>}
+          {data.findings && !groups.length && (
+            <div className="empty" style={{ marginTop: 20 }}>
+              {tab === 'archived' && !archivedCount ? 'Nothing archived yet. Use Archive on a bug (or select several) to move it here.' : 'No findings match these filters.'}
+            </div>
+          )}
           {groups.map((g) => {
             const worst = [...g.findings].sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity])[0]?.severity;
             return (
@@ -207,7 +250,7 @@ export function Run() {
                   </>
                 }
                 actions={
-                  g.findings.length > 1 && s.repo_path ? (
+                  tab === 'bugs' && g.findings.length > 1 && s.repo_path ? (
                     <Chamfer small tone="green" onClick={() => setFix({ ids: [g.id], title: g.summary })}>
                       Fix whole group
                     </Chamfer>
@@ -216,7 +259,7 @@ export function Run() {
               >
                 <div className="grid-2">
                   {g.shown.map((x) => (
-                    <BugCard key={x.id} f={x} ws={ws} run={run} selected={sel.includes(x.id)} onSelect={s.repo_path ? (on) => setSel((cur) => (on ? [...cur, x.id] : cur.filter((y) => y !== x.id))) : undefined} />
+                    <BugCard key={x.id} f={x} ws={ws} run={run} selected={sel.includes(x.id)} onSelect={(on) => setSel((cur) => (on ? [...cur, x.id] : cur.filter((y) => y !== x.id)))} onWorkflow={reload} />
                   ))}
                 </div>
               </Section>
@@ -238,13 +281,30 @@ export function Run() {
 
       {sel.length > 0 && (
         <div className="sel-bar">
-          <span className="mono small">{sel.join(', ')}</span>
-          <button className="btn-link" style={{ color: 'var(--white)' }} onClick={() => setSel([])}>
+          <span className="mono small">{sel.length} selected</span>
+          {tab === 'bugs' && (
+            <div className="wf-seg" role="group" aria-label="Move selected bugs">
+              {(['todo', 'in_progress', 'done'] as const).map((st) => (
+                <button key={st} className="wf-btn" onClick={() => bulk({ state: st }, `${sel.length} → ${WF_LABEL[st]}`)}>
+                  {WF_LABEL[st]}
+                </button>
+              ))}
+              <button className="wf-btn" onClick={() => bulk({ state: null }, `${sel.length} unsorted`)}>
+                Unsorted
+              </button>
+            </div>
+          )}
+          <button className="btn-link" style={{ color: 'var(--on-ink)' }} onClick={() => bulk({ archived: tab !== 'archived' }, tab === 'archived' ? `${sel.length} restored from the archive` : `${sel.length} archived`)}>
+            {tab === 'archived' ? 'Unarchive' : 'Archive'}
+          </button>
+          <button className="btn-link" style={{ color: 'var(--on-ink)' }} onClick={() => setSel([])}>
             Clear
           </button>
-          <Chamfer small tone="green" onClick={() => setFix({ ids: sel, title: `${sel.length} finding${sel.length > 1 ? 's' : ''} on one branch` })}>
-            Fix selected ({sel.length})
-          </Chamfer>
+          {tab === 'bugs' && s.repo_path && (
+            <Chamfer small tone="green" onClick={() => setFix({ ids: sel, title: `${sel.length} finding${sel.length > 1 ? 's' : ''} on one branch` })}>
+              Fix selected ({sel.length})
+            </Chamfer>
+          )}
         </div>
       )}
       {fix && (

@@ -291,4 +291,43 @@ describe('bugbash web API', () => {
     expect((await send('/schedules/deadbeef/enable', 'POST', {})).status).toBe(404);
     expect((await send('/schedules/..%2Fx/run', 'POST', {})).status).toBe(400);
   });
+
+  it('sorts bugs for the person (to do / in progress / done) and archives them without deleting', async () => {
+    const run = '2026-04-01T00-00-00Z';
+    const { Finding, SCHEMA_VERSION } = await import('../../src/store/schema.ts');
+    const { readFindings, allFindings } = await import('../../src/store/store.ts');
+    const dir = join(ws, 'runs', run);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'run.json'), JSON.stringify({ run_id: run, target: 'fixtures/x', base_url: 'http://127.0.0.1:1', target_kind: 'static', repo_path: null, workspace: ws, started_at: '2026-04-01T00:00:00Z', ended_at: null, head_commit: null, config: {}, stop_reason: 'test', lead_decisions: [], jobs: [], stages: {} }));
+    const mk = (id: string) => Finding.parse({ id, fingerprint: `wf-${id}`, type: 'overlap', title: id, confidence: 0.9, page: '/', status: 'confirmed', element: { selector: '.x', text: null, bbox: null, signature: null }, reproduction: { environment: { browser: 'chromium', viewport: { width: 700, height: 900 }, variant: {} } } });
+    writeFileSync(join(dir, 'findings.json'), JSON.stringify({ schemaVersion: SCHEMA_VERSION, run_id: run, target: 'fixtures/x', generated_at: 'now', groups: [{ id: 'RC-001', summary: 'g', component: null, css_rule: null, files: [], fix_plan: '', confidence: 0.5, status_rollup: {}, findings: [mk('BB-0101'), mk('BB-0102'), mk('BB-0103')] }] }));
+    const wf = (body: unknown) => app.request(`/api/runs/${wsId}/${run}/workflow`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const byId = () => Object.fromEntries(allFindings(readFindings(dir)!).map((f) => [f.id, f]));
+    const counts = async () => (await (await get('/runs')).json()).find((r: { run: string }) => r.run === run).counts;
+    expect((await counts()).active).toBe(3);
+
+    expect((await wf({ ids: ['BB-0101', 'BB-0102'], state: 'todo' })).status).toBe(200);
+    expect(byId()['BB-0101'].workflow.state).toBe('todo');
+    expect(byId()['BB-0101'].status).toBe('confirmed'); // to do doesn't touch the agent status
+
+    await wf({ ids: ['BB-0101'], state: 'done' });
+    expect(byId()['BB-0101']).toMatchObject({ status: 'fixed', workflow: { state: 'done', prev_status: 'confirmed' } });
+    expect((await counts()).active).toBe(2);
+    await wf({ ids: ['BB-0101'], state: 'in_progress' }); // moved back: status restored
+    expect(byId()['BB-0101']).toMatchObject({ status: 'confirmed', workflow: { state: 'in_progress', prev_status: null } });
+
+    await wf({ ids: ['BB-0103'], archived: true });
+    expect(byId()['BB-0103'].workflow.archived).toBe(true);
+    expect(byId()['BB-0103'].status).toBe('confirmed'); // still exists, untouched
+    expect(await counts()).toMatchObject({ active: 2, archived: 1, total: 3 });
+    await wf({ ids: ['BB-0103'], archived: false });
+    expect((await counts()).archived).toBe(0);
+    await wf({ ids: ['BB-0102'], state: null });
+    expect(byId()['BB-0102'].workflow.state).toBeNull();
+
+    expect((await wf({ ids: ['BB-9999'], state: 'todo' })).status).toBe(404);
+    expect((await wf({ ids: ['BB-0101'], state: 'later' })).status).toBe(400);
+    expect((await wf({ ids: ['BB-0101'] })).status).toBe(400);
+    expect((await wf({ ids: ['../x'], archived: true })).status).toBe(400);
+  });
 });
