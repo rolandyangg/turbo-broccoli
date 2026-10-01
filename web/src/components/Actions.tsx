@@ -182,7 +182,7 @@ export function LabelControls({ ws, run, id, status, groups, currentGroup, onCha
 }
 
 /** Opens a real browser window with the bug's environment and replays it (runs on this machine). */
-export function ReproduceDialog({ open, onClose, ws, run, id, env, onStarted }: { open: boolean; onClose: () => void; ws: string; run: string; id: string; env: { browser: string; viewport: { width: number; height: number }; device: string | null }; onStarted: (job: JobView) => void }) {
+export function ReproduceDialog({ open, onClose, ws, run, id, env, onStarted, branch }: { open: boolean; onClose: () => void; ws: string; run: string; id: string; env: { browser: string; viewport: { width: number; height: number }; device: string | null }; onStarted: (job: JobView) => void; branch?: string | null }) {
   const toast = useToast();
   const [mode, setMode] = useState<'full' | 'start'>('full');
   const [slow, setSlow] = useState(false);
@@ -193,7 +193,7 @@ export function ReproduceDialog({ open, onClose, ws, run, id, env, onStarted }: 
     <Dialog
       open={open}
       onClose={onClose}
-      title={`Reproduce ${id}`}
+      title={branch ? `Reproduce ${id} on the fixed version` : `Reproduce ${id}`}
       footer={
         <>
           <button className="btn-link" onClick={onClose}>
@@ -205,7 +205,7 @@ export function ReproduceDialog({ open, onClose, ws, run, id, env, onStarted }: 
             onClick={async () => {
               setBusy(true);
               try {
-                const job = await api<JobView>(`/runs/${ws}/${encodeURIComponent(run)}/bugs/${id}/reproduce`, { json: { mode, slow, browser: browser || undefined, guardrails } });
+                const job = await api<JobView>(`/runs/${ws}/${encodeURIComponent(run)}/bugs/${id}/reproduce`, { json: { mode, slow, browser: browser || undefined, guardrails, branch: branch ?? undefined } });
                 toast('Opening a browser window…');
                 onStarted(job);
                 onClose();
@@ -221,6 +221,11 @@ export function ReproduceDialog({ open, onClose, ws, run, id, env, onStarted }: 
         </>
       }
     >
+      {branch && (
+        <p className="small" style={{ margin: 0 }}>
+          Serves the app from the fix branch <span className="mono">{branch}</span> (its kept worktree, or a temporary checkout removed when you close the window) and replays the same steps, so you can check by hand whether the fix really worked.
+        </p>
+      )}
       <p className="small" style={{ margin: 0 }}>
         Opens a new <b>{browser || env.browser}</b> window on this machine {env.device ? <>emulating <b>{env.device}</b> (touch, mobile browser)</> : <>at <b>{env.viewport.width}×{env.viewport.height}</b></>} with the bug's settings, replays the steps with captions and highlights the bug. The window is then yours to click around in, and closing it ends the job.
       </p>
@@ -302,21 +307,36 @@ export interface FixRunDefaults {
  * Start a fix job in continue mode (pick up `branch` where it stopped: re-verify, more attempts only if needed,
  * commit, then publish) or retry mode (start over on a fresh branch). Pushing always needs fresh confirmation.
  */
-export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title, submitLabel, onClose }: { ws: string; run: string; ids: string[]; mode: 'continue' | 'retry'; branch?: string | null; defaults?: FixRunDefaults; title?: string; submitLabel?: string; onClose: () => void }) {
+export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title, submitLabel, onClose }: { ws: string; run: string; ids: string[]; mode: 'continue' | 'retry' | 'verify' | 'publish-anyway'; branch?: string | null; defaults?: FixRunDefaults; title?: string; submitLabel?: string; onClose: () => void }) {
   const nav = useNavigate();
   const toast = useToast();
   const opts = defaults;
-  const [pr, setPr] = useState(!!opts.pr);
+  const anyway = mode === 'publish-anyway';
+  const [pr, setPr] = useState(anyway || !!opts.pr);
   const [confirmPush, setConfirmPush] = useState(false);
+  const [confirmUnverified, setConfirmUnverified] = useState(false);
   const [attempts, setAttempts] = useState(Math.min(5, Math.max(1, opts.maxAttempts ?? 3)));
+  const [instructions, setInstructions] = useState('');
   const [busy, setBusy] = useState(false);
+  const apiMode = anyway ? 'continue' : mode;
   const start = async () => {
     setBusy(true);
     try {
       const j = await api<JobView>(`/runs/${ws}/${encodeURIComponent(run)}/fix`, {
-        json: { ids, mode, branch: mode === 'continue' ? (branch ?? undefined) : undefined, pr, draft: opts.draft !== false, base: opts.base ?? undefined, maxAttempts: attempts, confirmPush: pr ? confirmPush : undefined },
+        json: {
+          ids,
+          mode: apiMode,
+          branch: apiMode === 'continue' || apiMode === 'verify' ? (branch ?? undefined) : undefined,
+          pr: mode === 'verify' ? false : pr,
+          draft: opts.draft !== false,
+          base: opts.base ?? undefined,
+          maxAttempts: attempts,
+          confirmPush: pr ? confirmPush : undefined,
+          instructions: instructions.trim() || undefined,
+          ...(anyway ? { publishUnverified: true, confirmUnverified } : {}),
+        },
       });
-      toast(mode === 'continue' ? 'Continuing the fix' : 'Retrying the fix');
+      toast(mode === 'verify' ? 'Re-verifying the fix' : anyway ? 'Publishing the unverified fix' : mode === 'continue' ? 'Continuing the fix' : 'Retrying the fix');
       onClose();
       nav(`/jobs/${j.id}`);
     } catch (e) {
@@ -324,48 +344,72 @@ export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title,
       setBusy(false);
     }
   };
+  const blocked = busy || (pr && !confirmPush) || (anyway && !confirmUnverified);
   return (
     <Dialog
       open
       onClose={onClose}
-      title={title ?? (mode === 'continue' ? `Continue ${ids.join(', ')}` : `Retry ${ids.join(', ')}`)}
+      title={title ?? (mode === 'verify' ? `Re-verify ${ids.join(', ')}` : anyway ? `Publish ${ids.join(', ')} without full verification` : mode === 'continue' ? `Continue ${ids.join(', ')}` : `Retry ${ids.join(', ')}`)}
       footer={
         <>
           <button className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <Chamfer tone="green" onClick={start} disabled={busy || (pr && !confirmPush)}>
-            {busy ? 'Starting…' : pr && submitLabel ? submitLabel : mode === 'continue' ? 'Continue' : 'Retry'}
+          <Chamfer tone={anyway ? 'danger' : 'green'} onClick={start} disabled={blocked}>
+            {busy ? 'Starting…' : mode === 'verify' ? 'Re-verify' : anyway ? 'Publish anyway' : pr && submitLabel ? submitLabel : mode === 'continue' ? 'Continue' : 'Retry'}
           </Chamfer>
         </>
       }
     >
       <p className="small muted" style={{ margin: 0 }}>
-        {mode === 'continue' ? (
+        {mode === 'verify' ? (
           <>
-            Picks up <span className="mono">{branch}</span> where it stopped: re-checks the bug on the branch as it is, brings the fix agent back only if it's still there, commits anything uncommitted, then publishes if you ask.
+            Re-runs only the checks on <span className="mono">{branch}</span>: detector replays at every affected size and browser, a visual before/after review where detectors can't decide, and new after-fix pictures (and video for behaviour bugs). Nothing is changed, committed or pushed.
+          </>
+        ) : anyway ? (
+          <>
+            This fix is <b>not fully verified</b>. Publishing it anyway pushes <span className="mono">{branch}</span> and opens a PR that starts with a warning listing what couldn't be verified. Prefer sending the agent instructions or retrying verification.
+          </>
+        ) : mode === 'continue' ? (
+          <>
+            Picks up <span className="mono">{branch}</span> where it stopped: re-checks the bug on the branch as it is, brings the fix agent back if it's still there (or if you give it instructions), commits anything uncommitted, then publishes if you ask, but only once it's fully verified.
           </>
         ) : (
           <>Starts over from your base branch on a fresh branch{branch ? <> (the old <span className="mono">{branch}</span> is left as it is)</> : null}.</>
         )}
       </p>
-      <label className="field">
-        <span className="label">Max attempts{mode === 'continue' ? ' (if the bug is still there)' : ''}</span>
-        <select className="select" value={attempts} onChange={(e) => setAttempts(Number(e.target.value))}>
-          {[1, 2, 3, 4, 5].map((n) => (
-            <option key={n}>{n}</option>
-          ))}
-        </select>
-      </label>
-      <label className="check">
-        <input type="checkbox" checked={pr} onChange={(e) => setPr(e.target.checked)} /> Push the branch and open a {opts.draft !== false ? 'draft ' : ''}pull request
-      </label>
-      {pr && (
-        <label className="check" style={{ color: 'var(--sev-major)', paddingLeft: 24 }}>
+      {(mode === 'continue' || mode === 'retry') && (
+        <label className="field">
+          <span className="label">Instructions for the fix agent (optional)</span>
+          <textarea className="input" rows={3} value={instructions} onChange={(e) => setInstructions(e.target.value)} placeholder='e.g. "Keep the 1024px breakpoint; fix it inside the carousel instead"' />
+        </label>
+      )}
+      {mode !== 'verify' && !anyway && (
+        <label className="field">
+          <span className="label">Max attempts{mode === 'continue' ? ' (if the bug is still there)' : ''}</span>
+          <select className="select" value={attempts} onChange={(e) => setAttempts(Number(e.target.value))}>
+            {[1, 2, 3, 4, 5].map((n) => (
+              <option key={n}>{n}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {mode !== 'verify' && !anyway && (
+        <label className="check">
+          <input type="checkbox" checked={pr} onChange={(e) => setPr(e.target.checked)} /> <span>Push the branch and open a {opts.draft !== false ? 'draft ' : ''}pull request (only if it's fully verified)</span>
+        </label>
+      )}
+      {anyway && (
+        <label className="check" style={{ color: 'var(--err)' }}>
+          <input type="checkbox" checked={confirmUnverified} onChange={(e) => setConfirmUnverified(e.target.checked)} /> <span>I've checked the before/after myself and want to publish this unverified fix</span>
+        </label>
+      )}
+      {pr && mode !== 'verify' && (
+        <label className="check" style={{ color: 'var(--sev-major)', paddingLeft: anyway ? 0 : 24 }}>
           <input type="checkbox" checked={confirmPush} onChange={(e) => setConfirmPush(e.target.checked)} /> <span>I understand this pushes to <code>origin</code> and creates a PR visible to collaborators</span>
         </label>
       )}
-      {pr && <PrPicturesNote />}
+      {pr && mode !== 'verify' && <PrPicturesNote />}
     </Dialog>
   );
 }

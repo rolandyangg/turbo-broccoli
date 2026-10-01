@@ -9,7 +9,7 @@ interface PrRow {
   number: number | null;
   branch: string | null;
   run: { ws: string; run: string; name: string | null; target: string };
-  bugs: { id: string; title: string; severity: string; status: string; side_effect: boolean }[];
+  bugs: { id: string; title: string; severity: string; status: string; side_effect: boolean; verified: boolean; flags: string[] }[];
   jobs: { id: string; state: string; started_at: string; verified: boolean | null }[];
   opened_at: string | null;
   status: {
@@ -79,6 +79,7 @@ export function PrList({ scope }: { scope: { ws: string; run: string } | null })
               <div className="pr-head">
                 <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
                   <Chip tone={st.tone}>{st.label}</Chip>
+                  {p.bugs.some((b) => !b.verified) && <Chip tone="sev-major dot">not fully verified</Chip>}
                   <a href={p.url} target="_blank" rel="noreferrer" className="mono small">
                     {p.repo}#{p.number ?? '?'} ↗
                   </a>
@@ -118,6 +119,7 @@ export function PrList({ scope }: { scope: { ws: string; run: string } | null })
                         </Link>{' '}
                         <SevChip sev={b.severity} /> <span className="small">{b.title}</span>
                         {b.side_effect && <span className="small muted"> (fixed as a side effect)</span>}
+                        {!b.verified && <div className="small" style={{ color: 'var(--warn)' }}>⚠ {(b.flags[0] ?? 'not fully verified').replace(/^BB-\d+: /, '')}</div>}
                       </li>
                     ))}
                     {!p.bugs.length && <li className="small muted">—</li>}

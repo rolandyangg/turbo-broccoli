@@ -8,6 +8,8 @@ import { ImageViewer, type ViewerImage } from '../components/ImageViewer.tsx';
 import { VideoPlayer, type Chapter } from '../components/VideoPlayer.tsx';
 import { FixDialog, LabelControls, ReproduceDialog } from '../components/Actions.tsx';
 import { WorkflowControls } from '../components/Workflow.tsx';
+import { FixVerification } from '../components/FixVerification.tsx';
+import { ReportProblem } from '../components/ReportProblem.tsx';
 import { BranchPanel, CancelButton, JobStateChip, JobTimeline } from '../components/Jobs.tsx';
 
 type Media = 'annotated' | 'crop' | 'full' | 'explorer' | 'video' | 'filmstrip' | 'after';
@@ -71,6 +73,8 @@ export function Bug() {
         <div className="stack" style={{ ['--gap' as string]: '22px', minWidth: 0 }}>
           <MediaPanel f={f} ws={ws} run={run} m={m} setM={setMedia} chapters={chapters} seek={seek} afterShot={data.after_shot} onChapter={(c) => setActiveStep(c?.kind === 'step' ? c.step_index : null)} />
 
+          <FixVerification f={f} ws={ws} run={run} branch={f.fix?.branch ?? latestJob?.branch ?? null} afterShot={data.after_shot} running={!!runningJob} prUrl={f.fix?.pr_url ?? latestJob?.pr_url ?? null} />
+
           <Box head="Reproduction" chip={<Chip tone={f.reproduction.rate === '3/3' ? 'mint' : 'outline'}>{f.reproduction.rate ? `${f.reproduction.rate} replays` : 'visual only'}</Chip>}>
             <Repro f={f} chapters={chapters} activeStep={activeStep} onStep={seekStep} spec={data.spec} ws={ws} run={run} />
           </Box>
@@ -118,6 +122,8 @@ export function Bug() {
               </div>
               <hr className="divider" style={{ margin: '4px 0' }} />
               <LabelControls ws={ws} run={run} id={f.id} status={f.status} groups={data.groups} currentGroup={data.group.id} onChanged={reload} />
+              <hr className="divider" style={{ margin: '4px 0' }} />
+              <ReportProblem ws={ws} run={run} id={f.id} reports={data.reports ?? []} />
             </div>
           </Box>
 

@@ -405,12 +405,13 @@ function FixedTab({ all, ws, run }: { all: Finding[]; ws: string; run: string })
                           {x.id}
                         </Link>
                         <Chip tone={`dot sev-${x.severity}`}>{x.severity}</Chip>
-                        {x.fix ? x.fix.verified ? <Chip tone="mint">verified</Chip> : <Chip tone="outline">not fully verified</Chip> : <Chip tone="outline">marked done</Chip>}
+                        {x.fix ? x.fix.blocked ? <Chip tone="sev-critical dot">blocked: not published</Chip> : x.fix.verified && x.fix.verification && !x.fix.flags?.length ? <Chip tone="mint">verified</Chip> : <Chip tone="sev-major dot">not fully verified</Chip> : <Chip tone="outline">marked done</Chip>}
                         {x.fix?.fixed_by && /side effect/.test(x.fix.fixed_by) && <Chip tone="outline">fixed by {x.fix.fixed_by.replace(/ \(side effect\)/, '')}</Chip>}
                       </div>
                       <Link to={`/runs/${ws}/${encodeURIComponent(run)}/bugs/${x.id}`} className="fixed-title">
                         {x.title}
                       </Link>
+                      {x.fix?.flags?.length ? <div className="small" style={{ color: 'var(--warn)' }}>⚠ {x.fix.flags[0].replace(/^BB-\d+: /, '')}{x.fix.flags.length > 1 ? ` (+${x.fix.flags.length - 1} more)` : ''}</div> : x.fix && !x.fix.verification ? <div className="small" style={{ color: 'var(--warn)' }}>⚠ Checked before the stricter verification: retry verification on the bug page</div> : null}
                       <div className="small muted">
                         {x.type} · {x.page}
                         {x.fix?.branch && (

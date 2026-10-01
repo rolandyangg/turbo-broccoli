@@ -14,6 +14,7 @@ const FIX_STAGE_LABEL: Record<string, string> = {
   server: 'Start app from branch',
   baseline: 'Confirm bug on branch',
   'verify:continue': 'Check the branch as it stands',
+  investigate: 'Investigate the report',
   connect: 'Sign in to GitHub',
   'also-fixed': 'Check sibling findings',
   evidence: 'Capture after screenshots',

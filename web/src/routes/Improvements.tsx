@@ -10,7 +10,7 @@ type Kind = 'lesson' | 'prior' | 'detector' | 'tweak';
 interface Proposal {
   id: string;
   run: string;
-  source: 'retro' | 'lead';
+  source: 'retro' | 'lead' | 'report';
   kind: Kind;
   scope: 'site' | 'general';
   title: string;
@@ -192,7 +192,7 @@ function ProposalCard({ p, ws, reload }: { p: Proposal; ws: string; reload: () =
           <span className="mono small">{p.id}</span>
           <Chip tone="ink">{KIND_LABEL[p.kind]}</Chip>
           {p.scope === 'general' && <Chip tone="outline">general</Chip>}
-          <Chip tone="outline">{p.source === 'lead' ? 'from the lead' : 'retrospective'}</Chip>
+          <Chip tone="outline">{p.source === 'lead' ? 'from the lead' : p.source === 'report' ? 'from your report' : 'retrospective'}</Chip>
         </div>
       </div>
       <div className="box-body stack" style={{ ['--gap' as string]: '10px' }}>

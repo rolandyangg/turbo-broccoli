@@ -105,7 +105,20 @@ export interface BugDetail {
   after_shot: string | null;
   pr_body: string | null;
   jobs: JobView[];
+  reports?: BugReportView[];
   run: { target: string; name: string | null; repo_path: string | null; base_url: string };
+}
+
+export interface BugReportView {
+  id: string;
+  at: string;
+  category: string;
+  text: string;
+  status: 'investigating' | 'done' | 'failed';
+  job_id: string | null;
+  diagnosis: { stage: string; summary: string; is_real_bug: boolean | null; recommended_action: string } | null;
+  proposals: string[];
+  error: string | null;
 }
 
 export interface TranscriptItem {
