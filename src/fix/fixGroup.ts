@@ -12,6 +12,7 @@ import { Memory } from '../memory/siteMemory.js';
 import { writeReport } from '../store/report.js';
 import { JobReporter, newJobId, describeAgentEvent, type JobEvent } from '../jobs/events.js';
 import { notifyFixDone } from '../notify/events.js';
+import { explainChanges, technicalSection, type FileStat } from './describe.js';
 
 export interface FixOptions {
   runDir: string;
@@ -267,6 +268,17 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     const overlap = touched.filter((f) => dirty.includes(f));
     if (overlap.length) say('commit', `Heads up: the fix changes ${overlap.join(', ')}, which you also have uncommitted edits to. Commit or stash those before merging ${branch}.`, 'warn', { overlap });
 
+    // ---- explain the change for reviewers (from the real diff) ----
+    const stats: FileStat[] = (await git(worktree, ['diff', '--numstat', baseSha, 'HEAD'])).stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => l.split('\t'))
+      .map(([a, r, file]) => ({ file, added: Number(a) || 0, removed: Number(r) || 0 }));
+    say('pr', 'Writing the technical summary of the change');
+    const explanation = await explainChanges({ diff: (await git(worktree, ['diff', baseSha, 'HEAD'])).stdout, stats, findings: selected, groups: [...groups.values()], agentSummary, model: config.model, transcriptPath: join(assetsDir, 'explain.jsonl') });
+    if (!explanation) say('pr', "Couldn't write the technical summary; the PR lists the changed files and the fix agent's notes instead", 'warn');
+    const technical = technicalSection(explanation, stats, agentSummary);
+
     // ---- PR ----
     let prUrl: string | null = null;
     let publishError: string | null = null;
@@ -275,7 +287,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       // GitHub itself once the branch is pushed (see attachImages below).
       let images: Map<string, string> | null = null;
       const bodyFile = join(assetsDir, 'pr-body.md');
-      const writeBody = () => writeFileSync(bodyFile, prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, images, attempts: attempt }));
+      const writeBody = () => writeFileSync(bodyFile, prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images, attempts: attempt }));
       writeBody();
       const prArgs = ['pr', 'create', '--base', baseBranch, '--head', branch, '--title', `fix(ui): ${clip(title, 90)}`, '--body-file', bodyFile, ...(o.draft ? ['--draft'] : [])];
       // Publishing can fail for reasons unrelated to the fix (network, auth, GitHub limits). The verified commit is
@@ -309,7 +321,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         o.keepWorktree = true;
       }
     } else {
-      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, images: null, attempts: attempt }));
+      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images: null, attempts: attempt }));
       say('commit', `Not pushed (no PR requested). PR description draft saved.`, 'info', { pr_body: relative(o.runDir, join(assetsDir, 'pr-body.md')) });
     }
 
@@ -406,9 +418,10 @@ function fixPrompt(selected: Finding[], groups: RootCauseGroup[], others: Findin
     .join('\n\n');
 }
 
-function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: string[]; before: VerifyResult[]; after: VerifyResult[]; regressions: string[]; verified: boolean; agentSummary: string; runId: string; images: Map<string, string> | null; attempts: number }) {
+function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: string[]; before: VerifyResult[]; after: VerifyResult[]; regressions: string[]; verified: boolean; technical: { summary: string; technical: string }; runId: string; images: Map<string, string> | null; attempts: number }) {
   const lines: string[] = [];
-  lines.push(`## Summary`, '', d.agentSummary.trim().slice(0, 3000) || '(no summary)', '');
+  lines.push(`## Summary`, '', d.technical.summary, '');
+  lines.push(`## Technical changes`, '', d.technical.technical, '');
   lines.push(`## Findings fixed`, '');
   for (const f of d.selected) {
     const b = d.before.find((x) => x.id === f.id);

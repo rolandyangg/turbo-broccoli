@@ -314,3 +314,31 @@ describe('private workspace', () => {
     expect(staged).toEqual(['app.css']);
   });
 });
+
+describe('PR technical changes section', () => {
+  it('lists root cause and per-file what/why with line counts, and never hides a changed file', async () => {
+    const { technicalSection } = await import('../src/fix/describe.js');
+    const stats = [
+      { file: 'app/a.module.css', added: 7, removed: 5 },
+      { file: 'app/b.tsx', added: 1, removed: 0 },
+    ];
+    const t = technicalSection({ summary: 'Arrows fit again.', root_cause: 'Fixed width on .arrow.', changes: [
+          { file: 'app/a.module.css', what: 'width → min-width', why: 'lets the button shrink' },
+          { file: 'a.module.css', what: 'breakpoint 1024 → 1025', why: 'narrow layout at 1024' },
+        ], notes: ['Check RTL'] }, stats, 'agent text');
+    expect(t.technical.match(/`app\/a\.module\.css`/g)).toHaveLength(1); // two parts, one file entry
+    expect(t.technical).toContain('breakpoint 1024 → 1025');
+    expect(t.summary).toBe('Arrows fit again.');
+    expect(t.technical).toContain('**Root cause.** Fixed width on .arrow.');
+    expect(t.technical).toContain('- `app/a.module.css` (+7 −5)\n  - **What:** width → min-width\n    **Why:** lets the button shrink');
+    expect(t.technical).toContain('- `app/b.tsx` (+1 −0)'); // not explained, still listed
+    expect(t.technical).toContain('**Notes for review**\n- Check RTL');
+  });
+
+  it('falls back to the changed files and the fix agent summary', async () => {
+    const { technicalSection } = await import('../src/fix/describe.js');
+    const t = technicalSection(null, [{ file: 'x.css', added: 2, removed: 1 }], 'Agent says: changed x.css');
+    expect(t.summary).toBe('Agent says: changed x.css');
+    expect(t.technical).toBe('- `x.css` (+2 −1)');
+  });
+});
