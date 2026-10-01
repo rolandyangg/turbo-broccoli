@@ -20,6 +20,7 @@ import { branchInfo } from './git.ts';
 import { dashboard } from './dashboard.ts';
 import { agentsOverview } from './agentStats.ts';
 import { compareRuns } from './compare.ts';
+import { schedulesOverview, previewCron, createSchedule, toggleSchedule, deleteSchedule, runScheduleNow } from './schedules.ts';
 import { publicSettings, saveSettings, inbox, readMany, sendTest } from './notifications.ts';
 import { improvementsOverview, decideProposal, launchRetro, launchImplement } from './improvements.ts';
 
@@ -133,6 +134,16 @@ app.post('/notifications/read', async (c) => c.json(readMany(await c.req.json<{ 
 app.get('/settings', (c) => c.json(publicSettings()));
 app.put('/settings', async (c) => c.json(saveSettings(await c.req.json())));
 app.post('/settings/test', async (c) => c.json(await sendTest((await c.req.json<{ channel: string }>()).channel)));
+app.get('/schedules', async (c) => c.json(await schedulesOverview()));
+app.get('/schedules/preview', (c) => c.json(previewCron(c.req.query('cron') ?? '')));
+app.post('/schedules', async (c) => c.json(await createSchedule(await c.req.json()), 201));
+app.post('/schedules/:id/enable', async (c) => c.json(await toggleSchedule(c.req.param('id'), true)));
+app.post('/schedules/:id/disable', async (c) => c.json(await toggleSchedule(c.req.param('id'), false)));
+app.post('/schedules/:id/run', async (c) => c.json(await runScheduleNow(c.req.param('id')), 202));
+app.delete('/schedules/:id', async (c) => {
+  await deleteSchedule(c.req.param('id'));
+  return c.json({ ok: true });
+});
 app.get('/compare', (c) => {
   const a = c.req.query('a');
   const b = c.req.query('b');

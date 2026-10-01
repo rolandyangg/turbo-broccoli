@@ -1344,3 +1344,32 @@
     margin-left: 0;
   }
 }
+
+/* Schedules: day picker */
+.day-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px dashed var(--line);
+  font: 12px/1.4 var(--font-mono);
+  cursor: pointer;
+  color: var(--ink-2);
+}
+.day-pill input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.day-pill.on {
+  border-style: solid;
+  border-color: var(--green-ink);
+  color: var(--ink);
+  background: var(--mint);
+}
+.day-pill:focus-within {
+  outline: 2px solid var(--green-ink);
+  outline-offset: 2px;
+}

@@ -27,6 +27,9 @@ export function Runs() {
           <Link className="btn-ghost" to="/compare">
             Compare runs
           </Link>
+          <Link className="btn-ghost" to="/schedules">
+            Schedules
+          </Link>
           <Chamfer small onClick={() => setLaunch(true)}>
             New bug bash
           </Chamfer>

@@ -11,6 +11,8 @@ process.env.BUGBASH_WORKSPACES = ws;
 process.env.BUGBASH_WEB_JOBS = jobsDir;
 process.env.BUGBASH_PRESETS_FILE = join(root, 'presets.json');
 process.env.BUGBASH_HOME = join(root, 'home');
+process.env.BUGBASH_LAUNCH_AGENTS = join(root, 'LaunchAgents');
+process.env.BUGBASH_LAUNCHCTL = 'true'; // never touch the real launchd
 
 const RUN = '2026-01-01T00-00-00Z';
 let app: typeof import('../server/app.ts').app;
@@ -266,5 +268,27 @@ describe('bugbash web API', () => {
     await post('/notifications/read', { all: true });
     expect((await (await get('/notifications')).json()).unread).toBe(0);
     expect((await post('/settings/test', { channel: 'email' })).status).toBe(400);
+  });
+
+  it('manages launchd schedules (validated, previewed, toggled and removed)', async () => {
+    const { existsSync } = await import('node:fs');
+    const send = (p: string, method: string, body?: unknown) => app.request(`/api${p}`, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+    expect(await (await get('/schedules/preview?cron=0%202%20*%20*%201-5')).json()).toMatchObject({ ok: true, describe: 'Weekdays at 02:00' });
+    expect((await (await get('/schedules/preview?cron=*/5%20*%20*%20*%20*')).json()).ok).toBe(false);
+    expect((await send('/schedules', 'POST', { target: 'fixtures/x', preset: 'nope', cron: '0 2 * * *' })).status).toBe(400);
+    expect((await send('/schedules', 'POST', { target: 'fixtures/x', preset: 'quick', cron: '*/5 * * * *' })).status).toBe(400);
+    const res = await send('/schedules', 'POST', { target: 'https://example.com', preset: 'quick', cron: '30 3 * * *', name: 'Nightly example' });
+    expect(res.status).toBe(201);
+    const s = await res.json();
+    expect(existsSync(join(root, 'LaunchAgents', `com.turbobrocolli.${s.id}.plist`))).toBe(true);
+    const list = await (await get('/schedules')).json();
+    expect(list.items[0]).toMatchObject({ id: s.id, enabled: true, describe: 'Every day at 03:30', last: null });
+    expect(list.items[0].next_run).toBeTruthy();
+    expect((await (await send(`/schedules/${s.id}/disable`, 'POST', {})).json()).enabled).toBe(false);
+    expect(existsSync(join(root, 'LaunchAgents', `com.turbobrocolli.${s.id}.plist`))).toBe(false);
+    expect((await send(`/schedules/${s.id}`, 'DELETE')).status).toBe(200);
+    expect((await (await get('/schedules')).json()).items).toHaveLength(0);
+    expect((await send('/schedules/deadbeef/enable', 'POST', {})).status).toBe(404);
+    expect((await send('/schedules/..%2Fx/run', 'POST', {})).status).toBe(400);
   });
 });

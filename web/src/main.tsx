@@ -14,6 +14,7 @@ import { Job, Jobs } from './routes/Job.tsx';
 import { Improvements } from './routes/Improvements.tsx';
 import { Compare } from './routes/Compare.tsx';
 import { Settings } from './routes/Settings.tsx';
+import { Schedules } from './routes/Schedules.tsx';
 
 const router = createBrowserRouter([
   {
@@ -29,6 +30,7 @@ const router = createBrowserRouter([
       { path: 'improvements', element: <Improvements /> },
       { path: 'compare', element: <Compare /> },
       { path: 'settings', element: <Settings /> },
+      { path: 'schedules', element: <Schedules /> },
     ],
   },
 ]);
