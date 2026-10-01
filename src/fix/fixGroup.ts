@@ -12,7 +12,7 @@ import { Memory } from '../memory/siteMemory.js';
 import { writeReport } from '../store/report.js';
 import { JobReporter, newJobId, describeAgentEvent, type JobEvent } from '../jobs/events.js';
 import { notifyFixDone } from '../notify/events.js';
-import { explainChanges, technicalSection, type FileStat } from './describe.js';
+import { commitMessage, explainChanges, technicalSection, type FileStat } from './describe.js';
 
 export interface FixOptions {
   runDir: string;
@@ -34,7 +34,7 @@ export interface FixOptions {
   branch?: string | null;
 }
 
-const git = (cwd: string, args: string[]) => execa('git', args, { cwd, reject: false });
+const git = (cwd: string, args: string[], input?: string) => execa('git', args, { cwd, reject: false, ...(input !== undefined ? { input } : {}) });
 
 /** Shortens at a word boundary. */
 const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, s.lastIndexOf(' ', n - 1) > n * 0.6 ? s.lastIndexOf(' ', n - 1) : n - 1).trimEnd() + '…');
@@ -250,16 +250,26 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     for (const f of selected) await captureAfter(f, join(assetsDir, `${f.id}-after.png`), vo).catch(() => {});
     say('evidence', 'Captured after-fix screenshots', 'info', { after_shots: selected.map((f) => relative(o.runDir, join(assetsDir, `${f.id}-after.png`))) });
 
-    // ---- commit ----
-    const title = scopeIsGroup ? groups.get(o.ids[0])!.summary : selected.length === 1 ? selected[0].title : `${selected.length} UI fixes: ${selected.map((f) => f.id).join(', ')}`;
-    const commitMsg = `fix(ui): ${clip(title, 64)}\n\nFixes ${selected.map((f) => f.id).join(', ')}${alsoFixed.length ? ` (also resolves ${alsoFixed.join(', ')})` : ''} found by bugbash run ${info.run_id}.\n${verified ? 'Verified: repro checks pass at all affected viewports/browsers; no new layout defects on touched pages.' : 'NOT fully verified — see PR description.'}\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`;
+    // ---- stage, explain the change (from the real diff), then commit with a message about the change ----
     await git(worktree, ['add', '-A', '--', '.', ':(exclude)node_modules', ':(exclude).bugbash', ':(exclude)**/.bugbash']);
     // Never commit a bugbash workspace into the target repo, whatever its .gitignore says.
     const staged = (await git(worktree, ['diff', '--cached', '--name-only'])).stdout.split('\n').filter((p) => /(^|\/)\.bugbash\//.test(p));
     if (staged.length) await git(worktree, ['reset', '-q', '--', ...staged]);
+    // Base → index covers what's already committed on a continued branch plus what's about to be.
+    const stats: FileStat[] = (await git(worktree, ['diff', '--cached', '--numstat', baseSha])).stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => l.split('\t'))
+      .map(([a, r, file]) => ({ file, added: Number(a) || 0, removed: Number(r) || 0 }));
+    say('commit', 'Writing a description of the change');
+    const explanation = await explainChanges({ diff: (await git(worktree, ['diff', '--cached', baseSha])).stdout, stats, findings: selected, groups: [...groups.values()], agentSummary, model: config.model, transcriptPath: join(assetsDir, 'explain.jsonl') });
+    if (!explanation) say('commit', "Couldn't write a description of the change; using the changed files and the fix agent's notes", 'warn');
+    const technical = technicalSection(explanation, stats, agentSummary);
+    const title = scopeIsGroup ? groups.get(o.ids[0])!.summary : selected.length === 1 ? selected[0].title : `${selected.length} UI fixes: ${selected.map((f) => f.id).join(', ')}`;
+    const commitMsg = commitMessage(explanation, stats, { fallbackTitle: title, refs: [...selected.map((f) => f.id), ...alsoFixed], runId: info.run_id, verified });
     // A continued branch may already have everything committed.
     if ((await git(worktree, ['diff', '--cached', '--quiet'])).exitCode !== 0) {
-      const c = await git(worktree, ['commit', '-m', commitMsg]);
+      const c = await git(worktree, ['commit', '-F', '-'], commitMsg);
       if (c.exitCode !== 0) throw new Error(`git commit failed: ${c.stderr || c.stdout}`);
     }
     const sha = (await git(worktree, ['rev-parse', 'HEAD'])).stdout.trim();
@@ -267,17 +277,6 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     const touched = (await git(worktree, ['diff', '--name-only', baseSha, 'HEAD'])).stdout.split('\n').filter(Boolean);
     const overlap = touched.filter((f) => dirty.includes(f));
     if (overlap.length) say('commit', `Heads up: the fix changes ${overlap.join(', ')}, which you also have uncommitted edits to. Commit or stash those before merging ${branch}.`, 'warn', { overlap });
-
-    // ---- explain the change for reviewers (from the real diff) ----
-    const stats: FileStat[] = (await git(worktree, ['diff', '--numstat', baseSha, 'HEAD'])).stdout
-      .split('\n')
-      .filter(Boolean)
-      .map((l) => l.split('\t'))
-      .map(([a, r, file]) => ({ file, added: Number(a) || 0, removed: Number(r) || 0 }));
-    say('pr', 'Writing the technical summary of the change');
-    const explanation = await explainChanges({ diff: (await git(worktree, ['diff', baseSha, 'HEAD'])).stdout, stats, findings: selected, groups: [...groups.values()], agentSummary, model: config.model, transcriptPath: join(assetsDir, 'explain.jsonl') });
-    if (!explanation) say('pr', "Couldn't write the technical summary; the PR lists the changed files and the fix agent's notes instead", 'warn');
-    const technical = technicalSection(explanation, stats, agentSummary);
 
     // ---- PR ----
     let prUrl: string | null = null;

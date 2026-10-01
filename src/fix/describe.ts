@@ -3,6 +3,8 @@ import type { Finding, RootCauseGroup } from '../store/schema.js';
 
 /** A reviewer-facing explanation of a fix, written from the actual diff. */
 export interface ChangeExplanation {
+  /** Conventional-commit subject about the code change, e.g. "fix(sponsor-us): keep carousel arrows inside the viewport". */
+  commit_subject: string;
   summary: string;
   root_cause: string;
   changes: { file: string; what: string; why: string }[];
@@ -18,6 +20,7 @@ export interface FileStat {
 const SCHEMA = {
   type: 'object',
   properties: {
+    commit_subject: { type: 'string', description: 'Conventional commit subject describing the CODE change (not the bug report): "fix(<area>): <imperative summary>", at most 72 characters, e.g. "fix(sponsor-us): start desktop carousel layout at 1025px"' },
     summary: { type: 'string', description: '1-3 sentences: what the PR does for the user-visible bug(s)' },
     root_cause: { type: 'string', description: 'The technical cause in the code (rule/markup/logic and file), in 1-3 sentences' },
     changes: {
@@ -34,7 +37,7 @@ const SCHEMA = {
     },
     notes: { type: 'array', items: { type: 'string' }, description: 'Risks, side effects, or things a reviewer should check (may be empty)' },
   },
-  required: ['summary', 'root_cause', 'changes', 'notes'],
+  required: ['commit_subject', 'summary', 'root_cause', 'changes', 'notes'],
 };
 
 const SYSTEM = `You write the "Technical changes" section of a pull request that fixes UI bugs found by an automated bug bash.
@@ -61,7 +64,7 @@ export async function explainChanges(d: { diff: string; stats: FileStat[]; findi
   const r = await runClaude({ prompt, systemPrompt: SYSTEM, tools: [], jsonSchema: SCHEMA, model: d.model ?? null, timeoutMs: 3 * 60_000, transcriptPath: d.transcriptPath }).catch(() => null);
   const out = r?.ok ? (r.structured as ChangeExplanation | null) : null;
   if (!out || !Array.isArray(out.changes) || !out.summary) return null;
-  return { summary: String(out.summary), root_cause: String(out.root_cause ?? ''), changes: out.changes.filter((c) => c && c.file).map((c) => ({ file: String(c.file), what: String(c.what ?? ''), why: String(c.why ?? '') })), notes: (out.notes ?? []).map(String).filter(Boolean) };
+  return { commit_subject: String(out.commit_subject ?? ''), summary: String(out.summary), root_cause: String(out.root_cause ?? ''), changes: out.changes.filter((c) => c && c.file).map((c) => ({ file: String(c.file), what: String(c.what ?? ''), why: String(c.why ?? '') })), notes: (out.notes ?? []).map(String).filter(Boolean) };
 }
 
 /** Markdown for the PR body: summary + "Technical changes" (root cause, per-file what/why with line counts, notes). */
@@ -94,4 +97,42 @@ export function technicalSection(x: ChangeExplanation | null, stats: FileStat[],
   for (const s of stats.filter((s) => !seen.has(s.file))) lines.push(`- \`${s.file}\`${counts(s)}`);
   if (x.notes.length) lines.push('', '**Notes for review**', ...x.notes.map((n) => `- ${n}`));
   return { summary: x.summary, technical: lines.join('\n') };
+}
+
+/**
+ * Commit message about the change itself: a conventional subject describing what the code now does, the root cause,
+ * then what changed in each file and why. The bug report only appears as a trailing reference.
+ */
+export function commitMessage(x: ChangeExplanation | null, stats: FileStat[], o: { fallbackTitle: string; refs: string[]; runId: string; verified: boolean }) {
+  const clean = (t: string) => t.replace(/\s+/g, ' ').trim();
+  let subject = clean(x?.commit_subject ?? '');
+  if (!/^[a-z]+(\([\w./-]+\))?!?: \S/.test(subject)) subject = subject ? `fix(ui): ${subject.replace(/^[^:]*:\s*/, '')}` : '';
+  if (!subject) {
+    const files = stats.map((s) => s.file.split('/').pop()).slice(0, 2).join(', ');
+    subject = `fix(ui): ${files ? `adjust ${files} for ` : ''}${o.fallbackTitle.toLowerCase()}`;
+  }
+  if (subject.length > 72) subject = subject.slice(0, 71).replace(/\s+\S*$/, '') + '…';
+  const body: string[] = [];
+  if (x?.root_cause) body.push(wrap(clean(x.root_cause)), '');
+  if (x?.changes.length) {
+    for (const c of x.changes) body.push(wrap(`- ${c.file.split('/').pop()}: ${clean(c.what)} ${clean(c.why)}`, '  '));
+    body.push('');
+  } else if (stats.length) body.push(...stats.map((s) => `- ${s.file} (+${s.added} -${s.removed})`), '');
+  if (!o.verified) body.push('Not fully verified: see the PR description.', '');
+  body.push(`Refs: ${[...new Set(o.refs)].join(', ')} (bugbash run ${o.runId})`, '', 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>');
+  return `${subject}\n\n${body.join('\n')}\n`;
+}
+
+/** Wraps prose at 72 columns (continuation lines get `indent`). */
+function wrap(text: string, indent = '') {
+  const out: string[] = [];
+  let line = '';
+  for (const w of text.split(' ')) {
+    if (line && (line + ' ' + w).length > 72) {
+      out.push(line);
+      line = indent + w;
+    } else line = line ? `${line} ${w}` : w;
+  }
+  if (line) out.push(line);
+  return out.join('\n');
 }

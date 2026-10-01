@@ -322,7 +322,7 @@ describe('PR technical changes section', () => {
       { file: 'app/a.module.css', added: 7, removed: 5 },
       { file: 'app/b.tsx', added: 1, removed: 0 },
     ];
-    const t = technicalSection({ summary: 'Arrows fit again.', root_cause: 'Fixed width on .arrow.', changes: [
+    const t = technicalSection({ commit_subject: 'fix(carousel): let arrows shrink', summary: 'Arrows fit again.', root_cause: 'Fixed width on .arrow.', changes: [
           { file: 'app/a.module.css', what: 'width → min-width', why: 'lets the button shrink' },
           { file: 'a.module.css', what: 'breakpoint 1024 → 1025', why: 'narrow layout at 1024' },
         ], notes: ['Check RTL'] }, stats, 'agent text');
@@ -333,6 +333,27 @@ describe('PR technical changes section', () => {
     expect(t.technical).toContain('- `app/a.module.css` (+7 −5)\n  - **What:** width → min-width\n    **Why:** lets the button shrink');
     expect(t.technical).toContain('- `app/b.tsx` (+1 −0)'); // not explained, still listed
     expect(t.technical).toContain('**Notes for review**\n- Check RTL');
+  });
+
+  it('writes commit messages about the change, with the bug only as a reference', async () => {
+    const { commitMessage } = await import('../src/fix/describe.js');
+    const msg = commitMessage(
+      { commit_subject: 'fix(sponsor-us): start desktop carousel layout at 1025px', summary: 's', root_cause: 'The 1024px media query applied the fixed 900px carousel width at exactly 1024px, pushing the arrows past the viewport edges.', changes: [{ file: 'app/sponsor-us/a.module.css', what: 'Moved the desktop breakpoint to 1025px.', why: 'At 1024px the narrower layout now applies.' }], notes: [] },
+      [{ file: 'app/sponsor-us/a.module.css', added: 7, removed: 5 }],
+      { fallbackTitle: 'Sponsor Highlights carousel arrows stretched', refs: ['BB-0051', 'BB-0051'], runId: 'r1', verified: true },
+    );
+    const [subject, blank, ...rest] = msg.split('\n');
+    expect(subject).toBe('fix(sponsor-us): start desktop carousel layout at 1025px');
+    expect(blank).toBe('');
+    expect(msg).not.toMatch(/Sponsor Highlights carousel arrows stretched/); // not the bug title
+    expect(rest.join('\n')).toMatch(/^The 1024px media query/);
+    expect(msg).toContain('- a.module.css: Moved the desktop breakpoint to 1025px.');
+    expect(msg).toContain('Refs: BB-0051 (bugbash run r1)');
+    expect(Math.max(...msg.split('\n').filter((l) => !l.startsWith('Co-Authored-By')).map((l) => l.length))).toBeLessThanOrEqual(72);
+    // Without an explanation: still about the change (files), never empty.
+    expect(commitMessage(null, [{ file: 'x/y.css', added: 1, removed: 1 }], { fallbackTitle: 'Nav overlaps logo', refs: ['BB-1'], runId: 'r', verified: false }).split('\n')[0]).toBe('fix(ui): adjust y.css for nav overlaps logo');
+    // A non-conventional subject gets a type.
+    expect(commitMessage({ commit_subject: 'Keep arrows in view', summary: '', root_cause: '', changes: [], notes: [] }, [], { fallbackTitle: 't', refs: [], runId: 'r', verified: true }).split('\n')[0]).toBe('fix(ui): Keep arrows in view');
   });
 
   it('falls back to the changed files and the fix agent summary', async () => {
