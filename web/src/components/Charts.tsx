@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 
 /**
@@ -79,6 +79,13 @@ export function HBars({ rows, color = 'var(--data)', empty = 'Nothing to show.',
   );
 }
 
+/** Smallest 1/2/2.5/5 × 10^n at or above v (for non-count axes such as dollars). */
+function niceCeil(v: number) {
+  if (v <= 0) return 1;
+  const p = 10 ** Math.floor(Math.log10(v));
+  return ([1, 2, 2.5, 5, 10].find((m) => m * p >= v) ?? 10) * p;
+}
+
 export interface StackSeries {
   key: string;
   label: string;
@@ -86,13 +93,14 @@ export interface StackSeries {
 }
 
 /** Stacked columns over time (e.g. active findings per run by severity). Legend always shown for ≥2 series. */
-export function StackedColumns({ data, series, xLabel, href, height = 200, highlight = null }: { data: (Record<string, number | string | boolean | null | undefined> & { id: string })[]; series: StackSeries[]; xLabel: (d: Record<string, unknown>) => string; href?: (d: Record<string, unknown>) => string; height?: number; highlight?: string | null }) {
+export function StackedColumns({ data, series, xLabel, href, height = 200, highlight = null, valueFormat }: { data: (Record<string, number | string | boolean | null | undefined> & { id: string })[]; series: StackSeries[]; xLabel: (d: Record<string, unknown>) => string; href?: (d: Record<string, unknown>) => string; height?: number; highlight?: string | null; valueFormat?: (v: number) => string }) {
   const [tip, setTip] = useState<Tip | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const totals = data.map((d) => series.reduce((a, s) => a + (Number(d[s.key]) || 0), 0));
   const max = Math.max(1, ...totals);
-  const niceMax = max <= 5 ? 5 : Math.ceil(max / 5) * 5;
+  const niceMax = valueFormat ? niceCeil(max) : max <= 5 ? 5 : Math.ceil(max / 5) * 5;
   const ticks = [0, niceMax / 2, niceMax];
+  const fmt = valueFormat ?? ((v: number) => String(v));
   if (!data.length) return <p className="muted small">No runs yet.</p>;
   return (
     <div className="cols-wrap">
@@ -107,7 +115,7 @@ export function StackedColumns({ data, series, xLabel, href, height = 200, highl
         <div className="cols-grid" aria-hidden>
           {ticks.map((t) => (
             <div key={t} className="cols-gridline" style={{ bottom: `${(t / niceMax) * 100}%` }}>
-              <span className="mono">{t}</span>
+              <span className="mono">{fmt(t)}</span>
             </div>
           ))}
         </div>
@@ -116,7 +124,7 @@ export function StackedColumns({ data, series, xLabel, href, height = 200, highl
             const col = (
               <div
                 className={`col ${hover === d.id ? 'on' : ''} ${highlight ? (highlight === d.id ? 'selected' : 'dim') : ''}`}
-                aria-label={`${xLabel(d)}: ${totals[i]} findings`}
+                aria-label={`${xLabel(d)}: ${valueFormat ? fmt(totals[i]) : `${totals[i]} findings`}`}
                 onMouseMove={(e) => {
                   setHover(d.id);
                   const box = (e.currentTarget.closest('.cols') as HTMLElement).getBoundingClientRect();
@@ -127,11 +135,11 @@ export function StackedColumns({ data, series, xLabel, href, height = 200, highl
                       <>
                         <b>{xLabel(d)}</b>
                         <br />
-                        {totals[i]} active
+                        {valueFormat ? `${fmt(totals[i])} total` : `${totals[i]} active`}
                         {series.map((s) =>
                           Number(d[s.key]) ? (
                             <div key={s.key} className="row" style={{ gap: 6 }}>
-                              <i className="stat-mark" style={{ background: s.color }} /> {s.label}: {Number(d[s.key])}
+                              <i className="stat-mark" style={{ background: s.color }} /> {s.label}: {fmt(Number(d[s.key]))}
                             </div>
                           ) : null,
                         )}
@@ -190,6 +198,238 @@ export function DataTable({ head, rows }: { head: string[]; rows: ReactNode[][] 
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+export interface LinePoint {
+  x: number;
+  y: number;
+  label?: string;
+}
+
+/** Single-series step line with crosshair tooltip, vertical markers (e.g. session starts) and a stop marker. */
+export function LineChart({
+  points,
+  xMax,
+  yLabel,
+  xFormat,
+  markers = [],
+  stop,
+  height = 220,
+}: {
+  points: LinePoint[];
+  xMax: number;
+  yLabel: string;
+  xFormat: (x: number) => string;
+  markers?: { x: number; label: string }[];
+  stop?: { x: number; label: string } | null;
+  height?: number;
+}) {
+  const [w, setW] = useState(600);
+  const [hover, setHover] = useState<number | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setW(el.clientWidth);
+    const ro = new ResizeObserver(() => setW(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [points.length]);
+  if (!points.length) return <p className="muted small">No findings recorded yet.</p>;
+  const padL = 34,
+    padB = 22,
+    padT = 10,
+    padR = 10;
+  const yMax = Math.max(1, ...points.map((p) => p.y));
+  const xm = Math.max(1, xMax, ...points.map((p) => p.x));
+  const sx = (x: number) => padL + (x / xm) * (w - padL - padR);
+  const sy = (y: number) => padT + (1 - y / yMax) * (height - padT - padB);
+  // Step path: the count rises at each new finding.
+  let d = `M ${sx(0)} ${sy(0)}`;
+  let prevY = 0;
+  for (const p of points) {
+    d += ` L ${sx(p.x)} ${sy(prevY)} L ${sx(p.x)} ${sy(p.y)}`;
+    prevY = p.y;
+  }
+  d += ` L ${sx(xm)} ${sy(prevY)}`;
+  const ticks = [0, Math.round(yMax / 2), yMax];
+  const nearest = hover === null ? null : points.reduce((a, p) => (Math.abs(sx(p.x) - hover) < Math.abs(sx(a.x) - hover) ? p : a), points[0]);
+  const valueAt = (px: number) => {
+    const x = ((px - padL) / (w - padL - padR)) * xm;
+    return { x, y: [...points].reverse().find((p) => p.x <= x)?.y ?? 0 };
+  };
+  const at = hover === null ? null : valueAt(hover);
+  return (
+    <div ref={ref} className="line-wrap" style={{ position: 'relative' }}>
+      <svg width={w} height={height} role="img" aria-label={`${yLabel} over time`} onMouseMove={(e) => setHover(e.nativeEvent.offsetX)} onMouseLeave={() => setHover(null)}>
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={padL} x2={w - padR} y1={sy(t)} y2={sy(t)} className="grid-line" />
+            <text x={padL - 6} y={sy(t) + 4} textAnchor="end" className="axis-text">
+              {t}
+            </text>
+          </g>
+        ))}
+        {markers.map((m, i) => (
+          <g key={i}>
+            <line x1={sx(m.x)} x2={sx(m.x)} y1={padT} y2={height - padB} className="marker-line" />
+          </g>
+        ))}
+        {stop && (
+          <g>
+            <line x1={sx(stop.x)} x2={sx(stop.x)} y1={padT} y2={height - padB} className="stop-line" />
+            <text x={Math.min(sx(stop.x) - 4, w - padR - 4)} y={padT + 10} textAnchor="end" className="axis-text">
+              {stop.label}
+            </text>
+          </g>
+        )}
+        <path d={d} className="line-path" fill="none" />
+        {points.map((p, i) => (
+          <circle key={i} cx={sx(p.x)} cy={sy(p.y)} r={nearest === p ? 5 : 3} className="line-dot" />
+        ))}
+        <text x={padL} y={height - 4} className="axis-text">
+          {xFormat(0)}
+        </text>
+        <text x={w - padR} y={height - 4} textAnchor="end" className="axis-text">
+          {xFormat(xm)}
+        </text>
+        {hover !== null && hover > padL && <line x1={hover} x2={hover} y1={padT} y2={height - padB} className="crosshair" />}
+      </svg>
+      {hover !== null && at && hover > padL && (
+        <div className="viz-tip" style={{ left: Math.min(hover + 12, w - 220), top: 8 }}>
+          <b>{xFormat(at.x)}</b>
+          <br />
+          {at.y} {yLabel}
+          {nearest?.label && (
+            <>
+              <br />
+              <span className="small">latest: {nearest.label.slice(0, 60)}</span>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- horizontal stacked bar (one row) ----------------
+export function StackBar({ parts, format }: { parts: { key: string; label: string; value: number; color: string }[]; format: (v: number) => string }) {
+  const [tip, setTip] = useState<Tip | null>(null);
+  const total = parts.reduce((a, p) => a + p.value, 0);
+  if (!total) return <p className="muted small">Nothing recorded.</p>;
+  return (
+    <div className="stackbar-wrap" onMouseLeave={() => setTip(null)}>
+      <div className="viz-legend" role="list">
+        {parts.map((p) => (
+          <span key={p.key} role="listitem" className="row small" style={{ gap: 6 }}>
+            <i className="stat-mark" style={{ background: p.color }} /> {p.label} <b className="mono">{format(p.value)}</b>
+          </span>
+        ))}
+      </div>
+      <div className="stackbar">
+        {parts
+          .filter((p) => p.value > 0)
+          .map((p) => (
+            <div
+              key={p.key}
+              className="stackbar-seg"
+              style={{ flexGrow: p.value, background: p.color }}
+              onMouseMove={(e) => {
+                const box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+                setTip({
+                  x: e.clientX - box.left + 10,
+                  y: -46,
+                  body: (
+                    <>
+                      <b>{p.label}</b>
+                      <br />
+                      {format(p.value)} · {Math.round((p.value / total) * 100)}%
+                    </>
+                  ),
+                });
+              }}
+            />
+          ))}
+        <Tooltip tip={tip} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------- heatmap (coverage) ----------------
+export function Heatmap({ rows, columns, cell, legend }: { rows: string[]; columns: { id: string; label: string; kind: string }[]; cell: (row: string, col: string) => { tested: boolean; bugs: number }; legend?: boolean }) {
+  if (!rows.length || !columns.length) return <p className="muted small">No coverage recorded.</p>;
+  const level = (n: number) => (n >= 4 ? 3 : n >= 2 ? 2 : 1);
+  return (
+    <div>
+      {legend !== false && (
+        <div className="viz-legend">
+          <span className="row small" style={{ gap: 6 }}>
+            <i className="stat-mark heat-untested" /> not tested
+          </span>
+          <span className="row small" style={{ gap: 6 }}>
+            <i
+              className="stat-mark"
+              style={{
+                background: 'var(--panel-2)',
+                boxShadow: 'inset 0 0 0 1px var(--line)',
+              }}
+            />{' '}
+            tested, no bugs
+          </span>
+          {[1, 2, 3].map((l) => (
+            <span key={l} className="row small" style={{ gap: 6 }}>
+              <i className="stat-mark" style={{ background: `var(--heat-${l})` }} /> {l === 1 ? '1 bug' : l === 2 ? '2–3 bugs' : '4+ bugs'}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="scroll-x">
+        <table className="heatmap">
+          <thead>
+            <tr>
+              <th />
+              {columns.map((c) => (
+                <th key={c.id} title={c.label}>
+                  <span>{c.label}</span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r}>
+                <th className="mono small">{r}</th>
+                {columns.map((c) => {
+                  const v = cell(r, c.id);
+                  const l = level(v.bugs);
+                  return (
+                    <td
+                      key={c.id}
+                      title={`${r} · ${c.label}: ${v.tested ? `${v.bugs} active bug${v.bugs === 1 ? '' : 's'}` : 'not tested'}`}
+                      className={v.tested ? '' : 'heat-untested'}
+                      style={
+                        v.bugs
+                          ? {
+                              background: `var(--heat-${l})`,
+                              color: `var(--heat-text-${l})`,
+                            }
+                          : v.tested
+                            ? { background: 'var(--panel-2)' }
+                            : undefined
+                      }
+                    >
+                      {v.bugs || ''}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

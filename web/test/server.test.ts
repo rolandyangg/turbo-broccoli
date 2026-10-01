@@ -145,4 +145,39 @@ describe('bugbash web API', () => {
     expect((await json({ target: 'http://x.test', preset: 'nope' })).status).toBe(400);
     expect((await json({ target: 'http://x.test', config: { parallel: 0 } })).status).toBe(400);
   });
+
+  it('reports agent cost, tool timing and explorer rows for a run, and totals for all runs', async () => {
+    const run2 = '2026-01-02T00-00-00Z';
+    const dir = join(ws, 'runs', run2);
+    mkdirSync(join(dir, 'sessions'), { recursive: true });
+    mkdirSync(join(dir, 'transcripts'), { recursive: true });
+    writeFileSync(join(dir, 'run.json'), JSON.stringify({ run_id: run2, target: 'fixtures/x', base_url: 'http://127.0.0.1:1', target_kind: 'static', repo_path: null, workspace: ws, started_at: '2026-01-02T00:00:00Z', ended_at: '2026-01-02T00:05:00Z', head_commit: null, config: {}, stop_reason: 'test', lead_decisions: [], jobs: [], stages: {} }));
+    writeFileSync(join(dir, 'campaign.json'), JSON.stringify({ jobs: [{ id: 's-001', persona: 'everyday-user', browser: 'chromium', device: null, goal: 'look around', status: 'done', started_at: '2026-01-02T00:00:10Z', ended_at: '2026-01-02T00:01:10Z', tool_calls: 3 }] }));
+    const result = (cost: number) => JSON.stringify({ type: 'result', total_cost_usd: cost, duration_ms: 60000, duration_api_ms: 30000, num_turns: 4, usage: { input_tokens: 100, cache_read_input_tokens: 1000, cache_creation_input_tokens: 50, output_tokens: 200 } });
+    writeFileSync(join(dir, 'transcripts', 's-001.jsonl'), JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'mcp__browser__click' }] } }) + '\n' + result(0.5) + '\n');
+    writeFileSync(join(dir, 'transcripts', 'lead.jsonl'), result(0.25) + '\n');
+    for (const [name, ms, ok, blocked] of [['click', 10, true, undefined], ['click', 30, true, undefined], ['resize', 1, false, 'selection']] as const)
+      appendFileSync(join(dir, 'sessions', 's-001.jsonl'), JSON.stringify({ at: 'now', kind: 'tool', name, ms, ok, ...(blocked ? { blocked, error: 'refused' } : {}) }) + '\n');
+
+    const d = await (await get(`/agents?ws=${wsId}&run=${run2}`)).json();
+    expect(d.scope).toBe('run');
+    expect(d.stats.kpis.cost_usd).toBeCloseTo(0.75);
+    expect(d.stats.kpis.tokens).toBe(2 * 1350);
+    expect(d.stats.phases.find((p: { phase: string }) => p.phase === 'lead').cost_usd).toBeCloseTo(0.25);
+    expect(d.stats.explorers).toHaveLength(1);
+    expect(d.stats.explorers[0]).toMatchObject({ id: 's-001', persona: 'everyday-user', browser: 'chromium' });
+    expect(d.stats.tools_timed).toBe(true);
+    const click = d.stats.tools.find((t: { name: string }) => t.name === 'click');
+    expect(click).toMatchObject({ calls: 2, errors: 0, p95_ms: 30 });
+    const resize = d.stats.tools.find((t: { name: string }) => t.name === 'resize');
+    expect(resize).toMatchObject({ calls: 1, errors: 0, blocked: 1 });
+    expect(d.stats.reliability.selection_refusals).toBe(1);
+
+    const all = await (await get('/agents')).json();
+    expect(all.scope).toBe('all');
+    expect(all.runs.map((r: { run: string }) => r.run)).toContain(run2);
+    expect(all.runs.find((r: { run: string }) => r.run === run2).cost_usd).toBeCloseTo(0.75);
+    expect(all.totals.cost_usd).toBeGreaterThanOrEqual(0.75);
+    expect((await get(`/agents?ws=${wsId}&run=nope`)).status).toBe(404);
+  });
 });

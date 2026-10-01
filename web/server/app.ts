@@ -18,6 +18,7 @@ import { safePath, fileResponse } from './files.ts';
 import { listJobs, getJob, launchJob, cancelJob, readEvents, CLI, REPO_ROOT, WEB_JOBS } from './jobs.ts';
 import { branchInfo } from './git.ts';
 import { dashboard } from './dashboard.ts';
+import { agentsOverview } from './agentStats.ts';
 
 const exec = promisify(execFile);
 const ID = /^(BB|RC)-\d{3,5}$/i;
@@ -38,6 +39,12 @@ app.post('/workspaces', async (c) => {
 });
 
 app.get('/runs', (c) => c.json(listAllRuns()));
+app.get('/agents', (c) => {
+  const ws = c.req.query('ws');
+  const run = c.req.query('run');
+  return c.json(agentsOverview(ws && run ? { ws, run } : null));
+});
+
 app.get('/dashboard', (c) => {
   const ws = c.req.query('ws');
   const run = c.req.query('run');

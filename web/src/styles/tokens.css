@@ -43,6 +43,18 @@
   --sev-major: #b8243b;
   --sev-minor: #de5467;
   --sev-cosmetic: #ea8894;
+  /* Agent phases (reference categorical slots 1-4, validated on --white; light contrast relief = legend + table view). */
+  --phase-lead: #2a78d6;
+  --phase-explore: #eb6834;
+  --phase-triage: #1baf7a;
+  --phase-fix: #eda100;
+  /* Coverage heatmap: one-hue ordinal ramp for 1 / 2-3 / 4+ bugs (validated). */
+  --heat-1: #6da7ec;
+  --heat-2: #2a78d6;
+  --heat-3: #184f95;
+  --heat-text-1: #0d1b33;
+  --heat-text-2: #ffffff;
+  --heat-text-3: #ffffff;
   /* Single-series data marks (bars/columns). */
   --data: #555368;
   --data-hover: #3d3b4f;
@@ -102,6 +114,17 @@
   --sev-cosmetic: #a8354b;
   --data: #28e99f;
   --data-hover: #6ff5c2;
+  --phase-lead: #3987e5;
+  --phase-explore: #d95926;
+  --phase-triage: #199e70;
+  --phase-fix: #c98500;
+  --heat-1: #184f95;
+  --heat-2: #3987e5;
+  --heat-3: #9ec5f4;
+  --heat-text-1: #ffffff;
+  --heat-text-2: #ffffff;
+  --heat-text-3: #0d1b33;
+
   --ok: #3ddc97;
   --warn: #f0b04a;
   --err: #ff6b7d;
@@ -149,6 +172,16 @@
     --sev-cosmetic: #a8354b;
     --data: #28e99f;
     --data-hover: #6ff5c2;
+    --phase-lead: #3987e5;
+    --phase-explore: #d95926;
+    --phase-triage: #199e70;
+    --phase-fix: #c98500;
+    --heat-1: #184f95;
+    --heat-2: #3987e5;
+    --heat-3: #9ec5f4;
+    --heat-text-1: #ffffff;
+    --heat-text-2: #ffffff;
+    --heat-text-3: #0d1b33;
     --ok: #3ddc97;
     --warn: #f0b04a;
     --err: #ff6b7d;
