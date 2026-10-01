@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, copyFileSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, symlinkSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
 import { join, basename, dirname, relative } from 'node:path';
 import { execa } from 'execa';
 import { Config } from '../config.js';
@@ -74,7 +74,9 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   const ff = readFindings(o.runDir);
   if (!ff) throw new Error('No findings.json in this run. Run `bugbash triage` first.');
   if (!info.repo_path) throw new Error('This run has no local repository (target was a URL without --repo); cannot fix.');
-  const repo = info.repo_path;
+  if (!existsSync(info.repo_path)) throw new Error(`Repository not found: ${info.repo_path}`);
+  // Real on-disk spelling: macOS paths are case-insensitive (Github vs GitHub), but path math below is not.
+  const repo = realpathSync.native(info.repo_path);
 
   // ---- resolve scope: individual findings and/or whole groups ----
   const selected: Finding[] = [];
@@ -94,8 +96,9 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   const scopeIsGroup = o.ids.length === 1 && ff.groups.some((g) => g.id === o.ids[0]);
   const scopeLabel = scopeIsGroup ? o.ids[0] : selected.map((f) => f.id).join('+');
   const top = git(repo, ['rev-parse', '--show-toplevel']);
-  const gitRoot = (await top).stdout.trim();
-  if (!gitRoot) throw new Error(`${repo} is not inside a git repository.`);
+  const gitTop = (await top).stdout.trim();
+  if (!gitTop) throw new Error(`${repo} is not inside a git repository.`);
+  const gitRoot = realpathSync.native(gitTop);
   const status = (await git(gitRoot, ['status', '--porcelain'])).stdout.split('\n').filter((l) => l.trim() && !l.slice(3).startsWith('.bugbash'));
   // The fix happens in a separate worktree branched from the last commit, so local edits can't leak into it and
   // aren't touched. Just say they're not included (and warn later if the fix edits the same files).
@@ -114,10 +117,19 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   if (wt.exitCode !== 0) throw new Error(`git worktree add failed: ${wt.stderr}`);
   say('worktree', `Created branch ${branch} in worktree`, 'success', { branch, worktree });
   markFixing(o.runDir, selected.map((f) => f.id), { branch, base: baseBranch, job_id: rep.status.id, scope: scopeLabel });
-  // Reuse dependencies so the dev server can start in the worktree.
-  if (existsSync(join(repo, 'node_modules')) && !existsSync(join(appDir, 'node_modules'))) symlinkSync(join(repo, 'node_modules'), join(appDir, 'node_modules'), 'dir');
-
-  const target = await resolveTarget(appDir, { devCommand: config.devCommand, devPort: null, log: (m) => say('server', m) });
+  let target: Awaited<ReturnType<typeof resolveTarget>>;
+  try {
+    // Reuse dependencies so the dev server can start in the worktree.
+    if (existsSync(join(repo, 'node_modules')) && !existsSync(join(appDir, 'node_modules'))) symlinkSync(join(repo, 'node_modules'), join(appDir, 'node_modules'), 'dir');
+    target = await resolveTarget(appDir, { devCommand: config.devCommand, devPort: null, log: (m) => say('server', m) });
+  } catch (e) {
+    // Setup failed before any work: remove the worktree and the still-empty branch so a retry starts clean.
+    await git(gitRoot, ['worktree', 'remove', '--force', worktree]);
+    await git(gitRoot, ['branch', '-D', branch]);
+    rep.update({ worktree: null });
+    say('cleanup', `Setup failed; removed the worktree and branch ${branch}`, 'warn');
+    throw e;
+  }
   const pool = new BrowserPool();
   const vo = { baseUrl: target.baseUrl, guardrails: config.guardrails, pool };
   const groupMembers = [...new Set([...groups.values()].flatMap((g) => g.findings))].filter((f) => !selected.includes(f));
