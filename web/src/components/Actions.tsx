@@ -266,3 +266,79 @@ export function LauncherDialog({ open, onClose }: { open: boolean; onClose: () =
     </Dialog>
   );
 }
+
+/** Opens a real browser window with the bug's environment and replays it (runs on this machine). */
+export function ReproduceDialog({ open, onClose, ws, run, id, env, onStarted }: { open: boolean; onClose: () => void; ws: string; run: string; id: string; env: { browser: string; viewport: { width: number; height: number }; device: string | null }; onStarted: (job: JobView) => void }) {
+  const toast = useToast();
+  const [mode, setMode] = useState<'full' | 'start'>('full');
+  const [slow, setSlow] = useState(false);
+  const [browser, setBrowser] = useState('');
+  const [guardrails, setGuardrails] = useState(true);
+  const [busy, setBusy] = useState(false);
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={`Reproduce ${id}`}
+      footer={
+        <>
+          <button className="btn-link" onClick={onClose}>
+            Cancel
+          </button>
+          <Chamfer
+            tone="green"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const job = await api<JobView>(`/runs/${ws}/${encodeURIComponent(run)}/bugs/${id}/reproduce`, { json: { mode, slow, browser: browser || undefined, guardrails } });
+                toast('Opening a browser window…');
+                onStarted(job);
+                onClose();
+              } catch (e) {
+                toast((e as Error).message, true);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? 'Opening…' : 'Open reproduction window'}
+          </Chamfer>
+        </>
+      }
+    >
+      <p className="small" style={{ margin: 0 }}>
+        Opens a new <b>{browser || env.browser}</b> window on this machine {env.device ? <>emulating <b>{env.device}</b> (touch, mobile browser)</> : <>at <b>{env.viewport.width}×{env.viewport.height}</b></>} with the bug's settings, replays the steps with captions and highlights the bug. The window is then yours to click around in, and closing it ends the job.
+      </p>
+      <div className="field">
+        <span className="label">What to open</span>
+        <label className="check">
+          <input type="radio" name="mode" checked={mode === 'full'} onChange={() => setMode('full')} /> Replay the steps up to the bug and highlight it
+        </label>
+        <label className="check">
+          <input type="radio" name="mode" checked={mode === 'start'} onChange={() => setMode('start')} /> Just open the page in the bug's environment (follow the steps yourself)
+        </label>
+      </div>
+      <div className="grid-2" style={{ gap: 12 }}>
+        <label className="field">
+          <span className="label">Browser</span>
+          <select className="select" value={browser} onChange={(e) => setBrowser(e.target.value)}>
+            <option value="">As found ({env.browser})</option>
+            <option value="chromium">chromium</option>
+            <option value="webkit">webkit (Safari)</option>
+            <option value="firefox">firefox</option>
+          </select>
+        </label>
+        <div className="field">
+          <span className="label">Options</span>
+          <label className="check">
+            <input type="checkbox" checked={slow} onChange={(e) => setSlow(e.target.checked)} /> Slow motion
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={guardrails} onChange={(e) => setGuardrails(e.target.checked)} /> Keep guardrails (block data-changing requests)
+          </label>
+        </div>
+      </div>
+    </Dialog>
+  );
+}

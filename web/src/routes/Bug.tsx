@@ -5,7 +5,7 @@ import type { BugDetail, Finding, TranscriptItem } from '../lib/types.ts';
 import { ago, pct, variantEntries, widthRange } from '../lib/format.ts';
 import { Box, Chamfer, Chip, ConfidenceBar, CopyButton, ErrorBox, JsonView, Lightbox, Loading, SevChip, StatusChip, Tabs, FileIcon, Arrow } from '../components/ui.tsx';
 import { VideoPlayer, type Chapter } from '../components/VideoPlayer.tsx';
-import { FixDialog, LabelControls } from '../components/Actions.tsx';
+import { FixDialog, LabelControls, ReproduceDialog } from '../components/Actions.tsx';
 import { BranchPanel, CancelButton, JobStateChip, JobTimeline } from '../components/Jobs.tsx';
 
 type Media = 'annotated' | 'crop' | 'full' | 'explorer' | 'video' | 'filmstrip' | 'after';
@@ -18,6 +18,8 @@ export function Bug() {
   const [seek, setSeek] = useState<{ t_ms: number; n: number } | null>(null);
   const [media, setMedia] = useState<Media | null>(null);
   const [activeStep, setActiveStep] = useState<number | null>(null);
+  const [reproOpen, setReproOpen] = useState(false);
+  const [reproJob, setReproJob] = useState<string | null>(null);
 
   if (error) return <ErrorBox error={error} />;
   if (!data) return <Loading what={`Loading ${id}`} />;
@@ -26,8 +28,10 @@ export function Bug() {
   const defaultMedia: Media = f.video?.mp4 || f.video?.webm ? 'video' : 'annotated';
   const m = media ?? defaultMedia;
   const canFix = !!data.run.repo_path;
-  const latestJob = data.jobs[0] ?? null;
-  const runningJob = data.jobs.find((j) => j.state === 'running' && j.alive) ?? null;
+  const fixJobs = data.jobs.filter((j) => j.kind === 'fix');
+  const latestJob = fixJobs[0] ?? null;
+  const runningJob = fixJobs.find((j) => j.state === 'running' && j.alive) ?? null;
+  const liveRepro = reproJob ?? data.jobs.find((j) => j.kind === 'reproduce' && j.state === 'running' && j.alive)?.id ?? null;
 
   const seekStep = (i: number) => {
     const c = chapters.find((x) => x.kind === 'step' && x.step_index === i);
@@ -84,6 +88,10 @@ export function Bug() {
         <aside className="stack bug-side" style={{ ['--gap' as string]: '18px' }}>
           <Box head="Actions" chip={canFix ? undefined : <Chip tone="outline">no repo</Chip>}>
             <div className="stack" style={{ ['--gap' as string]: '12px' }}>
+              <Chamfer tone="light" onClick={() => setReproOpen(true)} disabled={!!liveRepro}>
+                {liveRepro ? 'Reproduction window open' : '▶ Reproduce in a new window'}
+              </Chamfer>
+              {liveRepro && <ReproStatus id={liveRepro} onEnd={() => setReproJob(null)} />}
               {canFix ? (
                 <>
                   <Chamfer tone="green" onClick={() => setFixScope({ ids: [f.id], title: f.title })} disabled={!!runningJob}>
@@ -147,6 +155,15 @@ export function Bug() {
         </aside>
       </div>
 
+      <ReproduceDialog
+        open={reproOpen}
+        onClose={() => setReproOpen(false)}
+        ws={ws}
+        run={run}
+        id={f.id}
+        env={{ browser: f.reproduction.environment.browser, viewport: f.reproduction.environment.viewport, device: f.reproduction.environment.variant.device ?? null }}
+        onStarted={(job) => setReproJob(job.id)}
+      />
       {fixScope && <FixDialog open onClose={() => setFixScope(null)} ws={ws} run={run} ids={fixScope.ids} title={fixScope.title} onStarted={() => void reload()} />}
     </>
   );
@@ -573,5 +590,26 @@ function FixStatus({ job, ws, run, onDone }: { job: BugDetail['jobs'][number]; w
       </Box>
       {st.branch && <BranchPanel ws={ws} run={run} branch={st.branch} base={st.base} live={st.state === 'running'} />}
     </>
+  );
+}
+
+/** Compact live status of a reproduction window (steps as they replay; cancel closes the window). */
+function ReproStatus({ id, onEnd }: { id: string; onEnd: () => void }) {
+  const { status, events, ended } = useJobStream(id);
+  useEffect(() => {
+    if (ended) onEnd();
+  }, [ended]); // eslint-disable-line react-hooks/exhaustive-deps
+  const last = [...events].reverse().find((e) => e.level !== 'agent');
+  if (!status) return null;
+  return (
+    <div className="box flat" style={{ padding: 10 }}>
+      <div className="spread">
+        <JobStateChip job={status} />
+        <CancelButton job={status} />
+      </div>
+      <p className={`small ${last?.level === 'warn' || last?.level === 'error' ? '' : 'muted'}`} style={{ margin: '8px 0 0', color: last?.level === 'error' ? 'var(--err)' : undefined }}>
+        {status.error && status.state !== 'running' ? status.error : last?.msg ?? 'Starting…'}
+      </p>
+    </div>
   );
 }

@@ -99,6 +99,19 @@ app.post('/runs/:ws/:run/fix', async (c) => {
   return c.json(launchJob('fix', args, { run_dir: dir, finding_ids: ids, scope: ids.join(','), options: { pr: !!b.pr, draft: b.draft !== false, base: b.base ?? null } }), 202);
 });
 
+app.post('/runs/:ws/:run/bugs/:id/reproduce', async (c) => {
+  const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
+  const id = c.req.param('id').toUpperCase();
+  if (!/^BB-\d{3,5}$/.test(id)) throw new HttpError(400, 'Bad finding id');
+  findFinding(dir, id);
+  const b = await c.req.json<{ mode?: string; slow?: boolean; browser?: string; guardrails?: boolean }>().catch(() => ({}) as { mode?: string; slow?: boolean; browser?: string; guardrails?: boolean });
+  const args = ['reproduce', id, '--run', dir, '--mode', b.mode === 'start' ? 'start' : 'full'];
+  if (b.slow) args.push('--slow');
+  if (b.browser && ['chromium', 'webkit', 'firefox'].includes(b.browser)) args.push('--browser', b.browser);
+  if (b.guardrails === false) args.push('--no-guardrails');
+  return c.json(launchJob('reproduce', args, { run_dir: dir, finding_ids: [id], scope: id, options: { mode: b.mode ?? 'full', slow: !!b.slow } }), 202);
+});
+
 app.post('/runs/:ws/:run/triage', async (c) => {
   const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
   const b = await c.req.json<{ video?: boolean; review?: boolean }>().catch(() => ({}) as { video?: boolean; review?: boolean });

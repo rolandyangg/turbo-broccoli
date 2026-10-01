@@ -34,7 +34,7 @@ export function Job() {
           )}
         </div>
         <h1 className="display" style={{ fontSize: 'clamp(28px, 4vw, 54px)', marginTop: 12 }}>
-          {job.kind === 'fix' ? `Fixing ${job.finding_ids.join(', ')}` : job.kind === 'explore' ? `Bug bash: ${targetName(target ?? '')}` : 'Triage'}
+          {job.kind === 'fix' ? `Fixing ${job.finding_ids.join(', ')}` : job.kind === 'explore' ? `Bug bash: ${targetName(target ?? '')}` : job.kind === 'reproduce' ? `Reproducing ${job.finding_ids.join(', ')}` : 'Triage'}
         </h1>
         <p className="mono small muted" style={{ margin: '8px 0 0' }}>
           started {dateTime(job.started_at)} ({ago(job.started_at)}) · {duration(job.started_at, job.ended_at)}

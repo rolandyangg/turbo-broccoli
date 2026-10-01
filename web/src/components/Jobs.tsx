@@ -26,6 +26,11 @@ const FIX_STAGE_LABEL: Record<string, string> = {
   'session-start': 'Explorer sessions',
   'session-end': 'Explorer sessions',
   triage: 'Triage',
+  serve: 'Start the app',
+  launch: 'Open browser window',
+  step: 'Replay steps',
+  ready: 'Ready: window is yours',
+  closed: 'Window closed',
 };
 
 function stageLabel(s: string) {
