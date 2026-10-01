@@ -49,6 +49,9 @@ open <workspace>/latest/report.html
 ./bin/bugbash.js fix BB-0007 BB-0011           # these together, one branch
 ./bin/bugbash.js fix RC-002 --pr --draft       # the whole root cause, push + draft PR
 
+# Open a real browser window with a bug's exact environment, replay it, and poke around
+./bin/bugbash.js reproduce BB-0007 [--mode start] [--slow] [--browser webkit]
+
 # Measure it on the seeded fixture
 ./bin/bugbash.js bench [--black-box] [--no-lead]
 ```
@@ -65,6 +68,28 @@ In Claude Code, the `bugbash` skill (`.claude/skills/bugbash`) wraps all of this
 - **Explorers** (`prompts/explorer.md` + `prompts/personas/*`) loop guess → probe → confirm over the bugbash MCP browser (`src/mcp/browserServer.ts`). The browser tools are `observe`, `click`, `rapid_click`, `hover`, `type`, `stress_fill`, `mutate_text`, `resize`, `set_variant` (dark mode, 200% text, zoom, DPR, reduced motion, offline/slow-3G, blocked fonts/images), `sweep_viewports`, `run_detectors`, `find_similar`, `record_finding`, `log_hypothesis`, `coverage`, `strategy_coverage` and `notes`.
 - **Guardrails** are enforced in code: same-origin only, destructive-click denylist, non-GET requests blocked (they return 503), dialogs auto-dismissed. Every action is logged as a replayable step.
 - **Detectors** (`src/detect/inpage.js`) measure geometry: clipped text, text spilling out of its box, overlaps (distinguishing collisions from intentional layering), spacing, viewport overflow, tap targets, broken images and layout shift. They are hints; the agents judge the screenshots.
+
+**Sizes and devices.** Resizing (`resize`, `sweep_viewports`) gives a *desktop browser window* of that size: mouse pointer, working hover, desktop user agent. Phones and tablets are tested with **real device emulation** (`set_device`, `sweep_devices`): touch with no hover, mobile user agent, device pixel ratio, and `<meta viewport>` handling. Bugs that only show up on real phones (hover-only menus, pages that zoom out because they're wider than the screen) are only caught there.
+- Device profiles (`src/explore/devices.ts`):
+  - phones: iPhone SE, Galaxy S24, iPhone 15, Pixel 7, iPhone 15 Pro Max, iPhone 15 landscape;
+  - tablets: iPad Mini (portrait and landscape), iPad Pro 11;
+  - desktop sizes: 1280×720, 1366×768, 1440×900 @2x, 1920×1080, 2560×1440.
+- Coverage tracks the widths, the exact viewports and the devices tested on each page.
+- Firefox has no mobile mode, so it gets touch, size, pixel ratio and user agent only.
+
+**Personas** (`src/explore/personas.ts`):
+
+| Persona | Tool set | Notes |
+|---|---|---|
+| `everyday-user` | everyday | Normal mouse + keyboard use at common desktop sizes. **Priority.** |
+| `phone-user` | everyday | Real phone emulation. **Priority.** |
+| `keyboard-user` | everyday | |
+| `german-user` | full | Rewrites text for long translations. |
+| `impatient-user` | full | Rapid clicks, back mid-flow, slow network. |
+| `power-user` | full | Big screens, zoom. |
+| `low-vision-user` | full | **Disabled by default.** |
+
+The *everyday* tool set has no page or environment editing (no text rewriting, stress input, click spam, zoom/network/font changes). It is enforced by the MCP server, not just the prompt. Configure this in `bugbash.config.json` with `disabledPersonas` (default `["low-vision-user"]`), `priorityPersonas` (default `["everyday-user", "phone-user"]`) and `personas` (an allowlist).
 
 **Triage.** Findings are clustered across sessions, widths and browsers. Each is replayed 3× in fresh browsers for a reproduction rate and delta-debugged down to its minimal steps. Then it is annotated (a red box on the defect, orange on the related element). Timing bugs get a narrated video: step captions, a ring on each clicked element, the bug boxed and held, plus mp4, GIF, filmstrip and a Playwright trace. An independent reviewer (fresh context, no explorer reasoning) judges each finding from the evidence alone. Findings are grouped by root cause with source files, and scored as a blend of explorer, reviewer, detector and reproduction signals, then calibrated from your labels. Known false-positive patterns are suppressed.
 
@@ -123,6 +148,7 @@ It finds every workspace automatically: the CLI records each one in `~/.bugbash/
   - the raw JSON.
 - **Fix:** starts `bugbash fix` as a background job on a new branch. You follow it live: a stage timeline, the agent's actions, and per-browser/width verify results. A branch panel shows commits, changed files, the diff, and PR status and checks.
   - Opening a PR requires an explicit "this pushes to origin" confirmation.
+- **Reproduce:** "▶ Reproduce in a new window" opens a real browser window on your machine with the bug's exact browser, device or size, and settings. It replays the steps with captions, highlights the bug, and leaves the window open for you to try things. Guardrails stay on by default, and closing the window ends the job.
 - **Label and regroup:** confirm, mark false positive (with a suppression scope), or move a finding to another group.
 - **New bug bash / re-triage:** launch explore (with optional triage) and watch explorer sessions live.
 

@@ -29,6 +29,9 @@ When the user says something like "BB-0009 is intentional" or "that's not a bug"
 This suppresses matching findings in future runs and feeds confidence calibration. `confirmed` works the same way. After enough labels, run `./bin/bugbash.js calibrate`.
 Moving a finding between groups: `./bin/bugbash.js regroup BB-0012 RC-005` (or `new`). Redo all grouping for a run: `./bin/bugbash.js group`.
 
+## Reproducing
+To show the user a bug live: `./bin/bugbash.js reproduce BB-0007` opens a real browser window with the bug's exact browser, device and settings, replays it, and highlights the bug. It opens a window on their screen, so only run it when they ask to see a bug. Use `--mode start` to just open the page in that environment.
+
 ## Fixing — only on explicit request
 - Never run `fix` unless the user asks to fix specific findings or groups.
 - `fix BB-0007` fixes only that finding. `fix BB-0007 BB-0011` fixes those together on one branch. `fix RC-002` fixes the whole root-cause group.
