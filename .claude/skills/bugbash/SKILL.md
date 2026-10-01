@@ -18,7 +18,8 @@ description: Agentically bug-bash a web app's UI (layout defects across sizes, b
 ```
 - Local repo with a `dev`/`start` script: started automatically. Static folder: served. URL: black-box unless `--repo` points at its source.
 - Long-running (several minutes up to the time limit). Run it in the background and tell the user it's running.
-- Cheaper runs: `--budget-sessions 4 --max-calls 50 --browsers chromium`, or `--no-lead` for a fixed plan.
+- Cheaper runs: `--preset quick`, or `--budget-sessions 4 --max-calls 50 --browsers chromium`, or `--no-lead` for a fixed plan.
+- Presets: `standard` (default), `quick`, `mobile`, `desktop`, `deep`. Narrow a run with `--personas`, `--persona-sessions phone-user=3`, `--devices`, `--strategies` / `--exclude-strategies`, `--focus /a,/b`; the lead is held to these strictly.
 
 ## Presenting results
 Run `./bin/bugbash.js list [--run <id|path>]` (add `--all` to include low-confidence, flaky and suppressed findings), or read `<run>/summary.md` / `findings.json`. Summarize **by root-cause group, listing each finding individually**, with severity and confidence, a one-line expected-vs-actual, and the page and widths. Point the user to `report.html` for screenshots and videos. Don't paste whole JSON.
@@ -38,6 +39,16 @@ To show the user a bug live: `./bin/bugbash.js reproduce BB-0007` opens a real b
 - It requires a clean git tree in the target repo.
 - **Ask before adding `--pr`**, because it pushes a branch and opens a GitHub PR. Suggest `--draft`. Mention that before/after images are committed under `.bugbash/pr-assets/` in a separate commit unless `--no-pr-assets` is used.
 - Report the result: whether it was verified, the branch, the PR URL, and any other findings the fix also resolved.
+
+## Learning loop — the user approves, not you
+- After triage, a retrospective (`./bin/bugbash.js retro`) files proposals: lessons, strategy priors, detector suggestions and prompt/config tweaks. They change nothing until approved.
+- Show pending proposals with `improvements list`. Only run `improvements approve|reject <P-id>` when the user decides on that specific item; never approve in bulk on your own.
+- `improve <B-id>` implements an approved backlog item on an `improve/*` branch (typecheck + tests). Ask before `--pr`.
+
+## Compare, notifications, schedules
+- Compare two runs in the web app at `/compare?a=<ws>/<run>&b=<ws>/<run>` (also linked from run pages).
+- Notification channels and events are set on the web app's Settings page; don't change them unless asked.
+- `schedule add|list|enable|disable|run-now|remove` manages macOS launchd schedules. Only add or enable one when the user asks for scheduled runs, and say it only runs while the Mac is awake and they're logged in.
 
 ## Web app
 For browsing results, pointing the user to the UI is often better than pasting results. `npm run web` serves http://127.0.0.1:4317, where they can view every bug with its screenshots, annotated video and repro steps, start fixes and watch them live. Start it in the background if they ask to see results visually.

@@ -52,8 +52,21 @@ open <workspace>/latest/report.html
 # Open a real browser window with a bug's exact environment, replay it, and poke around
 ./bin/bugbash.js reproduce BB-0007 [--mode start] [--slow] [--browser webkit]
 
-# Measure it on the seeded fixture
+# Measure it on the seeded fixture (results record the agent version; recall drops are flagged)
 ./bin/bugbash.js bench [--black-box] [--no-lead]
+
+# Run setup presets: standard (default), quick, mobile, desktop, deep — or pick everything by hand
+./bin/bugbash.js explore ../my-app --preset mobile --then-triage
+./bin/bugbash.js explore ../my-app --personas everyday-user,phone-user --persona-sessions phone-user=3 --devices iphone-15,laptop --exclude-strategies size.sweep
+
+# Learning loop: proposals only; nothing changes until you approve it
+./bin/bugbash.js retro [--run <id|path>]       # post-mortem → lessons, priors, detector ideas, tweaks
+./bin/bugbash.js improvements list|approve|reject|backlog [P-…]
+./bin/bugbash.js improve B-1 [--pr]            # implement an approved backlog item on an improve/* branch
+
+# Scheduled runs (macOS launchd; only while the Mac is awake and you're logged in)
+./bin/bugbash.js schedule add --target ../my-app --cron "0 2 * * 1-5" --preset standard
+./bin/bugbash.js schedule list | run-now <id> | disable <id> | remove <id>
 ```
 
 The workspace defaults to `<repo>/.bugbash` (or `./.bugbash` for URLs). Use `--out <dir>` to choose another location. Useful `explore` flags: `--budget-sessions`, `--parallel`, `--max-calls`, `--time-limit <min>`, `--browsers`, `--start /a,/b`, `--model`, `--dev-command`, `--no-lead`, `--no-code-intel`. Defaults can also go in `bugbash.config.json` in the target repo (see `src/config.ts`).
@@ -150,7 +163,12 @@ It finds every workspace automatically: the CLI records each one in `~/.bugbash/
   - Opening a PR requires an explicit "this pushes to origin" confirmation.
 - **Reproduce:** "▶ Reproduce in a new window" opens a real browser window on your machine with the bug's exact browser, device or size, and settings. It replays the steps with captions, highlights the bug, and leaves the window open for you to try things. Guardrails stay on by default, and closing the window ends the job.
 - **Label and regroup:** confirm, mark false positive (with a suppression scope), or move a finding to another group.
-- **New bug bash / re-triage:** launch explore (with optional triage) and watch explorer sessions live.
+- **New bug bash / re-triage:** launch explore (with optional triage) with a preset or every option set by hand, and watch explorer sessions live.
+- **Agents tab** (dashboard and run overview): API-equivalent cost and tokens by phase, an explorer leaderboard, results by persona/browser/device, the discovery curve, a page × size coverage heatmap, strategy and tool usage, triage quality, reliability and accuracy.
+- **Improvements:** review what the retrospective proposes, one item at a time (approve, edit, reject), implement approved code changes on a branch, and watch the benchmark gate.
+- **Compare:** two runs side by side: regressed / new / still open / fixed / not found / not re-tested, screenshots with synced zoom, and agent metrics.
+- **Notifications and Settings:** an inbox bell, macOS notifications and a Slack webhook for finished runs and fixes, failures and limits, and new proposals.
+- **Schedules:** set up, toggle, run and remove launchd schedules, and see each one's last result.
 
 Jobs run as detached CLI processes. Their status and events are written to disk (`~/.bugbash/web-jobs/`, or `<run>/jobs/` for CLI-started jobs), so they survive page reloads and server restarts. The server binds to 127.0.0.1 only, and it serves run files with a path-traversal guard and HTTP Range support for video seeking.
 
