@@ -9,6 +9,7 @@ import { DETECTABLE } from '../triage/replay.js';
 import { STRATEGY_IDS } from '../explore/strategies.js';
 import { Memory } from '../memory/siteMemory.js';
 import { JobReporter, newJobId, describeAgentEvent } from '../jobs/events.js';
+import { notifyProposals } from '../notify/events.js';
 import { addProposals, listImprovementRuns, rejected, priorsText, setRetroResult, type NewProposal } from './proposals.js';
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -182,6 +183,7 @@ export async function runRetro(o: RetroOptions) {
     const msg = `${added.length} proposal(s) waiting for review${skipped.length ? `, ${skipped.length} skipped (${skipped.map((s) => s.reason).join(', ')})` : ''}`;
     log(msg);
     rep.finish('succeeded', { summary: msg });
+    notifyProposals(added.length, String(out.summary ?? ''));
     return { added, skipped, summary: out.summary ?? '' };
   } catch (e) {
     const msg = (e as Error).message;

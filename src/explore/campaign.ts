@@ -11,6 +11,8 @@ import { mergeAll, summarize, pageKey } from './coverage.js';
 import { summarizeIntel, type CodeIntel } from './codeIntel.js';
 import { Memory } from '../memory/siteMemory.js';
 import { addProposals, priorsText } from '../learn/proposals.js';
+import { notifyFailure } from '../notify/events.js';
+import { runPath } from '../notify/notify.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(here, '..');
@@ -279,6 +281,7 @@ export class Campaign {
     if (limited && !this.stopReason) {
       this.stopReason = `Stopped early: Claude usage limit reached (${r.text.slice(0, 160)}). Findings recorded so far are kept.`;
       this.decisions.push(`STOP: ${this.stopReason}`);
+      notifyFailure('Claude usage limit reached', `The bug bash stopped early; findings recorded so far are kept. ${r.text.slice(0, 200)}`, runPath(this.o.workspace, this.o.runId));
       this.o.log(this.stopReason);
     }
   }

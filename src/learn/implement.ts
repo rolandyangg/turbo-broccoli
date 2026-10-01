@@ -5,6 +5,7 @@ import { execa } from 'execa';
 import { runClaude } from '../llm/claude.js';
 import { JobReporter, newJobId, describeAgentEvent, type JobEvent } from '../jobs/events.js';
 import { backlog, updateBacklogItem, type BacklogItem } from './proposals.js';
+import { notifyDetached } from '../notify/notify.js';
 
 /** The bugbash repo itself: approved detector suggestions and prompt/config tweaks are code changes here. */
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -137,6 +138,7 @@ export async function implementBacklogItem(o: ImplementOptions) {
       say('pr', `Opened ${prUrl}`, 'success', { pr_url: prUrl });
     }
     updateBacklogItem(o.ws, item.id, { status: verified ? 'implemented' : 'failed', pr_url: prUrl, error: verified ? null : 'Typecheck/tests failed; the branch has the last attempt' });
+    if (verified) notifyDetached({ event: 'fix', level: 'success', title: `Improvement implemented: ${item.id}`, body: `${item.title}\nBranch ${branch}${prUrl ? `\nPR: ${prUrl}` : ' (not pushed)'}. Typecheck and tests pass.`, path: '/improvements?tab=backlog' });
     rep.finish(verified ? 'succeeded' : 'failed', { verified, pr_url: prUrl, summary: verified ? `Implemented on ${branch}` : undefined, error: verified ? null : 'Typecheck/tests failed' });
     return { branch, verified, prUrl, worktree };
   } catch (e) {

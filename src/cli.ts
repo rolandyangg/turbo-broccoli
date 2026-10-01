@@ -137,6 +137,7 @@ exploreOpts(program.command('explore').description('Agentically bug-bash a site 
           await runRetro({ runDir, model: config.model, log: logf }).catch((e) => logf(`Retrospective failed: ${(e as Error).message}`));
         }
       } else logf(`Next: bugbash triage --run ${runDir}`);
+      (await import('./notify/events.js')).notifyRunDone(runDir);
       rep.finish('succeeded', { summary: o.thenTriage ? 'Explored and triaged' : 'Explored' });
     } catch (e) {
       rep.finish('failed', { error: (e as Error).message });
@@ -167,6 +168,7 @@ program
       const { triageRun } = await import('./triage/triage.js');
       await triageRun({ runDir, baseUrl: target.baseUrl, log: logf, video: o.video !== false, review: o.review !== false, reproRuns: o.reproRuns, concurrency: o.concurrency });
       rep.finish('succeeded', { summary: 'Triage complete' });
+      (await import('./notify/events.js')).notifyRunDone(runDir);
     } catch (e) {
       rep.finish('failed', { error: (e as Error).message });
       throw e;
@@ -451,6 +453,9 @@ program
     }
     const res = scoreRun(runDir, { label: true });
     console.log(JSON.stringify(res, null, 2));
+    const { benchHistory } = await import('./bench.js');
+    const latest = benchHistory().at(-1);
+    if (latest?.regression) (await import('./notify/events.js')).notifyFailure(`Benchmark regression: recall dropped ${Math.round(latest.regression.drop * 100)} pts`, `Agent version ${latest.version} (commit ${latest.commit ?? '?'}) found fewer seeded bugs than ${latest.regression.from}. Best recall now ${Math.round(latest.best_recall * 100)}%.`, '/improvements?tab=bench');
   });
 
 program

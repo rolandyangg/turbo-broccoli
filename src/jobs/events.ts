@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { notifyDetached } from '../notify/notify.js';
 
 /**
  * File-backed job progress, so any UI (or a later process) can follow a fix/explore/triage job:
@@ -9,6 +10,7 @@ import { randomBytes } from 'node:crypto';
  */
 export type JobKind = 'fix' | 'explore' | 'triage' | 'reproduce' | 'retro' | 'improve';
 export type JobState = 'running' | 'succeeded' | 'failed' | 'cancelled';
+const KIND_LABEL: Record<JobKind, string> = { fix: 'Fix', explore: 'Bug bash', triage: 'Triage', reproduce: 'Reproduction', retro: 'Retrospective', improve: 'Improvement' };
 
 export interface JobEvent {
   t: string;
@@ -100,6 +102,8 @@ export class JobReporter {
   finish(state: Exclude<JobState, 'running'>, patch: Partial<JobStatus> = {}) {
     this.update({ ...patch, state, ended_at: new Date().toISOString() });
     this.event(state === 'succeeded' ? 'done' : state, patch.summary ?? patch.error ?? state, state === 'succeeded' ? 'success' : 'error');
+    // Every failed job (crash, verification failure, …) is a "failures & limits" notification.
+    if (state === 'failed') notifyDetached({ event: 'failure', level: 'error', title: `${KIND_LABEL[this.status.kind]} failed${this.status.scope ? `: ${this.status.scope}` : ''}`, body: String(this.status.error ?? patch.error ?? 'Unknown error').slice(0, 600), path: `/jobs/${this.status.id}` });
   }
 }
 

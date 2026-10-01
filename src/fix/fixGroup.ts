@@ -11,6 +11,7 @@ import { verifyFinding, captureAfter, pageSnapshot, type VerifyResult } from './
 import { Memory } from '../memory/siteMemory.js';
 import { writeReport } from '../store/report.js';
 import { JobReporter, newJobId, describeAgentEvent, type JobEvent } from '../jobs/events.js';
+import { notifyFixDone } from '../notify/events.js';
 
 export interface FixOptions {
   runDir: string;
@@ -55,6 +56,7 @@ export async function fixFindings(o: FixOptions) {
   try {
     const r = await fixInner(o, rep, say);
     rep.finish('succeeded', { verified: r.verified, pr_url: r.prUrl, also_fixed: r.alsoFixed, summary: r.verified ? 'Fixed and verified' : 'Committed, but not fully verified' });
+    notifyFixDone(o.runDir, { ids: o.ids, branch: r.branch, verified: r.verified, prUrl: r.prUrl });
     return r;
   } catch (e) {
     const msg = (e as Error).message;
