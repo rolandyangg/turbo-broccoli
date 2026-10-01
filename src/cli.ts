@@ -103,6 +103,7 @@ exploreOpts(program.command('explore').description('Agentically bug-bash a site 
   .option('--name <name>', 'Display name for the run')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
   .option('--schedule <id>', 'Set by scheduled runs (launchd): records the result for the Schedules page')
+  .option('--instructions <text>', 'Your instructions for the lead and explorers (e.g. what to focus on)')
   .action(async (targetArg: string, o) => {
     const sched = o.schedule ? await import('./schedule/schedule.js') : null;
     const started = new Date().toISOString();
@@ -129,6 +130,7 @@ exploreOpts(program.command('explore').description('Agentically bug-bash a site 
         noLead: o.lead === false ? true : undefined,
         codeIntel: o.codeIntel === false ? false : undefined,
         name: o.name,
+        instructions: o.instructions ?? null,
         log: logf,
         onRun: (runDir) => {
           rep.update({ run_dir: runDir });
@@ -487,6 +489,7 @@ program
   .option('--repo <path>', 'Repo whose workspace to use')
   .option('--pr', 'Push the branch and open a PR (gh)')
   .option('--max-attempts <n>', 'Implement/verify attempts per item', int, 2)
+  .option('--instructions <text>', 'Your instructions for the implementing agent')
   .option('--keep-worktree', 'Keep the git worktree after finishing')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
   .action(async (ids: string[], o) => {
@@ -495,7 +498,7 @@ program
     const { backlog } = await import('./learn/proposals.js');
     const list = o.all ? backlog(ws).filter((b) => b.status === 'open' || b.status === 'failed').map((b) => b.id) : ids.map((x) => x.toUpperCase());
     if (!list.length) throw new Error(o.all ? 'Nothing open on the backlog' : 'Pass backlog ids or --all');
-    const r = await implementBacklogItems({ ws, ids: list, pr: !!o.pr, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
+    const r = await implementBacklogItems({ ws, ids: list, instructions: o.instructions ?? null, pr: !!o.pr, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
     console.log(`${r.done.length}/${list.length} implemented${r.done.length ? ` on ${r.branch}` : ''}${r.failed.length ? `; not implemented: ${r.failed.map((f) => `${f.item.id} (${f.error})`).join(', ')}` : ''}${r.prUrl ? `\nPR: ${r.prUrl}` : ''}`);
   });
 

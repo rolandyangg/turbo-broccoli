@@ -331,6 +331,47 @@ app.get('/jobs/:id', async (c) => {
   return c.json({ ...j, branch_exists });
 });
 app.post('/jobs/:id/cancel', (c) => c.json(cancelJob(c.req.param('id'))));
+// A message to a FINISHED job starts it again with those instructions (fix: continue its branch; bug bash: a
+// follow-up run of the same target; improvement: re-run the same items).
+app.post('/jobs/:id/followup', async (c) => {
+  const j = getJob(c.req.param('id'));
+  if (j.state === 'running' && j.alive) throw new HttpError(409, 'The job is still running: send it a message instead');
+  const b = await c.req.json<{ text?: string; pr?: boolean; confirmPush?: boolean }>().catch(() => ({}) as { text?: string; pr?: boolean; confirmPush?: boolean });
+  const text = String(b.text ?? '').trim();
+  if (!text) throw new HttpError(400, 'Write what you want the agent to do');
+  if (text.length > 4000) throw new HttpError(400, 'Message is too long (4000 characters max)');
+  if (b.pr && !b.confirmPush) throw new HttpError(400, 'Opening a PR pushes to GitHub: confirmPush must be true');
+  const opts = (j.options ?? {}) as Record<string, unknown>;
+  if (j.kind === 'fix') {
+    if (!j.run_dir) throw new HttpError(409, "This fix job's run is unknown");
+    const ids = j.scope && /^RC-\d+$/i.test(j.scope) ? [j.scope] : j.finding_ids;
+    let hasBranch = false;
+    try {
+      const repo = readRun(j.run_dir).repo_path;
+      if (repo && j.branch) hasBranch = await exec('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${j.branch}`], { cwd: repo }).then(() => true, () => false);
+    } catch {}
+    const args = ['fix', ...ids, '--run', j.run_dir, '--instructions', text, ...(hasBranch ? ['--continue', j.branch!] : ['--retry'])];
+    if (b.pr) args.push('--pr', ...(opts.draft !== false ? ['--draft'] : []));
+    return c.json(launchJob('fix', args, { run_dir: j.run_dir, finding_ids: j.finding_ids, scope: j.scope, branch: hasBranch ? j.branch : null, options: { ...opts, pr: !!b.pr, mode: hasBranch ? 'continue' : 'retry', instructions: text, followup_of: j.id } }), 202);
+  }
+  if (j.kind === 'explore') {
+    const target = (opts.target as string | undefined) ?? (j.run_dir ? readRun(j.run_dir).target : null);
+    if (!target) throw new HttpError(409, "This bug bash's target is unknown");
+    const args = ['explore', target, '--then-triage', '--instructions', text];
+    if (opts.repo) args.push('--repo', String(opts.repo));
+    if (opts.preset) args.push('--preset', String(opts.preset));
+    return c.json(launchJob('explore', args, { scope: target, options: { ...opts, instructions: text, followup_of: j.id } }), 202);
+  }
+  if (j.kind === 'improve') {
+    const ids = ((opts.backlog_ids as string[] | undefined) ?? [opts.backlog_id as string]).filter(Boolean);
+    const ws = workspaces().find((w) => w.id === opts.ws);
+    if (!ids.length || !ws) throw new HttpError(409, "This improvement job's items are unknown");
+    const args = ['improve', ...ids, '--out', ws.path, '--instructions', text, ...(b.pr ? ['--pr'] : [])];
+    return c.json(launchJob('improve', args, { scope: j.scope, options: { ...opts, pr: !!b.pr, instructions: text, followup_of: j.id } }), 202);
+  }
+  throw new HttpError(409, `A ${j.kind} job can't be restarted with instructions`);
+});
+
 app.get('/jobs/:id/messages', (c) => c.json(readMessages(getJob(c.req.param('id')).dir)));
 app.post('/jobs/:id/messages', async (c) => {
   const j = getJob(c.req.param('id'));

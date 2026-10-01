@@ -31,6 +31,8 @@ export interface CampaignOptions {
   log: (msg: string) => void;
   /** Skip the lead agent and run a fixed default plan (for debugging / cheap runs). */
   noLead?: boolean;
+  /** The person's instructions for this bug bash (e.g. a follow-up sent to a finished job). */
+  instructions?: string | null;
   onProgress?: (state: { jobs: { id: string; status: string }[]; decisions: string[] }) => void;
 }
 
@@ -237,6 +239,7 @@ export class Campaign {
       job.hypotheses.length ? `\nHypotheses to test first (from the lead / code analysis):\n${job.hypotheses.map((h) => `- ${h}`).join('\n')}` : '',
       cov.length ? `\nCoverage so far on your pages (from other explorers):\n${JSON.stringify(cov.map((c) => ({ page: c.page, widths_untested: c.widths_untested, strategies_untried: c.strategies_untried.slice(0, 12), untried_examples: c.untried_examples.slice(0, 6) })))}` : '',
       notes ? `\nShared notes from other explorers:\n${notes}` : '',
+      this.o.instructions?.trim() ? `\nInstructions from the person running this bug bash:\n${this.o.instructions.trim()}` : '',
       lessons ? `\nApproved lessons from past runs on this site:\n${lessons}` : '',
       priors ? `\nApproved strategy priors:\n${priors}` : '',
       `\nYou have about ${job.maxToolCalls} tool calls. Start with observe().`,
@@ -460,6 +463,7 @@ export class Campaign {
       this.cfg.focusPaths.length ? `The user wants these pages covered: ${this.cfg.focusPaths.join(', ')}.` : '',
       `Budget: ${this.cfg.budgetSessions} explorer sessions, ${Math.round(this.cfg.timeLimitMs / 60000)} minutes, ${this.cfg.parallel} in parallel, ~${this.cfg.maxToolCallsPerSession} tool calls each.`,
       `Stop rule: saturation when the last ${this.cfg.saturationWindow} sessions produce fewer than ${this.cfg.saturationMinNew} new unique findings in total (findings_summary.saturation.saturated), or when budget runs out.`,
+      this.o.instructions?.trim() ? `INSTRUCTIONS FROM THE PERSON RUNNING THIS BUG BASH (follow them within your rules; pass them on to explorers in their goals):\n${this.o.instructions.trim()}` : '',
       `Begin by reading memory, code_intel and site_map, then plan and spawn the first wave.`,
     ].join('\n');
     const lead = runClaude({

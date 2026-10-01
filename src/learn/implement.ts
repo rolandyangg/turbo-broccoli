@@ -27,6 +27,8 @@ export interface ImplementOptions {
   jobId?: string | null;
   /** Override for tests. */
   repoRoot?: string;
+  /** The person's instructions for the implementing agent. */
+  instructions?: string | null;
   /** Verification commands (default: typecheck + unit and detector tests). */
   checks?: string[][];
 }
@@ -122,7 +124,7 @@ export async function implementBacklogItems(o: BatchOptions) {
       for (let attempt = 1; attempt <= o.maxAttempts && !verified; attempt++) {
         say(stage, `Attempt ${attempt}: implementing ${item.id}`);
         const r = await runClaude({
-          prompt: prompt(item, feedback, done),
+          prompt: (o.instructions?.trim() ? `# Instructions from the person (follow them within your rules)\n${o.instructions.trim()}\n\n` : '') + prompt(item, feedback, done),
           systemPrompt: SYSTEM,
           tools: ['Read', 'Edit', 'Write', 'Glob', 'Grep'],
           allowedTools: ['Read', 'Edit', 'Write', 'Glob', 'Grep'],

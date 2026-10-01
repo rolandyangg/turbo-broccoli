@@ -19,6 +19,8 @@ export interface ExploreOptions {
   name?: string | null;
   /** Preset config layered under the explicit overrides. */
   preset?: Partial<Config>;
+  /** The person's instructions for the lead and explorers. */
+  instructions?: string | null;
 }
 
 export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; runId: string; workspace: string; config: Config }> {
@@ -55,7 +57,7 @@ export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; r
   log(`Run ${runId} → ${runDir}`);
   log(intel ? `Code intel: ${intel.breakpoints.length} breakpoints, ${intel.risky.length} risky rules, ${intel.components.length} shared components, ${intel.hypotheses.length} hypothesis seeds` : 'Black-box mode (no source).');
 
-  const campaign = new Campaign({ runId, runDir, workspace: ws, baseUrl: target.baseUrl, config, intel, log, noLead });
+  const campaign = new Campaign({ runId, runDir, workspace: ws, baseUrl: target.baseUrl, config, intel, log, noLead, instructions: o.instructions ?? null });
   const res = await campaign.run();
   info.ended_at = new Date().toISOString();
   info.stop_reason = res.stopReason;
