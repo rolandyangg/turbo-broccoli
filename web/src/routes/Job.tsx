@@ -11,6 +11,11 @@ import { AgentChat } from '../components/AgentChat.tsx';
 
 export function Job() {
   const { id = '' } = useParams();
+  const [conversationTurn, setConversationTurn] = useState(0);
+  return <JobDetails key={`${id}:${conversationTurn}`} id={id} onFollowup={() => setConversationTurn((turn) => turn + 1)} />;
+}
+
+function JobDetails({ id, onFollowup }: { id: string; onFollowup: (job: JobView) => void }) {
   const { data: initial, error, reload } = useApi<JobView & { branch_exists?: boolean | null }>(`/jobs/${id}`);
   const { status, events, ended } = useJobStream(id);
   const job = status ? { ...initial, ...status, branch_exists: initial?.branch_exists ?? null } : initial;
@@ -61,7 +66,7 @@ export function Job() {
             )}
             <JobTimeline events={events} status={job} />
           </Box>
-          <AgentChat job={job} events={events} />
+          <AgentChat job={job} events={events} onFollowup={onFollowup} />
           {job.kind === 'explore' && job.run && <LiveSessions ws={job.run.ws} run={job.run.run} live={job.state === 'running'} />}
           {job.log_tail && (
             <details className="box">

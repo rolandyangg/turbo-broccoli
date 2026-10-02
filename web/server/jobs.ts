@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { JobEvent, JobKind, JobStatus } from '../../src/jobs/events.ts';
+import { postMessage } from '../../src/jobs/inbox.ts';
 import { workspaces, HttpError, readJsonSafe, locateRunDir, samePath } from './workspaces.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -129,6 +130,29 @@ export function launchJob(kind: JobKind, args: string[], init: Partial<JobStatus
   writeFileSync(join(dir, 'command.json'), JSON.stringify({ args, cwd: REPO_ROOT, pid: child.pid, at: now }, null, 2));
   child.unref();
   return view(dir)!;
+}
+
+/** Resume a finished job as a conversation, preserving its identity and history. */
+export function followupJob(id: string, text: string): JobView {
+  const job = getJob(id);
+  if (job.alive) throw new HttpError(409, 'The job is running; send a message instead');
+  if (job.kind === 'connect') throw new HttpError(409, 'GitHub sign-in does not support agent conversations');
+  postMessage(job.dir, text);
+  const now = new Date().toISOString();
+  const status = { ...job, state: 'running', stage: 'conversation', ended_at: null, error: null, updated_at: now };
+  const logFd = openSync(join(job.dir, 'log.txt'), 'a');
+  const child = spawn(process.execPath, ['--import', 'tsx', join(here, 'jobConversation.ts'), job.dir], {
+    cwd: REPO_ROOT, detached: true, stdio: ['ignore', logFd, logFd],
+    env: { ...process.env, BUGBASH_JOB_DIR: dirname(job.dir), BUGBASH_INBOX: join(job.dir, 'messages.jsonl'), BUGBASH_MODEL_SELECTION: join(job.dir, 'model-selection.json'), FORCE_COLOR: '0' },
+  });
+  closeSync(logFd);
+  status.pid = child.pid ?? 0;
+  writeFileSync(join(job.dir, 'status.json'), JSON.stringify(status, null, 2));
+  child.on('error', (error) => {
+    writeFileSync(join(job.dir, 'status.json'), JSON.stringify({ ...status, state: 'failed', ended_at: new Date().toISOString(), error: error.message }));
+  });
+  child.unref();
+  return view(job.dir)!;
 }
 
 export function cancelJob(id: string) {
