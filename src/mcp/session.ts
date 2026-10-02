@@ -264,13 +264,33 @@ export class BrowserSession {
     const blocked = await this.guardCheck(selector);
     if (blocked) return `BLOCKED by guardrails: ${blocked}. Choose a different element.`;
     const before = this.driver.path();
+    const toggle = (await this.page.locator(selector).first().getAttribute('aria-expanded', { timeout: 1000 }).catch(() => null)) === 'false';
     const step: Step = { action: 'click', selector, count: count > 1 ? count : undefined, text: await this.textOf(selector) };
     await this.driver.apply(step);
     this.record(step);
     if (count > 1) this.tagStrategy('chaos.rapid-click');
     await this.afterAction(selector);
     const after = this.driver.path();
-    return `Clicked ${ref}${count > 1 ? ` ×${count}` : ''} (${selector})${after !== before ? ` → navigated to ${after}` : ''}`;
+    const menu = toggle && after === before ? await this.checkOpenedMenu() : '';
+    return `Clicked ${ref}${count > 1 ? ` ×${count}` : ''} (${selector})${after !== before ? ` → navigated to ${after}` : ''}${menu}`;
+  }
+
+  /** After a menu toggle opened something: does it fit and lock page scroll, here and at the short sizes in config? */
+  private async checkOpenedMenu() {
+    const orig = { ...this.driver.viewport };
+    const sizes = [orig, ...this.opts.config.detectors.menuViewports.filter((v) => v.width !== orig.width || v.height !== orig.height)];
+    const lines: string[] = [];
+    try {
+      await settle(this.page, 100);
+      for (const v of sizes) {
+        if (v !== orig) await this.driver.resize(v.width, v.height);
+        const cands = await runDetectors(this.page, this.detectOpts(['overlay-overflow', 'scroll-trap'])).catch(() => [] as Candidate[]);
+        for (const { id, c } of this.storeCandidates(cands)) lines.push(`  ${id} ${c.type} conf=${c.confidence} at ${v.width}x${v.height} ${c.selector} "${c.text.slice(0, 40)}" — ${c.message}`);
+      }
+    } finally {
+      if (sizes.length > 1) await this.driver.resize(orig.width, orig.height);
+    }
+    return lines.length ? `\nOpened menu checks (verify on a screenshot at that size, then record_finding with candidate_id):\n${lines.join('\n')}` : '';
   }
 
   async hover(ref: string) {

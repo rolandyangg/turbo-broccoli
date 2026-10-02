@@ -608,10 +608,35 @@
 
   // ---------- overlays that don't fit ----------
   const scrollsY = (el) => /(auto|scroll)/.test(cs(el).overflowY) && el.scrollHeight > el.clientHeight + 1;
-  function detectOverlays() {
+  function detectOverlays(els) {
     const out = [];
     const overlays = [...document.querySelectorAll(OPEN_OVERLAY + ', [class*=modal i], [class*=dropdown i], [class*=popover i], [class*=menu i]')].filter((el) => isVisible(el) && cs(el).position !== 'static');
+    // Full-screen position:fixed menus (e.g. opened by a hamburger) whatever their role or class name.
+    const covers = (el) => {
+      const r = rectOf(el);
+      return Math.min(r.right, innerWidth) - Math.max(r.left, 0) >= innerWidth * 0.9 && Math.min(r.bottom, innerHeight) - Math.max(r.top, 0) >= innerHeight * 0.9;
+    };
+    const sheets = els.filter((el) => cs(el).position === 'fixed' && isVisible(el) && covers(el) && el.querySelector(INTERACTIVE));
+    const reported = new Set();
+    for (const el of sheets) {
+      if (sheets.some((o) => o !== el && o.contains(el))) continue;
+      const s = cs(el);
+      const canScroll = scrollsY(el) || [...el.querySelectorAll('*')].some((c) => scrollsY(c) && rectOf(c).height > 40);
+      const clipped = el.scrollHeight > el.clientHeight + 1 && !/(auto|scroll)/.test(s.overflowY);
+      const below = canScroll ? [] : [...el.querySelectorAll(INTERACTIVE)].filter((c) => isVisible(c) && rectOf(c).bottom > innerHeight + 2);
+      if (clipped || below.length) {
+        reported.add(el);
+        const why = clipped ? `its content is ${el.scrollHeight - el.clientHeight}px taller than the box and overflow-y is ${s.overflowY}` : `${below.length} item(s) end below the bottom of the screen and it doesn't scroll`;
+        out.push(cand('overlay-overflow', el, 0.85, `Full-screen menu/overlay doesn't fit the ${innerWidth}×${innerHeight} viewport: ${why}, so part of it can't be reached.`, { fixed: true, internal_scroll: canScroll, overflow_y: s.overflowY, scroll_height: el.scrollHeight, client_height: el.clientHeight, links_below: below.slice(0, 3).map(selectorFor), viewport: [innerWidth, innerHeight] }, below[0] || null));
+      }
+      // Body scroll not locked: swipes/wheel on the menu move the page behind it.
+      const page = document.scrollingElement || document.documentElement;
+      const locked = [document.documentElement, document.body].some((p) => /(hidden|clip)/.test(cs(p).overflowY)) || cs(document.body).position === 'fixed';
+      if (page.scrollHeight > innerHeight + 40 && !locked)
+        out.push(cand('scroll-trap', el, 0.6, `Page scrolling isn't locked while this full-screen menu/overlay is open: scrolling over it moves the page behind instead.`, { body_scroll_locked: false, page_height: page.scrollHeight, viewport: [innerWidth, innerHeight] }));
+    }
     for (const el of overlays) {
+      if (reported.has(el)) continue;
       if (overlays.some((o) => o !== el && o.contains(el))) continue; // report the outermost box
       const r = rectOf(el);
       if (r.width < 40 || r.height < 40) continue;
@@ -978,7 +1003,7 @@
       ...run('layout-shift', () => detectLayoutShift()),
       ...run('overlap', () => detectOccludedText(els)),
       ...(!o.only || o.only.some((t) => FOCUS_TYPES.includes(t)) ? detectFocus().filter((c) => !o.only || o.only.includes(c.type)) : []),
-      ...(!o.only || o.only.some((t) => ['overlay-overflow', 'hidden-by-sticky'].includes(t)) ? detectOverlays().filter((c) => !o.only || o.only.includes(c.type)) : []),
+      ...(!o.only || o.only.some((t) => ['overlay-overflow', 'hidden-by-sticky', 'scroll-trap'].includes(t)) ? detectOverlays(els).filter((c) => !o.only || o.only.includes(c.type)) : []),
       ...(!o.only || o.only.some((t) => ['hover-only', 'overlap', 'scroll-trap'].includes(t)) ? detectTouch(els).filter((c) => !o.only || o.only.includes(c.type)) : []),
       ...(!o.only || o.only.some((t) => ['low-contrast', 'distorted-image', 'misalignment'].includes(t)) ? detectPolish(els).filter((c) => !o.only || o.only.includes(c.type)) : []),
     ];

@@ -89,6 +89,21 @@ describe('overlay detectors', () => {
     expect(has(c, 'overlay-overflow', /modal|Terms|agree/i)).toBe(true);
   });
 
+  it('LAB-M1: flags a full-screen hamburger menu that overflows and leaves page scroll unlocked (720px and phone landscape)', async () => {
+    const open = (p: Page) => p.click('#burger');
+    for (const viewport of [{ width: 1280, height: 720 }, { width: 734, height: 343 }]) {
+      const c = await at('/menu.html', { viewport }, open);
+      expect(has(c, 'overlay-overflow', /site-nav/)).toBe(true);
+      expect(has(c, 'scroll-trap', /site-nav/)).toBe(true);
+    }
+  });
+
+  it('does not flag a full-screen menu that scrolls internally and locks the page', async () => {
+    const c = await at('/menu.html#good', { viewport: { width: 1280, height: 720 } }, (p) => p.click('#burger'));
+    expect(has(c, 'overlay-overflow', /site-nav/)).toBe(false);
+    expect(has(c, 'scroll-trap', /site-nav/)).toBe(false);
+  });
+
   it('LAB-A1: flags an anchor target landing under a sticky header', async () => {
     expect(has(await at('/anchor.html#terms'), 'hidden-by-sticky', /terms/)).toBe(true);
     expect(has(await at('/anchor.html'), 'hidden-by-sticky', /terms/)).toBe(false);
