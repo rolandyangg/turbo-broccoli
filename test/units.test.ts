@@ -471,3 +471,53 @@ describe('static target server', () => {
     }
   });
 });
+
+describe('dev servers outlive no job', () => {
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  it('stops them when the job exits, and sweeps one whose job was killed', async () => {
+    const { mkdtempSync, writeFileSync, readdirSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execa } = await import('execa');
+    const { stopLeftoverServers } = await import('../src/target/resolve.js');
+    const home = mkdtempSync(join(tmpdir(), 'bbhome-'));
+    const app = mkdtempSync(join(tmpdir(), 'bbapp-'));
+    writeFileSync(join(app, 'package.json'), JSON.stringify({ scripts: { dev: `node -e "require('http').createServer((q,s)=>s.end('ok')).listen(process.env.PORT)"` } }));
+    const script = (exit: string) => `import { resolveTarget } from '${join(process.cwd(), 'src/target/resolve.ts')}';\nawait resolveTarget('${app}');\nconsole.log('up');\n${exit}`;
+    const env = { ...process.env, BUGBASH_HOME: home };
+    const pgidOnRecord = () => JSON.parse(readFileSync(join(home, 'dev-servers', readdirSync(join(home, 'dev-servers'))[0]), 'utf8')).pgid as number;
+
+    // A job that exits (like a cancelled one: SIGTERM handler -> process.exit) takes its dev server with it.
+    const run = (body: string) => {
+      const f = join(app, `job-${Math.random().toString(36).slice(2)}.mts`);
+      writeFileSync(f, body);
+      return execa(process.execPath, ['--import', 'tsx', f], { env, reject: false });
+    };
+    expect((await run(script('process.exit(143);'))).stdout).toContain('up');
+    const first = pgidOnRecord();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(alive(first)).toBe(false);
+
+    // A job killed outright leaves it running; the next start in that folder stops it.
+    const job = run(script('setInterval(() => {}, 1000);'));
+    await new Promise<void>((r) => job.stdout!.on('data', (d) => String(d).includes('up') && r()));
+    const pgid = pgidOnRecord();
+    job.kill('SIGKILL');
+    await job;
+    expect(alive(pgid)).toBe(true);
+    process.env.BUGBASH_HOME = home;
+    try {
+      expect(await stopLeftoverServers(app)).toEqual([pgid]);
+    } finally {
+      delete process.env.BUGBASH_HOME;
+    }
+    expect(alive(pgid)).toBe(false);
+  }, 60_000);
+});
