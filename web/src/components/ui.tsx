@@ -187,20 +187,20 @@ export function CopyButton({ text, label = 'Copy' }: { text: string; label?: str
   );
 }
 
-export function Dialog({ open, onClose, title, children, footer, wide }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
+export function Dialog({ open, onClose, title, children, footer, wide, dismissible = true }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; dismissible?: boolean }) {
   useEffect(() => {
-    if (!open) return;
+    if (!open || !dismissible) return;
     const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
-  }, [open, onClose]);
+  }, [open, onClose, dismissible]);
   if (!open) return null;
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="overlay" onMouseDown={(e) => dismissible && e.target === e.currentTarget && onClose()}>
       <div className="dialog box" style={wide ? { width: 'min(1180px, 100%)' } : undefined} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined}>
         <div className="box-head">
           <div className="path">{title}</div>
-          <button className="btn-link" onClick={onClose} aria-label="Close">
+          <button className="btn-link" disabled={!dismissible} onClick={onClose} aria-label="Close">
             Close
           </button>
         </div>

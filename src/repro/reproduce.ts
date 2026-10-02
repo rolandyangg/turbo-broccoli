@@ -1,3 +1,4 @@
+import { listenForCaptures } from './capture.js';
 import { Config } from '../config.js';
 import { readRun, readFindings, findById } from '../store/store.js';
 import { resolveTarget } from '../target/resolve.js';
@@ -39,7 +40,9 @@ export async function reproduce(o: ReproduceOptions) {
   let stop: (() => Promise<void>) | null = null;
   let removeWorktree: (() => Promise<void>) | null = null;
   let driver: Driver | null = null;
+  let stopCaptures: (() => void) | null = null;
   const cleanup = async () => {
+    stopCaptures?.();
     await driver?.close().catch(() => {});
     await stop?.().catch(() => {});
     await removeWorktree?.().catch(() => {});
@@ -144,6 +147,7 @@ export async function reproduce(o: ReproduceOptions) {
     // Remove the caption after a while so it doesn't get in the way of manual testing.
     setTimeout(() => void d.page.evaluate('document.querySelector("[data-bugbash-overlay=caption]")?.remove()').catch(() => {}), 12_000);
 
+    stopCaptures = listenForCaptures(d.page, o.runDir, rep.dir, rep.status.id);
     await new Promise<void>((resolve) => {
       d.browser.on('disconnected', () => resolve());
       d.context.on('close', () => resolve());

@@ -5,18 +5,16 @@ import { ago } from '../lib/format.ts';
 import { Box, Chamfer, Chip } from './ui.tsx';
 import { FixRunDialog, ReproduceDialog } from './Actions.tsx';
 import { SyncedViewer } from './SyncedViewer.tsx';
-import { useNavigate } from 'react-router';
 
 /**
  * How a fix was verified, and the evidence to judge it yourself: the verdict and its flags, per-check results,
  * the visual review's reasoning, before/after pictures (and videos for behaviour bugs) side by side, plus Retry
  * verification, Send instructions, Publish anyway and Reproduce on the fixed version.
  */
-export function FixVerification({ f, ws, run, branch, afterShot, running, prUrl }: { f: Finding; ws: string; run: string; branch: string | null; afterShot: string | null; running: boolean; prUrl: string | null }) {
+export function FixVerification({ f, ws, run, branch, afterShot, running, prUrl, reproducing, onReproduceStarted }: { f: Finding; ws: string; run: string; branch: string | null; afterShot: string | null; running: boolean; prUrl: string | null; reproducing: boolean; onReproduceStarted: (job: JobView) => void }) {
   const [dialog, setDialog] = useState<'verify' | 'continue' | 'publish-anyway' | null>(null);
   const [compare, setCompare] = useState(false);
   const [repro, setRepro] = useState(false);
-  const nav = useNavigate();
   const fix = f.fix;
   if (!fix && !branch) return null;
   const v = fix?.verification ?? null;
@@ -24,7 +22,7 @@ export function FixVerification({ f, ws, run, branch, afterShot, running, prUrl 
   const verified = !!fix?.verified && !!v && v.result === 'fixed' && !fix.flags?.length;
   const status = !fix ? { label: 'not recorded yet', tone: 'outline' } : fix.blocked ? { label: 'blocked: not published', tone: 'sev-critical dot' } : verified ? { label: v?.method === 'visual-review' ? 'verified (visual review)' : 'verified', tone: 'mint' } : { label: 'not fully verified', tone: 'sev-major dot' };
   const before = f.screenshots.annotated;
-  const after = v?.after?.annotated ?? afterShot;
+  const after = fix?.manual_after?.path ?? v?.after?.annotated ?? afterShot;
   const beforeVideo = f.video?.mp4 ?? null;
   const afterVideo = v?.after_video?.mp4 ?? null;
   const env = f.reproduction.environment;
@@ -45,6 +43,7 @@ export function FixVerification({ f, ws, run, branch, afterShot, running, prUrl 
         )}
         {v && (
           <dl className="kv">
+            {fix?.manual_after && <><dt>After screenshot</dt><dd>Chosen manually {ago(fix.manual_after.at)}</dd></>}
             <dt>Result</dt>
             <dd>{v.result === 'fixed' ? 'bug gone' : v.result === 'present' ? 'bug still present' : "couldn't tell"}</dd>
             <dt>How</dt>
@@ -98,8 +97,8 @@ export function FixVerification({ f, ws, run, branch, afterShot, running, prUrl 
             </button>
           )}
           {branch && (
-            <button className="btn-ghost" onClick={() => setRepro(true)}>
-              Reproduce on the fixed version
+            <button className="btn-ghost" disabled={reproducing} onClick={() => setRepro(true)}>
+              {reproducing ? 'Reproduction window open' : 'Reproduce on the fixed version'}
             </button>
           )}
           {branch && !running && (
@@ -121,7 +120,7 @@ export function FixVerification({ f, ws, run, branch, afterShot, running, prUrl 
       </div>
       {dialog && branch && <FixRunDialog ws={ws} run={run} ids={[f.id]} mode={dialog} branch={branch} defaults={{ pr: false, draft: true }} onClose={() => setDialog(null)} />}
       {compare && before && after && <SyncedViewer title={`${f.id}: before / after the fix`} left={{ src: fileUrl(ws, run, before), label: 'Before' }} right={{ src: fileUrl(ws, run, after), label: 'After the fix' }} onClose={() => setCompare(false)} />}
-      <ReproduceDialog open={repro} onClose={() => setRepro(false)} ws={ws} run={run} id={f.id} branch={branch} env={{ browser: env.browser, viewport: env.viewport, device: env.variant.device ?? null }} onStarted={(j: JobView) => nav(`/jobs/${j.id}`)} />
+      <ReproduceDialog open={repro} onClose={() => setRepro(false)} ws={ws} run={run} id={f.id} branch={branch} env={{ browser: env.browser, viewport: env.viewport, device: env.variant.device ?? null }} onStarted={onReproduceStarted} />
     </Box>
   );
 }

@@ -368,7 +368,7 @@ export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title,
           </>
         ) : anyway ? (
           <>
-            This fix is <b>not fully verified</b>. Publishing it anyway pushes <span className="mono">{branch}</span> and opens a PR that starts with a warning listing what couldn't be verified. Prefer sending the agent instructions or retrying verification.
+            This fix is <b>not fully verified</b>. Publishing it anyway pushes <span className="mono">{branch}</span> and opens a PR with the automatic results and your reported manual verification noted in its Verification section.
           </>
         ) : mode === 'continue' ? (
           <>

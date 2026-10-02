@@ -1756,3 +1756,35 @@
   padding: 8px 10px;
   border: 1px dashed var(--line-soft);
 }
+.repro-capture-confirm { margin: auto; padding: 0; width: min(560px, calc(100vw - 32px)); color: var(--ink); }
+.repro-capture-confirm:not([open]) { display: none; }
+.repro-capture-confirm::backdrop { background: var(--overlay); }
+.repro-capture-confirm h2, .repro-capture-confirm p { margin: 0; }
+.repro-capture-confirm-actions { justify-content: flex-end; flex-wrap: wrap; padding: 12px 16px; border-top: 1px dashed var(--line); background: var(--panel); }
+
+/* Saved PR description preview. */
+.markdown-preview {
+  margin-top: 14px;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.markdown-preview > :first-child { margin-top: 0; }
+.markdown-preview > :last-child { margin-bottom: 0; }
+.markdown-preview h1 { font-size: 24px; }
+.markdown-preview h2 { font-size: 20px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.markdown-preview h3 { font-size: 16px; }
+.markdown-preview :is(h1, h2, h3, h4) { margin: 24px 0 10px; line-height: 1.3; }
+.markdown-preview :is(p, ul, ol, blockquote, pre, details) { margin: 12px 0; }
+.markdown-preview :is(ul, ol) { padding-left: 24px; }
+.markdown-preview li + li { margin-top: 4px; }
+.markdown-preview img { max-width: 100%; height: auto; }
+.markdown-preview pre { overflow-x: auto; padding: 12px; background: var(--panel); border: 1px solid var(--line); }
+.markdown-preview pre code { white-space: pre; }
+.markdown-preview blockquote { border-left: 3px solid var(--line); padding-left: 14px; color: var(--muted); }
+.markdown-preview summary { cursor: pointer; font-weight: 600; }
+.markdown-table { overflow-x: auto; margin: 16px 0; }
+.markdown-table table { width: 100%; border-collapse: collapse; }
+.markdown-table :is(th, td) { border: 1px solid var(--line); padding: 10px; text-align: left; vertical-align: top; }
+.markdown-table th { background: var(--panel); }

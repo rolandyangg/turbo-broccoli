@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { api, useApi } from '../lib/api.ts';
 import type { BranchInfo, JobEvent, JobView } from '../lib/types.ts';
@@ -263,11 +263,18 @@ export function CancelButton({ job, onDone }: { job: JobView; onDone?: () => voi
 }
 
 // ---------- branch ----------
-export function BranchPanel({ ws, run, branch, base, live, publish }: { ws: string; run: string; branch: string; base?: string | null; live?: boolean; publish?: { ids: string[] } }) {
+export function BranchPanel({ ws, run, branch, base, live, publish, children }: { ws: string; run: string; branch: string; base?: string | null; live?: boolean; publish?: { ids: string[] }; children?: ReactNode }) {
   const [publishing, setPublishing] = useState(false);
   const q = `/branches?ws=${ws}&run=${encodeURIComponent(run)}&branch=${encodeURIComponent(branch)}${base ? `&base=${encodeURIComponent(base)}` : ''}`;
-  const { data, error } = useApi<BranchInfo>(q, { pollMs: live ? 4000 : undefined });
+  const { data, error } = useApi<BranchInfo>(q, { pollMs: live ? 4000 : 60_000 });
   const [showDiff, setShowDiff] = useState(false);
+  let prStatus: { label: string; tone: string } | null = null;
+  if (data?.pr) {
+    if (data.pr.state === 'MERGED') prStatus = { label: 'Merged', tone: 'mint' };
+    else if (data.pr.state === 'CLOSED') prStatus = { label: 'Closed', tone: 'outline' };
+    else if (data.pr.isDraft) prStatus = { label: 'Draft', tone: 'ink' };
+    else prStatus = { label: 'Open', tone: 'green' };
+  }
   return (
     <Box
       head={
@@ -281,13 +288,14 @@ export function BranchPanel({ ws, run, branch, base, live, publish }: { ws: stri
           {branch}
         </>
       }
-      chip={data?.pr ? <Chip tone={data.pr.state === 'MERGED' ? 'mint' : data.pr.state === 'OPEN' ? 'green' : 'outline'}>{data.pr.isDraft ? 'draft PR' : `PR ${data.pr.state.toLowerCase()}`}</Chip> : data?.exists ? <Chip tone="ink">local branch</Chip> : <Chip tone="outline">{error ? 'error' : data ? 'not created yet' : '…'}</Chip>}
+      chip={prStatus ? <Chip tone={prStatus.tone}>{prStatus.label}</Chip> : data?.exists ? <Chip tone="ink">local branch</Chip> : <Chip tone="outline">{error ? 'error' : data ? 'not created yet' : '…'}</Chip>}
     >
       {publishing && publish && (
         <FixRunDialog ws={ws} run={run} ids={publish.ids} mode="continue" branch={branch} defaults={{ pr: true, draft: true, base: data?.base ?? base ?? null }} title={`Open a pull request for ${branch}`} submitLabel="Open pull request" onClose={() => setPublishing(false)} />
       )}
       {error && <p className="small" style={{ color: 'var(--err)' }}>{error}</p>}
       {data && !data.exists && <p className="muted small">The branch doesn't exist yet. It's created when the fix job reaches “Create branch &amp; worktree”.</p>}
+      {children}
       {data?.exists && (
         <div className="stack" style={{ ['--gap' as string]: '14px' }}>
           <dl className="kv">

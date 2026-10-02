@@ -1,10 +1,13 @@
+import { randomUUID } from 'node:crypto';
+import { readCapture } from '../../src/repro/capture.ts';
+import { updatePrBody } from './prBody.ts';
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { readRun, readFindings, findById, renameRun } from '../../src/store/store.ts';
+import { readRun, readFindings, findById, renameRun, writeFindings } from '../../src/store/store.ts';
 import { setWorkflow } from '../../src/store/workflow.ts';
 import { writeReport } from '../../src/store/report.ts';
 import { FindingStatus } from '../../src/store/schema.ts';
@@ -94,7 +97,7 @@ app.get('/runs/:ws/:run/bugs/:id', (c) => {
     group: { ...hit.group, findings: hit.group.findings.map((f) => ({ id: f.id, title: f.title, status: f.status, severity: f.severity, type: f.type, page: f.page })) },
     groups: ff!.groups.map((g) => ({ id: g.id, summary: g.summary, count: g.findings.length })),
     spec,
-    after_shot: afterShot,
+    after_shot: hit.finding.fix?.manual_after?.path ?? hit.finding.fix?.verification?.after?.annotated ?? afterShot,
     pr_body: prBody,
     jobs: listJobs({ runDir: dir }).filter((j) => j.finding_ids.includes(id) || j.scope?.split(/[+,]/).includes(hit.group.id)),
     reports: readReports(readRun(dir).workspace).filter((r) => r.run === c.req.param('run') && r.bug === id).reverse(),
@@ -190,6 +193,7 @@ app.get('/prs', async (c) => {
   const run = c.req.query('run');
   return c.json(await listPRs(ws && run ? { ws, run } : null, c.req.query('fresh') === '1'));
 });
+app.post('/prs/body', async (c) => c.json(await updatePrBody(await c.req.json())));
 app.get('/compare', (c) => {
   const a = c.req.query('a');
   const b = c.req.query('b');
@@ -438,3 +442,36 @@ app.get('/branches', async (c) => {
 });
 
 app.get('/health', (c) => c.json({ ok: true, repo: REPO_ROOT }));
+
+// Capture the existing headed browser; never replay into a new page for manual evidence.
+app.post('/jobs/:id/capture', (c) => {
+  const j = getJob(c.req.param('id'));
+  if (j.kind !== 'reproduce' || !j.alive || !j.run_dir || !j.branch) throw new HttpError(409, 'Open a live reproduction on the fixed version first');
+  if (!readEvents(j.dir).events.some((e) => e.stage === 'ready')) throw new HttpError(409, 'Wait for reproduction to finish replaying');
+  const id = randomUUID();
+  mkdirSync(join(j.dir, 'captures'), { recursive: true });
+  writeFileSync(join(j.dir, 'captures', `${id}.request`), '');
+  return c.json({ id }, 202);
+});
+app.get('/jobs/:id/captures/:capture', (c) => {
+  const j = getJob(c.req.param('id'));
+  const id = c.req.param('capture');
+  if (!/^[a-f0-9-]{36}$/.test(id)) throw new HttpError(400, 'Invalid capture id');
+  return c.json(readCapture(j.dir, id));
+});
+app.post('/jobs/:id/captures/:capture/replace-after', (c) => {
+  const j = getJob(c.req.param('id'));
+  const id = c.req.param('capture');
+  if (!/^[a-f0-9-]{36}$/.test(id)) throw new HttpError(400, 'Invalid capture id');
+  if (j.kind !== 'reproduce' || !j.run_dir || !j.branch) throw new HttpError(409, 'This is not a fixed-version reproduction');
+  const capture = readCapture(j.dir, id);
+  if (!capture || 'error' in capture) throw new HttpError(409, 'Take a successful screenshot first');
+  const ff = readFindings(j.run_dir);
+  const f = ff && findById(ff, j.finding_ids[0])?.finding;
+  if (!f?.fix || f.fix.branch !== j.branch) throw new HttpError(409, 'The fix branch has changed; reproduce the current fix first');
+  if (listJobs({ runDir: j.run_dir }).some((job) => job.kind === 'fix' && job.alive && job.branch === j.branch)) throw new HttpError(409, 'Wait for the fix or verification job to finish');
+  if (!existsSync(safePath(j.run_dir, capture.path))) throw new HttpError(409, 'The screenshot is no longer available');
+  f.fix.manual_after = { ...capture, job_id: j.id };
+  writeFindings(j.run_dir, ff!);
+  return c.json({ saved: true });
+});

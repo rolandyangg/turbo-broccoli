@@ -1,7 +1,10 @@
+import { MarkdownDescription } from './MarkdownPreview.tsx';
+import { BranchPanel } from './Jobs.tsx';
+import { useState } from 'react';
 import { Link } from 'react-router';
-import { useApi } from '../lib/api.ts';
+import { api, useApi } from '../lib/api.ts';
 import { ago, targetName } from '../lib/format.ts';
-import { Chip, ErrorBox, Loading, SevChip, Stat } from './ui.tsx';
+import { Box, Chamfer, Chip, Dialog, ErrorBox, Loading, SevChip, Stat } from './ui.tsx';
 
 interface PrRow {
   url: string;
@@ -143,11 +146,90 @@ export function PrList({ scope }: { scope: { ws: string; run: string } | null })
                   </ul>
                 </div>
               </div>
+              <UpdatePrBody p={p} onUpdated={reload} />
               {latest && latest.state === 'failed' && <p className="small muted" style={{ margin: 0 }}>The latest job on this branch failed; open it to Continue or Retry.</p>}
             </li>
           );
         })}
       </ul>
     </div>
+  );
+}
+
+function UpdatePrBody({ p, onUpdated }: { p: PrRow; onUpdated: () => Promise<void> }) {
+  const [confirm, setConfirm] = useState(false);
+  const [manuallyVerified, setManuallyVerified] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  if (p.status?.state !== 'OPEN') return null;
+  async function update() {
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const result = await api<{ images: number }>('/prs/body', { json: { ws: p.run.ws, run: p.run.run, url: p.url, manuallyVerified } });
+      setMessage(`PR body updated with the latest saved verification and ${result.images} image(s).`);
+      setConfirm(false);
+      await onUpdated();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="stack">
+      <div>
+        <button
+          className="btn-ghost"
+          disabled={busy || p.jobs.some((j) => j.state === 'running')}
+          onClick={() => { setManuallyVerified(false); setConfirm(true); }}
+          title="Replaces the generated PR body with current changes and saved verification/screenshots. Manual edits to the body are replaced."
+        >
+          {busy ? 'Updating PR body…' : 'Update PR body'}
+        </button>
+      </div>
+      <Dialog open={confirm} dismissible={!busy} onClose={() => { if (!busy) setConfirm(false); }} title="Update PR body?" footer={
+        <>
+          <button className="btn-link" disabled={busy} onClick={() => setConfirm(false)}>Cancel</button>
+          <Chamfer small tone="green" disabled={busy || p.jobs.some((j) => j.state === 'running')} onClick={() => void update()}>{busy ? 'Updating…' : 'Update PR body'}</Chamfer>
+        </>
+      }>
+        <p style={{ margin: 0 }}>Update <a href={p.url} target="_blank" rel="noreferrer">{p.repo}#{p.number ?? '?'}</a> with the latest saved verification, screenshots, and description of the published changes?</p>
+        <p className="small muted" style={{ margin: 0 }}>This replaces the current PR body, including any manual edits. It does not push code changes.</p>
+        <label className="check">
+          <input type="checkbox" checked={manuallyVerified} disabled={busy} onChange={(e) => setManuallyVerified(e.target.checked)} />
+          <span>I manually verified this fix. Add my confirmation to the PR’s Verification section.</span>
+        </label>
+        {error && <div role="alert"><ErrorBox error={error} /></div>}
+      </Dialog>
+      {message && <p className="small muted" role="status">{message}</p>}
+      {error && <div role="alert"><ErrorBox error={error} /></div>}
+    </div>
+  );
+}
+
+/** Existing PR details belong beside the bug evidence, outside the action sidebar. */
+export function BugPullRequest({ ws, run, id, url, body, branch, onUpdated }: { ws: string; run: string; id: string; url: string | null; body: string | null; branch: string | null; onUpdated: () => Promise<void> }) {
+  const { data, error, reload } = useApi<PrData>(`/prs?ws=${encodeURIComponent(ws)}&run=${encodeURIComponent(run)}`, { pollMs: 60_000 });
+  const p = data?.prs.find((p) => p.url === url || (!url && p.bugs.some((b) => b.id === id)));
+  if (!p && !url) return null;
+  const prBranch = p?.branch ?? branch;
+  const content = (
+    <div className="stack" style={{ ['--gap' as string]: '14px', marginBottom: 14 }}>
+      {(error || p?.status_error) && <p className="small" role="status">Couldn't check GitHub status: {error ?? p?.status_error}</p>}
+      {p && <UpdatePrBody key={p.url} p={p} onUpdated={async () => { await Promise.all([reload(), onUpdated()]); }} />}
+      {body && <details><summary className="label" style={{ cursor: 'pointer' }}>Saved PR description</summary><MarkdownDescription text={body} /></details>}
+    </div>
+  );
+  if (prBranch) return <BranchPanel ws={ws} run={run} branch={prBranch}>{content}</BranchPanel>;
+  return (
+    <Box head="Pull request" chip={<Chip tone={p ? stateOf(p).tone : 'outline'}>{p ? stateOf(p).label : 'checking status'}</Chip>}>
+      <a href={p?.url ?? url!} target="_blank" rel="noreferrer" className="h3" style={{ overflowWrap: 'anywhere' }}>
+        {p?.status?.title ?? 'View pull request'} ↗
+      </a>
+      {content}
+    </Box>
   );
 }

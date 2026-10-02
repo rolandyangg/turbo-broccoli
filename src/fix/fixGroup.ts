@@ -13,6 +13,7 @@ import { writeReport } from '../store/report.js';
 import { JobReporter, newJobId, describeAgentEvent, type JobEvent } from '../jobs/events.js';
 import { notifyFixDone } from '../notify/events.js';
 import { commitMessage, explainChanges, technicalSection, type FileStat } from './describe.js';
+import { prBody } from './prBody.js';
 import { fixBrowserTools } from './browser.js';
 
 export interface FixOptions {
@@ -56,7 +57,7 @@ export async function fixFindings(o: FixOptions) {
     run_dir: o.runDir,
     finding_ids: o.ids,
     scope: o.ids.join(','),
-    options: { pr: o.pr, draft: o.draft, base: o.base ?? null, maxAttempts: o.maxAttempts, mode: o.mode ?? 'new', branch: o.branch ?? null, instructions: o.instructions ?? null },
+    options: { pr: o.pr, draft: o.draft, base: o.base ?? null, maxAttempts: o.maxAttempts, mode: o.mode ?? 'new', branch: o.branch ?? null, instructions: o.instructions ?? null, publishUnverified: !!o.publishUnverified },
   });
   const say = (stage: string, msg: string, level: JobEvent['level'] = 'info', data?: Record<string, unknown>) => {
     if (level !== 'agent') o.log(msg);
@@ -309,7 +310,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
           f.fix.verified = ev.result === 'fixed' && regressions.length === 0;
           f.fix.flags = own;
           if (f.fix.verified) f.fix.blocked = false;
-        } else f.fix = { branch, base: baseBranch, pr_url: null, verified: ev.result === 'fixed', fixed_by: scopeLabel, job_id: rep.status.id, at: new Date().toISOString(), verification: ev, flags: own, blocked: false };
+        } else f.fix = { branch, base: baseBranch, pr_url: null, verified: ev.result === 'fixed', fixed_by: scopeLabel, job_id: rep.status.id, at: new Date().toISOString(), verification: ev, flags: own, blocked: false, manual_after: null };
       }
       writeFindings(o.runDir, { run_id: fresh.run_id, target: fresh.target, generated_at: fresh.generated_at, groups: fresh.groups });
       say('record', `Re-verified: ${verified ? 'fixed ✓' : inconclusive.length ? `couldn't confirm ${inconclusive.join(', ')}` : 'NOT fixed ✗'}`, verified ? 'success' : 'warn');
@@ -359,7 +360,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       // GitHub itself once the branch is pushed (see attachImages below).
       let images: Map<string, string> | null = null;
       const bodyFile = join(assetsDir, 'pr-body.md');
-      const writeBody = () => writeFileSync(bodyFile, prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images, attempts: attempt, flags }));
+      const writeBody = () => writeFileSync(bodyFile, prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images, attempts: attempt, flags, manualOverride: !!o.publishUnverified, evidenceAt: Object.fromEntries([...evidence].map(([id, ev]) => [id, ev.at])) }));
       writeBody();
       const prArgs = ['pr', 'create', '--base', baseBranch, '--head', branch, '--title', `fix(ui): ${clip(title, 90)}`, '--body-file', bodyFile, ...(o.draft ? ['--draft'] : [])];
       // Publishing can fail for reasons unrelated to the fix (network, auth, GitHub limits). The verified commit is
@@ -378,7 +379,8 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         writeBody();
         if (existing) {
           prUrl = existing;
-          if (images) await execa('gh', ['pr', 'edit', existing, '--body-file', bodyFile], { cwd: worktree, reject: false });
+          const edited = await execa('gh', ['pr', 'edit', existing, '--body-file', bodyFile], { cwd: worktree, reject: false });
+          if (edited.exitCode !== 0) throw new Error(`gh pr edit failed: ${edited.stderr.trim()}`);
         } else {
           const pr = await execa('gh', prArgs, { cwd: worktree, reject: false });
           if (pr.exitCode !== 0) throw new Error(`gh pr create failed: ${pr.stderr.trim()}`);
@@ -393,7 +395,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         o.keepWorktree = true;
       }
     } else {
-      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images: null, attempts: attempt, flags }));
+      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images: null, attempts: attempt, flags, manualOverride: !!o.publishUnverified, evidenceAt: Object.fromEntries([...evidence].map(([id, ev]) => [id, ev.at])) }));
       say('commit', `Not pushed (no PR requested). PR description draft saved.`, 'info', { pr_body: relative(o.runDir, join(assetsDir, 'pr-body.md')) });
     }
 
@@ -405,7 +407,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       const isAlso = alsoFixed.includes(f.id);
       if (!isSel && !isAlso) continue;
       f.status = 'fixing';
-      f.fix = { branch, base: baseBranch, pr_url: prUrl, verified: isSel ? verified : true, fixed_by: isSel ? scopeLabel : `${scopeLabel} (side effect)`, job_id: rep.status.id, at: now, verification: evidence.get(f.id) ?? null, flags: isSel ? flags.filter((x) => x.startsWith(`${f.id}:`) || !/^BB-\d+:/.test(x)) : [], blocked: isSel && blocked };
+      f.fix = { branch, base: baseBranch, pr_url: prUrl, verified: isSel ? verified : true, fixed_by: isSel ? scopeLabel : `${scopeLabel} (side effect)`, job_id: rep.status.id, at: now, verification: evidence.get(f.id) ?? null, flags: isSel ? flags.filter((x) => x.startsWith(`${f.id}:`) || !/^BB-\d+:/.test(x)) : [], blocked: isSel && blocked, manual_after: null };
       memory.setBugStatus(f.fingerprint, 'fixing', info.run_id, f.id);
     }
     writeFindings(o.runDir, { run_id: fresh.run_id, target: fresh.target, generated_at: fresh.generated_at, groups: fresh.groups });
@@ -433,7 +435,7 @@ function markFixing(runDir: string, ids: string[], fix: { branch: string; base: 
   for (const f of allFindings(ff)) {
     if (!ids.includes(f.id)) continue;
     f.status = 'fixing';
-    f.fix = { branch: fix.branch, base: fix.base, pr_url: null, verified: false, fixed_by: fix.scope, job_id: fix.job_id, at: new Date().toISOString(), verification: f.fix?.verification ?? null, flags: f.fix?.flags ?? [], blocked: false };
+    f.fix = { branch: fix.branch, base: fix.base, pr_url: null, verified: false, fixed_by: fix.scope, job_id: fix.job_id, at: new Date().toISOString(), verification: f.fix?.verification ?? null, flags: f.fix?.flags ?? [], blocked: false, manual_after: f.fix?.branch === fix.branch ? f.fix.manual_after : null };
   }
   writeFindings(runDir, { run_id: ff.run_id, target: ff.target, generated_at: ff.generated_at, groups: ff.groups });
 }
@@ -456,6 +458,8 @@ Rules:
 - Make the smallest, safest change that fixes the defect(s) in scope at every affected viewport and browser. Prefer robust CSS (min-height instead of height, allow wrapping, flex-wrap, min-width: 0, overflow-wrap: anywhere, max-width: 100%, responsive spacing) over magic numbers.
 - Don't change unrelated code, formatting, dependencies, or tests. Don't touch findings outside your scope, even when they share a root cause (unless the scope is the whole group).
 - Look at the screenshots/videos (Read tool) and the source hints before editing. Confirm the rule/markup that causes it.
+- You have live browser MCP tools named fix_chromium, fix_webkit or fix_firefox for the affected browsers, connected to this worktree's dev server. Start with observe. Reproduce the reported interaction before editing, then reload and repeat it after editing; inspect screenshots and run_detectors at the affected sizes. Use set_device for phones/tablets rather than only resizing a desktop window. Apply the finding's variant settings and confirm the actual viewport in observe. After changing devices, inspect state and reopen menus as needed.
+- Browser probes require log_hypothesis after eight probes; use it to record the result and continue. Treat detector candidates as hints and compare the specific expected/actual behavior visually. If browser verification fails or conflicts with the detector, report the exact condition and evidence rather than claiming success. The pipeline also performs independent verification after you finish.
 - Don't run git. Don't create new files unless required.
 - Finish with a short summary: root cause, what you changed (file:line), browser/device/viewport checks actually performed and saved screenshot paths, plus any remaining failures or untested conditions.`;
 
@@ -490,33 +494,6 @@ function fixPrompt(selected: Finding[], groups: RootCauseGroup[], others: Findin
     .join('\n\n');
 }
 
-function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: string[]; before: VerifyResult[]; after: VerifyResult[]; regressions: string[]; verified: boolean; technical: { summary: string; technical: string }; runId: string; images: Map<string, string> | null; attempts: number; flags: string[] }) {
-  const lines: string[] = [];
-  if (!d.verified)
-    lines.push('> [!WARNING]', '> **Not fully verified.** This was published by explicit override; review the before/after carefully.', ...d.flags.map((x) => `> - ${x}`), '');
-  lines.push(`## Summary`, '', d.technical.summary, '');
-  lines.push(`## Changes`, '', d.technical.technical, '');
-  lines.push(`## Findings fixed`, '');
-  for (const f of d.selected) {
-    const b = d.before.find((x) => x.id === f.id);
-    const a = d.after.find((x) => x.id === f.id);
-    lines.push(`### ${f.id} — ${f.title}`, `- ${f.type}, ${f.severity}, on \`${f.page}\` (${f.browsers.join(', ')}; ${f.viewports.map((v) => v.width).join(', ')}px)`, `- Expected: ${f.reproduction.expected}`, `- Actual (before): ${f.reproduction.actual}`);
-    const afterText = a?.present === null || !a ? "**couldn't confirm automatically** (please compare the pictures)" : a.present ? '**still present**' : a.method === 'visual-review' ? `fixed (visual review, ${Math.round((a.review?.confidence ?? 0) * 100)}% confident)` : 'fixed (detector checks)';
-    lines.push(`- Verification: before ${b?.present === null ? 'visual-only' : b?.present ? 'present' : 'absent'} → after ${afterText}${a?.checks.length ? ` (${a.checks.map((c) => `${c.browser} ${c.width}px ${c.present === null ? '?' : c.present ? '✗' : '✓'}`).join(', ')})` : ''}`);
-    if (a?.review) lines.push(`- Visual review: ${a.review.reasoning}`);
-    lines.push('', '<details><summary>Reproduction steps</summary>', '', ...f.reproduction.steps_human.map((s, i) => `${i + 1}. ${s}`), '', '</details>', '');
-    const img = (name: string) => d.images?.get(name);
-    const beforeImg = img(`${f.id}-before.gif`) ?? img(`${f.id}-before.png`);
-    const afterImg = img(`${f.id}-after.png`);
-    if (beforeImg || afterImg) lines.push(`| Before | After |`, `|---|---|`, `| ${beforeImg ? `<img src="${beforeImg}" width="420" alt="${f.id} before">` : '—'} | ${afterImg ? `<img src="${afterImg}" width="420" alt="${f.id} after">` : '—'} |`, '');
-  }
-  if (d.alsoFixed.length) lines.push(`## Also resolved (same root cause)`, '', d.alsoFixed.map((x) => `- ${x}`).join('\n'), '');
-  const g = d.groups.map((x) => `- ${x.id}: ${x.summary}${x.fix_plan ? ` — plan: ${x.fix_plan}` : ''}`).join('\n');
-  lines.push(`## Root-cause group`, '', g, '');
-  lines.push(`## Verification`, '', d.verified ? `✅ Every bug checked out as fixed (detector replays at each affected size and browser, or a visual before/after review where noted), and the touched pages have no new layout defects (${d.attempts} attempt${d.attempts > 1 ? 's' : ''}).` : `⚠️ Not fully verified: see each bug above.${d.regressions.length ? `\nNew layout candidates on touched pages:\n${d.regressions.map((r) => `- ${r}`).join('\n')}` : ''}`, '');
-  lines.push(`Found and fixed by bugbash (run \`${d.runId}\`).`, '', '🤖 Generated with [Claude Code](https://claude.com/claude-code)');
-  return lines.join('\n');
-}
 
 export function readText(p: string) {
   return readFileSync(p, 'utf8');

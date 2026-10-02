@@ -1,3 +1,4 @@
+import { ReproCapture } from '../components/ReproCapture.tsx';
 import { ModelPicker } from '../components/ModelPicker.tsx';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
@@ -65,6 +66,7 @@ function JobDetails({ id, onFollowup }: { id: string; onFollowup: (job: JobView)
               </div>
             )}
             <JobTimeline events={events} status={job} />
+            <ReproCapture key={job.id} job={job} />
           </Box>
           <AgentChat job={job} events={events} onFollowup={onFollowup} />
           {job.kind === 'explore' && job.run && <LiveSessions ws={job.run.ws} run={job.run.run} live={job.state === 'running'} />}

@@ -211,6 +211,8 @@ export const Finding = z.object({
       flags: z.array(z.string()).default([]),
       /** Publishing was held back because the fix isn't fully verified. */
       blocked: z.boolean().default(false),
+      /** Screenshot chosen by the person from a live fixed-version reproduction. */
+      manual_after: z.object({ path: z.string(), at: z.string(), job_id: z.string(), url: z.string(), viewport: z.object({ width: z.number(), height: z.number() }).nullable() }).nullable().default(null),
       /** How the fix was checked, and the after-fix evidence (paths relative to the run dir). */
       verification: z
         .object({

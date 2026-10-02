@@ -1,3 +1,6 @@
+import { MarkdownDescription } from '../components/MarkdownPreview.tsx';
+import { BugPullRequest } from '../components/PrList.tsx';
+import { ReproCapture } from '../components/ReproCapture.tsx';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { fileUrl, useApi, useJobStream } from '../lib/api.ts';
@@ -11,6 +14,9 @@ import { WorkflowControls } from '../components/Workflow.tsx';
 import { FixVerification } from '../components/FixVerification.tsx';
 import { ReportProblem } from '../components/ReportProblem.tsx';
 import { BranchPanel, CancelButton, JobStateChip, JobTimeline } from '../components/Jobs.tsx';
+
+// Temporarily hide duplicate PR details in the sidebar; flip to restore them.
+const SHOW_SIDEBAR_PR_DETAILS = false;
 
 type Media = 'annotated' | 'crop' | 'full' | 'explorer' | 'video' | 'filmstrip' | 'after';
 
@@ -34,6 +40,8 @@ export function Bug() {
   const canFix = !!data.run.repo_path;
   const fixJobs = data.jobs.filter((j) => j.kind === 'fix');
   const latestJob = fixJobs[0] ?? null;
+  const existingPrUrl = f.fix?.pr_url ?? fixJobs.find((j) => j.pr_url)?.pr_url ?? null;
+  const showSidebarBranch = SHOW_SIDEBAR_PR_DETAILS || !existingPrUrl;
   const runningJob = fixJobs.find((j) => j.state === 'running' && j.alive) ?? null;
   const liveRepro = reproJob ?? data.jobs.find((j) => j.kind === 'reproduce' && j.state === 'running' && j.alive)?.id ?? null;
 
@@ -73,7 +81,9 @@ export function Bug() {
         <div className="stack" style={{ ['--gap' as string]: '22px', minWidth: 0 }}>
           <MediaPanel f={f} ws={ws} run={run} m={m} setM={setMedia} chapters={chapters} seek={seek} afterShot={data.after_shot} onChapter={(c) => setActiveStep(c?.kind === 'step' ? c.step_index : null)} />
 
-          <FixVerification f={f} ws={ws} run={run} branch={f.fix?.branch ?? latestJob?.branch ?? null} afterShot={data.after_shot} running={!!runningJob} prUrl={f.fix?.pr_url ?? latestJob?.pr_url ?? null} />
+          <BugPullRequest key={`${ws}/${run}/${f.id}`} ws={ws} run={run} id={f.id} url={existingPrUrl} body={data.pr_body} branch={f.fix?.branch ?? fixJobs.find((j) => j.pr_url)?.branch ?? null} onUpdated={reload} />
+
+          <FixVerification f={f} ws={ws} run={run} branch={f.fix?.branch ?? latestJob?.branch ?? null} afterShot={data.after_shot} running={!!runningJob} prUrl={f.fix?.pr_url ?? latestJob?.pr_url ?? null} reproducing={!!liveRepro} onReproduceStarted={(job) => setReproJob(job.id)} />
 
           <Box head="Reproduction" chip={<Chip tone={f.reproduction.rate === '3/3' ? 'mint' : 'outline'}>{f.reproduction.rate ? `${f.reproduction.rate} replays` : 'visual only'}</Chip>}>
             <Repro f={f} chapters={chapters} activeStep={activeStep} onStep={seekStep} spec={data.spec} ws={ws} run={run} />
@@ -97,7 +107,7 @@ export function Bug() {
               <Chamfer tone="light" onClick={() => setReproOpen(true)} disabled={!!liveRepro}>
                 {liveRepro ? 'Reproduction window open' : '▶ Reproduce in a new window'}
               </Chamfer>
-              {liveRepro && <ReproStatus id={liveRepro} onEnd={() => setReproJob(null)} />}
+              {liveRepro && <ReproStatus id={liveRepro} onEnd={() => setReproJob(null)} onSaved={() => void reload()} />}
               {canFix ? (
                 <>
                   <Chamfer tone="green" onClick={() => setFixScope({ ids: [f.id], title: f.title })} disabled={!!runningJob}>
@@ -127,9 +137,9 @@ export function Bug() {
             </div>
           </Box>
 
-          {(runningJob || latestJob) && <FixStatus job={(runningJob ?? latestJob)!} ws={ws} run={run} onDone={reload} />}
+          {(runningJob || latestJob) && <FixStatus job={(runningJob ?? latestJob)!} ws={ws} run={run} onDone={reload} showBranch={showSidebarBranch} />}
 
-          {f.fix && !(runningJob ?? latestJob)?.branch && <BranchPanel ws={ws} run={run} branch={f.fix.branch} base={f.fix.base} publish={{ ids: [f.id] }} />}
+          {showSidebarBranch && f.fix && !(runningJob ?? latestJob)?.branch && <BranchPanel ws={ws} run={run} branch={f.fix.branch} base={f.fix.base} publish={{ ids: [f.id] }} />}
 
           {data.jobs.length > 0 && (
             <Box head={`Jobs for this bug (${data.jobs.length})`}>
@@ -184,11 +194,9 @@ export function Bug() {
             </ul>
           </Box>
 
-          {data.pr_body && (
+          {SHOW_SIDEBAR_PR_DETAILS && data.pr_body && (
             <Box head="PR description draft">
-              <pre className="md-text" style={{ whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'var(--font-body)', fontSize: 13.5, maxHeight: 360, overflow: 'auto' }}>
-                {data.pr_body}
-              </pre>
+              <MarkdownDescription text={data.pr_body} />
             </Box>
           )}
         </aside>
@@ -598,7 +606,7 @@ function Transcript({ base, session }: { base: string; session: string | null })
 }
 
 // ---------------- fix status (live) ----------------
-function FixStatus({ job, ws, run, onDone }: { job: BugDetail['jobs'][number]; ws: string; run: string; onDone: () => void }) {
+function FixStatus({ job, ws, run, onDone, showBranch }: { job: BugDetail['jobs'][number]; ws: string; run: string; onDone: () => void; showBranch: boolean }) {
   const { status, events, ended } = useJobStream(job.id);
   const st = status ?? job;
   useEffect(() => {
@@ -631,13 +639,13 @@ function FixStatus({ job, ws, run, onDone }: { job: BugDetail['jobs'][number]; w
           <JobTimeline events={events} status={st} />
         </div>
       </Box>
-      {st.branch && <BranchPanel ws={ws} run={run} branch={st.branch} base={st.base} live={st.state === 'running'} publish={{ ids: st.scope && /^RC-\d+$/i.test(st.scope) ? [st.scope] : st.finding_ids }} />}
+      {showBranch && st.branch && <BranchPanel ws={ws} run={run} branch={st.branch} base={st.base} live={st.state === 'running'} publish={{ ids: st.scope && /^RC-\d+$/i.test(st.scope) ? [st.scope] : st.finding_ids }} />}
     </>
   );
 }
 
 /** Compact live status of a reproduction window (steps as they replay; cancel closes the window). */
-function ReproStatus({ id, onEnd }: { id: string; onEnd: () => void }) {
+function ReproStatus({ id, onEnd, onSaved }: { id: string; onEnd: () => void; onSaved: () => void }) {
   const { status, events, ended } = useJobStream(id);
   useEffect(() => {
     if (ended) onEnd();
@@ -653,6 +661,7 @@ function ReproStatus({ id, onEnd }: { id: string; onEnd: () => void }) {
       <p className={`small ${last?.level === 'warn' || last?.level === 'error' ? '' : 'muted'}`} style={{ margin: '8px 0 0', color: last?.level === 'error' ? 'var(--err)' : undefined }}>
         {status.error && status.state !== 'running' ? status.error : last?.msg ?? 'Starting…'}
       </p>
+      <ReproCapture key={status.id} job={status} onSaved={onSaved} />
     </div>
   );
 }
