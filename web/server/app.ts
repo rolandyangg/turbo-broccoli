@@ -226,11 +226,11 @@ app.post('/runs/:ws/:run/retro', (c) => {
   return c.json(launchRetro(c.req.param('ws'), c.req.param('run'), dir), 202);
 });
 app.post('/backlog/:ws/implement', async (c) => {
-  const b = await c.req.json<{ ids?: string[]; all?: boolean; pr?: boolean; confirmPush?: boolean }>().catch(() => ({}));
+  const b = await c.req.json<{ ids?: string[]; all?: boolean; pr?: boolean; confirmPush?: boolean; merge?: boolean; parallel?: number }>().catch(() => ({}));
   return c.json(launchImplementBatch(c.req.param('ws'), b), 202);
 });
 app.post('/backlog/:ws/:id/implement', async (c) => {
-  const b = await c.req.json<{ pr?: boolean; confirmPush?: boolean }>().catch(() => ({}));
+  const b = await c.req.json<{ pr?: boolean; confirmPush?: boolean; merge?: boolean }>().catch(() => ({}));
   return c.json(launchImplement(c.req.param('ws'), c.req.param('id'), b), 202);
 });
 

@@ -63,8 +63,18 @@ export function launchRetro(wsParam: string, run: string, runDir: string) {
   return launchJob('retro', ['retro', '--run', runDir], { run_dir: runDir, scope: run });
 }
 
-/** Several backlog items (or every open/failed one) on one branch, one commit each. */
-export function launchImplementBatch(wsParam: string, b: { ids?: string[]; all?: boolean; pr?: boolean; confirmPush?: boolean }) {
+/** CLI flags for how items are run and landed: parallel agents, then merge (default), leave on branches, or PRs. */
+function landingArgs(b: { pr?: boolean; merge?: boolean; parallel?: number }) {
+  if (b.parallel !== undefined && !(Number.isInteger(b.parallel) && b.parallel >= 1 && b.parallel <= 6)) throw new HttpError(400, 'parallel must be 1 to 6');
+  if (b.pr && b.merge) throw new HttpError(400, 'Pick merging or pull requests, not both');
+  const args = ['--parallel', String(b.parallel ?? 2)];
+  if (b.pr) args.push('--pr');
+  else if (b.merge === false) args.push('--no-merge');
+  return { args, options: { pr: !!b.pr, merge: !b.pr && b.merge !== false, parallel: b.parallel ?? 2 } };
+}
+
+/** Several backlog items (or every open/failed one), each on its own branch with up to `parallel` agents at once. */
+export function launchImplementBatch(wsParam: string, b: { ids?: string[]; all?: boolean; pr?: boolean; confirmPush?: boolean; merge?: boolean; parallel?: number }) {
   if (b.pr && !b.confirmPush) throw new HttpError(400, 'Opening a PR pushes to GitHub: confirmPush must be true');
   const w = workspaceById(wsParam);
   const items = backlog(w.path);
@@ -74,12 +84,11 @@ export function launchImplementBatch(wsParam: string, b: { ids?: string[]; all?:
   for (const id of ids) if (!items.some((x) => x.id === id)) throw new HttpError(404, `No backlog item ${id}`);
   const busy = listJobs().find((j) => j.kind === 'improve' && j.alive && ((j.options as { backlog_ids?: string[] }).backlog_ids ?? [(j.options as { backlog_id?: string }).backlog_id]).some((x) => x && ids.includes(x)));
   if (busy) throw new HttpError(409, `Some of these are already being implemented (${busy.id})`);
-  const args = ['improve', ...ids, '--out', w.path];
-  if (b.pr) args.push('--pr');
-  return launchJob('improve', args, { scope: ids.length === 1 ? ids[0] : `${ids.length} items: ${ids.join(', ')}`, options: { pr: !!b.pr, backlog_ids: ids, ws: w.id } });
+  const land = landingArgs(b);
+  return launchJob('improve', ['improve', ...ids, '--out', w.path, ...land.args], { scope: ids.length === 1 ? ids[0] : `${ids.length} items: ${ids.join(', ')}`, options: { ...land.options, backlog_ids: ids, ws: w.id } });
 }
 
-export function launchImplement(wsParam: string, id: string, b: { pr?: boolean; confirmPush?: boolean }) {
+export function launchImplement(wsParam: string, id: string, b: { pr?: boolean; confirmPush?: boolean; merge?: boolean }) {
   if (!/^B-\d+$/.test(id)) throw new HttpError(400, 'Bad backlog id');
   if (b.pr && !b.confirmPush) throw new HttpError(400, 'Opening a PR pushes to GitHub: confirmPush must be true');
   const w = workspaceById(wsParam);
@@ -87,7 +96,6 @@ export function launchImplement(wsParam: string, id: string, b: { pr?: boolean; 
   if (!item) throw new HttpError(404, `No backlog item ${id}`);
   const busy = listJobs().find((j) => j.kind === 'improve' && j.alive && ((j.options as { backlog_ids?: string[] }).backlog_ids ?? [(j.options as { backlog_id?: string }).backlog_id]).includes(id));
   if (busy) throw new HttpError(409, `${id} is already being implemented (${busy.id})`);
-  const args = ['improve', id, '--out', w.path];
-  if (b.pr) args.push('--pr');
-  return launchJob('improve', args, { scope: `${id}: ${item.title}`, options: { pr: !!b.pr, backlog_id: id, ws: w.id } });
+  const land = landingArgs({ ...b, parallel: 1 });
+  return launchJob('improve', ['improve', id, '--out', w.path, ...land.args], { scope: `${id}: ${item.title}`, options: { ...land.options, backlog_id: id, ws: w.id } });
 }

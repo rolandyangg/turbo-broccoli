@@ -515,12 +515,15 @@ program
 
 program
   .command('improve')
-  .description('Implement approved backlog items (detector suggestions, prompt/config tweaks) on ONE new branch of this repo: one commit per item, each verified by typecheck and tests')
-  .argument('[ids...]', 'Backlog ids (B-…), implemented in order')
+  .description('Implement approved backlog items (detector suggestions, prompt/config tweaks) in this repo: parallel agents, one branch and commit per item, each verified by typecheck and tests, then merged into the current branch unless something gets in the way')
+  .argument('[ids...]', 'Backlog ids (B-…)')
   .option('--all', 'Every open or failed backlog item')
   .option('--out <dir>', 'Workspace directory the backlog lives in')
   .option('--repo <path>', 'Repo whose workspace to use')
-  .option('--pr', 'Push the branch and open a PR (gh)')
+  .option('--parallel <n>', 'Agents working at the same time, one item each (1-6)', int, 2)
+  .option('--no-merge', 'Leave each passing item on its own branch instead of merging it')
+  .option('--base <branch>', 'Branch to start from and merge into (default: the checked-out branch)')
+  .option('--pr', 'Push each passing item and open a PR for it (gh) instead of merging')
   .option('--max-attempts <n>', 'Implement/verify attempts per item', int, 2)
   .option('--instructions <text>', 'Your instructions for the implementing agent')
   .option('--keep-worktree', 'Keep the git worktree after finishing')
@@ -531,8 +534,8 @@ program
     const { backlog } = await import('./learn/proposals.js');
     const list = o.all ? backlog(ws).filter((b) => b.status === 'open' || b.status === 'failed').map((b) => b.id) : ids.map((x) => x.toUpperCase());
     if (!list.length) throw new Error(o.all ? 'Nothing open on the backlog' : 'Pass backlog ids or --all');
-    const r = await implementBacklogItems({ ws, ids: list, instructions: o.instructions ?? null, pr: !!o.pr, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
-    console.log(`${r.done.length}/${list.length} implemented${r.done.length ? ` on ${r.branch}` : ''}${r.failed.length ? `; not implemented: ${r.failed.map((f) => `${f.item.id} (${f.error})`).join(', ')}` : ''}${r.prUrl ? `\nPR: ${r.prUrl}` : ''}`);
+    const r = await implementBacklogItems({ ws, ids: list, instructions: o.instructions ?? null, pr: !!o.pr, merge: o.merge !== false, parallel: o.parallel, base: o.base ?? null, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
+    for (const x of r.results) console.log(`${x.id.padEnd(5)} ${x.outcome === 'merged' ? `merged into ${r.base}` : x.outcome === 'branch' ? `on ${x.branch}${x.pr_url ? ` (${x.pr_url})` : ''}${x.issue ? `: ${x.issue}` : ''}` : `failed: ${x.issue ?? 'unknown'}`}`);
   });
 
 program

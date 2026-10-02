@@ -360,10 +360,10 @@ function Backlog({ items, runs, reload }: { items: BacklogItem[]; runs: RunGroup
     <>
       {open.length > 0 && (
         <div className="backlog-bar">
-          <span className="small muted">Implement several approved items on one branch: one commit each, every item checked by typecheck and tests. Items that fail are rolled back and the rest carry on.</span>
+          <span className="small muted">Implement several approved items at once: parallel agents, one branch each, every item checked by typecheck and tests, then merged into main unless something gets in the way.</span>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
             <Chamfer small tone="green" disabled={!selected.length || selWs.length > 1} onClick={() => setImpl({ ws: selWs[0], ids: selected.map((b) => b.id), all: false })}>
-              Implement selected ({selected.length}) on one branch
+              Implement selected ({selected.length})
             </Chamfer>
             {[...openByWs.entries()].map(([ws, list]) => (
               <button key={ws} className="btn-ghost" onClick={() => setImpl({ ws, ids: list.map((b) => b.id), all: true })}>
@@ -373,7 +373,7 @@ function Backlog({ items, runs, reload }: { items: BacklogItem[]; runs: RunGroup
           </div>
           {selWs.length > 1 && (
             <span className="small" style={{ color: 'var(--warn)' }}>
-              Selected items belong to different projects; one branch can only hold items from one project.
+              Selected items belong to different projects; implement one project's items at a time.
             </span>
           )}
         </div>
@@ -436,7 +436,7 @@ function Backlog({ items, runs, reload }: { items: BacklogItem[]; runs: RunGroup
                     {pickable && (
                       <div>
                         <Chamfer small onClick={() => setImpl({ ws: b.ws, ids: [b.id], all: false })}>
-                          {b.status === 'failed' ? 'Try again on a new branch' : 'Implement on a branch'}
+                          {b.status === 'failed' ? 'Try again' : 'Implement'}
                         </Chamfer>
                       </div>
                     )}
@@ -463,18 +463,22 @@ function Backlog({ items, runs, reload }: { items: BacklogItem[]; runs: RunGroup
   );
 }
 
+type Landing = 'merge' | 'branch' | 'pr';
+
 function ImplementDialog({ ws, items, all, onClose, onStarted }: { ws: string; items: BacklogItem[]; all: boolean; onClose: () => void; onStarted: () => void }) {
-  const [pr, setPr] = useState(false);
+  const many = items.length > 1;
+  const [landing, setLanding] = useState<Landing>('merge');
+  const [parallel, setParallel] = useState(Math.min(3, Math.max(1, items.length)));
   const [confirmPush, setConfirmPush] = useState(false);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
   const nav = useNavigate();
-  const many = items.length > 1;
   const start = async () => {
     setBusy(true);
     try {
-      const job = await api<JobView>(`/backlog/${ws}/implement`, { json: { ...(all ? { all: true } : { ids: items.map((b) => b.id) }), pr, confirmPush: pr ? confirmPush : undefined } });
-      toast(many ? `Implementing ${items.length} items` : 'Implementation started');
+      const land = { pr: landing === 'pr', merge: landing === 'merge', confirmPush: landing === 'pr' ? confirmPush : undefined };
+      const job = await api<JobView>(`/backlog/${ws}/implement`, { json: { ...(all ? { all: true } : { ids: items.map((b) => b.id) }), ...land, parallel: many ? parallel : 1 } });
+      toast(many ? `Implementing ${items.length} items with ${parallel} agent${parallel > 1 ? 's' : ''}` : 'Implementation started');
       onStarted();
       nav(`/jobs/${job.id}`);
     } catch (e) {
@@ -482,18 +486,23 @@ function ImplementDialog({ ws, items, all, onClose, onStarted }: { ws: string; i
       setBusy(false);
     }
   };
+  const landings: { id: Landing; label: string; help: string }[] = [
+    { id: 'merge', label: 'Merge into main automatically', help: 'Each item that passes is rebased onto the latest main (the agent resolves conflicts with items merged before it), checked again, and merged. If anything gets in the way, it stays on its branch with the reason. Nothing is pushed.' },
+    { id: 'branch', label: 'Leave each on its own branch', help: 'Nothing is merged; review and merge the improve/… branches yourself.' },
+    { id: 'pr', label: 'Open a pull request for each', help: 'Pushes each passing branch to GitHub and opens a PR (see the Pull requests tab).' },
+  ];
   return (
     <Dialog
       open
       onClose={onClose}
-      title={many ? `Implement ${items.length} items on one branch` : `Implement ${items[0]?.id ?? ''}`}
+      title={many ? `Implement ${items.length} items` : `Implement ${items[0]?.id ?? ''}`}
       footer={
         <>
           <button className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <Chamfer tone="green" onClick={start} disabled={busy || (pr && !confirmPush) || !items.length}>
-            {busy ? 'Starting…' : pr ? 'Implement + open PR' : many ? `Implement ${items.length} on one branch` : 'Implement on a branch'}
+          <Chamfer tone="green" onClick={start} disabled={busy || (landing === 'pr' && !confirmPush) || !items.length}>
+            {busy ? 'Starting…' : landing === 'merge' ? 'Implement and merge' : landing === 'pr' ? 'Implement and open PRs' : 'Implement on branches'}
           </Chamfer>
         </>
       }
@@ -506,15 +515,40 @@ function ImplementDialog({ ws, items, all, onClose, onStarted }: { ws: string; i
         ))}
       </ol>
       <p className="small muted" style={{ margin: 0 }}>
-        {many
-          ? 'In this order, on one new improve/… branch of the bugbash repo (a separate worktree): an agent implements each item, then typecheck and tests run (failures go back to the agent once). Each passing item becomes its own commit; one that still fails is rolled back and the rest carry on.'
-          : 'An agent makes the change in a separate git worktree on a new improve/… branch of the bugbash repo, then the typecheck and the unit and detector tests run (failures go back to the agent once). It commits on that branch.'}{' '}
-        Your checkout and the running agents stay unchanged until you merge.
+        Each item gets its own agent, branch and worktree of the bugbash repo. After the agent finishes, typecheck and tests run (failures go back to it once); an item that passes is committed, one that still fails is dropped and marked failed.
       </p>
-      <label className="check">
-        <input type="checkbox" checked={pr} onChange={(e) => setPr(e.target.checked)} /> <span>Push the branch and open {many ? 'one' : 'a'} GitHub pull request</span>
-      </label>
-      {pr && (
+      {many && (
+        <label className="field">
+          <span className="label">Agents at the same time</span>
+          <select className="select" value={parallel} onChange={(e) => setParallel(Number(e.target.value))}>
+            {[1, 2, 3, 4, 5, 6].filter((n) => n <= items.length).map((n) => (
+              <option key={n} value={n}>
+                {n === 1 ? '1 (one after another)' : `${n} in parallel`}
+              </option>
+            ))}
+          </select>
+          <span className="small muted">More agents finish sooner but use more of your Claude usage and run several test suites at once.</span>
+        </label>
+      )}
+      <fieldset className="stack" style={{ ['--gap' as string]: '8px', border: 0, padding: 0, margin: 0 }}>
+        <legend className="label" style={{ marginBottom: 6 }}>
+          When an item passes
+        </legend>
+        {landings.map((l) => (
+          <label key={l.id} className="check">
+            <input type="radio" name="landing" checked={landing === l.id} onChange={() => setLanding(l.id)} />{' '}
+            <span>
+              {l.label}
+              {landing === l.id && (
+                <span className="small muted" style={{ display: 'block' }}>
+                  {l.help}
+                </span>
+              )}
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      {landing === 'pr' && (
         <label className="check" style={{ color: 'var(--sev-major)', paddingLeft: 24 }}>
           <input type="checkbox" checked={confirmPush} onChange={(e) => setConfirmPush(e.target.checked)} /> <span>I understand this pushes to GitHub</span>
         </label>
