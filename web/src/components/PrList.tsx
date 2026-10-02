@@ -190,10 +190,10 @@ function UpdatePrBody({ p, onUpdated }: { p: PrRow; onUpdated: () => Promise<voi
           {busy ? 'Updating PR body…' : 'Update PR body'}
         </button>
       </div>
-      <Dialog open={confirm} dismissible={!busy} onClose={() => { if (!busy) setConfirm(false); }} title="Update PR body?" footer={
+      <Dialog open={confirm} busy={busy ? 'Updating the PR body on GitHub: uploading the before/after pictures and rewriting the description. This can take a minute.' : null} onClose={() => { if (!busy) setConfirm(false); }} title="Update PR body?" footer={
         <>
           <button className="btn-link" disabled={busy} onClick={() => setConfirm(false)}>Cancel</button>
-          <Chamfer small tone="green" disabled={busy || p.jobs.some((j) => j.state === 'running')} onClick={() => void update()}>{busy ? 'Updating…' : 'Update PR body'}</Chamfer>
+          <Chamfer small tone="green" disabled={busy || p.jobs.some((j) => j.state === 'running')} onClick={() => void update()}>{busy ? <><span className="spinner" /> Updating…</> : 'Update PR body'}</Chamfer>
         </>
       }>
         <p style={{ margin: 0 }}>Update <a href={p.url} target="_blank" rel="noreferrer">{p.repo}#{p.number ?? '?'}</a> with the latest saved verification, screenshots, and description of the published changes?</p>

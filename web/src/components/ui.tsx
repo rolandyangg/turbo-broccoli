@@ -187,7 +187,12 @@ export function CopyButton({ text, label = 'Copy' }: { text: string; label?: str
   );
 }
 
-export function Dialog({ open, onClose, title, children, footer, wide, dismissible = true }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; dismissible?: boolean }) {
+/**
+ * busy: work is in progress (text says what). The dialog can't be closed meanwhile (Close greyed out, Esc and
+ * backdrop clicks ignored) and shows a spinner bar.
+ */
+export function Dialog({ open, onClose, title, children, footer, wide, dismissible: dismissibleProp = true, busy }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; dismissible?: boolean; busy?: ReactNode }) {
+  const dismissible = dismissibleProp && !busy;
   useEffect(() => {
     if (!open || !dismissible) return;
     const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -197,13 +202,18 @@ export function Dialog({ open, onClose, title, children, footer, wide, dismissib
   if (!open) return null;
   return (
     <div className="overlay" onMouseDown={(e) => dismissible && e.target === e.currentTarget && onClose()}>
-      <div className="dialog box" style={wide ? { width: 'min(1180px, 100%)' } : undefined} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined}>
+      <div className="dialog box" style={wide ? { width: 'min(1180px, 100%)' } : undefined} role="dialog" aria-modal="true" aria-busy={!!busy} aria-label={typeof title === 'string' ? title : undefined}>
         <div className="box-head">
           <div className="path">{title}</div>
-          <button className="btn-link" disabled={!dismissible} onClick={onClose} aria-label="Close">
+          <button className="btn-link" disabled={!dismissible} onClick={onClose} aria-label="Close" title={busy ? "Can't close while this is in progress" : undefined}>
             Close
           </button>
         </div>
+        {busy && (
+          <div className="dialog-busy" role="status">
+            <span className="spinner" /> <span className="small">{busy === true ? 'Working…' : busy}</span>
+          </div>
+        )}
         <div className="box-body stack" style={{ ['--gap' as string]: '14px' }}>
           {children}
         </div>

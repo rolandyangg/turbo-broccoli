@@ -1807,3 +1807,18 @@
 .markdown-table table { width: 100%; border-collapse: collapse; }
 .markdown-table :is(th, td) { border: 1px solid var(--line); padding: 10px; text-align: left; vertical-align: top; }
 .markdown-table th { background: var(--panel); }
+
+/* A dialog with work in progress: it can't be closed, and says what it's doing. */
+.btn-link:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+.dialog-busy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px dashed var(--line);
+  background: var(--panel);
+}
