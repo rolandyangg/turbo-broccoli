@@ -229,6 +229,9 @@ export class Driver {
       case 'scroll':
         await p.evaluate(([x, y]) => window.scrollTo(x, y), [step.x, step.y]);
         return settle(p, 100);
+      case 'swipe':
+        await this.swipe(step.selector, step.dy);
+        return settle(p, 150);
       case 'mutate_text':
         await p.locator(step.selector).first().evaluate((el, text) => {
           const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
@@ -251,6 +254,41 @@ export class Driver {
    * than the device (the layout viewport keeps adjusting). Fall back to scrolling the element into view and
    * acting at its real coordinates, then to dispatching the event directly.
    */
+  /** Whether this browser can perform a real swipe here (Playwright has no wheel or swipe in mobile WebKit/Firefox). */
+  get canSwipe(): boolean {
+    const mobile = !!(this.variant.device && deviceContextOptions(this.variant.device, this.opts.browser).options.isMobile);
+    return this.opts.browser === 'chromium' || !mobile;
+  }
+
+  /**
+   * A person's scroll gesture over `selector` (the visible part of it) or the screen's centre: a real touch swipe in
+   * Chromium on touch devices, the mouse wheel elsewhere. It moves whatever a finger there would move.
+   */
+  async swipe(selector: string | null, dy: number) {
+    const p = this.page;
+    const vp = p.viewportSize() ?? this.viewport;
+    const box = selector ? await p.locator(selector).first().boundingBox().catch(() => null) : null;
+    const top = Math.max(0, box?.y ?? 0);
+    const bottom = Math.min(vp.height, box ? box.y + box.height : vp.height);
+    const x = box ? Math.min(Math.max(box.x + box.width / 2, 5), vp.width - 5) : vp.width / 2;
+    const y = bottom > top + 10 ? (top + bottom) / 2 : vp.height / 2;
+    if (!this.canSwipe) throw new Error(`Swipe gestures aren't supported in ${this.opts.browser} with a mobile device profile`);
+    if (this.opts.browser === 'chromium') {
+      const touch = !!(this.variant.device && deviceContextOptions(this.variant.device, this.opts.browser).options.hasTouch);
+      const cdp = await this.context.newCDPSession(p);
+      await cdp.send('Input.synthesizeScrollGesture', { x, y, yDistance: -dy, gestureSourceType: touch ? 'touch' : 'mouse', speed: 1200 });
+      await cdp.detach().catch(() => {});
+    } else {
+      await p.mouse.move(x, y);
+      for (let left = dy; Math.abs(left) > 0; ) {
+        const d = Math.sign(left) * Math.min(Math.abs(left), 120);
+        await p.mouse.wheel(0, d);
+        left -= d;
+        await p.waitForTimeout(16);
+      }
+    }
+  }
+
   private async robust(loc: import('playwright').Locator, act: (o: { timeout: number; force?: boolean }) => Promise<void>, event: string, timeout: number) {
     const quick = this.variant.device ? Math.min(timeout, 2500) : timeout;
     try {

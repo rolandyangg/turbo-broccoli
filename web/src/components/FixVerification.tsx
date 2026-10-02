@@ -47,7 +47,7 @@ export function FixVerification({ f, ws, run, branch, afterShot, running, prUrl,
             <dt>Result</dt>
             <dd>{v.result === 'fixed' ? 'bug gone' : v.result === 'present' ? 'bug still present' : "couldn't tell"}</dd>
             <dt>How</dt>
-            <dd>{v.method === 'detector' ? 'detector replays at each affected size and browser' : v.method === 'visual-review' ? 'visual before/after review (AI), no detector could decide' : 'no automatic check could decide'}</dd>
+            <dd>{v.method === 'detector' ? (v.checks.some((c) => c.gesture) ? 'replays with a real swipe over the element (and detectors), at each affected size and browser' : 'detector replays at each affected size and browser') : v.method === 'visual-review' ? 'visual before/after review (AI), no detector could decide' : 'no automatic check could decide'}</dd>
             <dt>Checked</dt>
             <dd>{ago(v.at)}</dd>
           </dl>
@@ -56,11 +56,16 @@ export function FixVerification({ f, ws, run, branch, afterShot, running, prUrl,
           <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
             {v.checks.map((c, i) => (
               <Chip key={i} tone={c.present === null ? 'outline' : c.present ? 'sev-critical dot' : 'mint'}>
-                {c.browser} {c.width}px: {c.present === null ? `inconclusive${c.error ? ` (${c.error.slice(0, 40)})` : ''}` : c.present ? 'still there' : 'gone'}
+                {c.browser}{f.reproduction.environment.variant.device ? '' : ` ${c.width}px`}: {c.present === null ? `inconclusive${c.error ? ` (${c.error.slice(0, 40)})` : ''}` : c.present ? 'still there' : 'gone'}
               </Chip>
             ))}
           </div>
         ) : null}
+        {v?.checks.some((c) => c.gesture?.reason) && (
+          <p className="small" style={{ margin: 0 }}>
+            <b>Scroll check (a real swipe over the open menu/overlay):</b> {[...new Set(v.checks.map((c) => c.gesture?.reason).filter(Boolean))].join(' ')}
+          </p>
+        )}
         {v?.review && (
           <p className="small" style={{ margin: 0 }}>
             <b>Visual review ({Math.round(v.review.confidence * 100)}% confident):</b> {v.review.reasoning}

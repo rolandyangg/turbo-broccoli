@@ -40,6 +40,8 @@ export async function recordVideo(
     params?: Partial<VideoParams>;
     /** After-fix recording: green box and "After the fix" captions instead of the red BUG ones. */
     afterFix?: boolean;
+    /** The element's text: finds it when a fix changed its classes and the selector no longer matches. */
+    text?: string | null;
   },
 ): Promise<VideoResult> {
   const p = { ...DEFAULT_VIDEO, ...o.params };
@@ -99,15 +101,25 @@ export async function recordVideo(
     await caption(driver, o.afterFix ? `After the fix: ${o.title}` : `BUG: ${o.title}`);
     const shown = await driver.page
       .evaluate(
-        ([sel, rel, label, color]) => {
+        ([sel0, rel, label, color, text]) => {
           const bb = (window as any).__bugbash;
           if (!bb) return false;
+          let sel = sel0;
+          if (sel && !document.querySelector(sel) && text) {
+            const want = text.replace(/\s+/g, ' ').trim().toLowerCase();
+            const tag = /^[a-z][a-z0-9-]*/i.exec(sel)?.[0] ?? '*';
+            const hit = [...document.querySelectorAll(tag)].find((n) => ((n as HTMLElement).innerText || n.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase() === want);
+            if (hit) {
+              hit.setAttribute('data-bugbash-target', '1');
+              sel = '[data-bugbash-target="1"]';
+            }
+          }
           const el = sel && document.querySelector(sel);
           if (el) el.scrollIntoView({ block: 'center' });
           if (rel) bb.drawBox(rel, 'related', '#ff9100');
           return sel ? bb.drawBox(sel, label, color) : false;
         },
-        [o.selector, o.relatedSelector, (o.afterFix ? `after fix: ${o.title}` : o.title).slice(0, 60), o.afterFix ? '#00c853' : '#ff1744'] as const,
+        [o.selector, o.relatedSelector, (o.afterFix ? `after fix: ${o.title}` : o.title).slice(0, 60), o.afterFix ? '#00c853' : '#ff1744', o.text ?? null] as const,
       )
       .catch(() => false);
     bugAt = since(driver);

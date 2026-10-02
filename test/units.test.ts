@@ -531,3 +531,87 @@ describe('publishing with the saved verification', () => {
     expect(savedResult(fixed).present).toBe(false);
   });
 });
+
+describe('replaying a finding recorded on a phone', () => {
+  it('starts before the device switch, so the switch applies the phone screen size', async () => {
+    const { replay, startingVariant, BrowserPool } = await import('../src/triage/replay.js');
+    const { Config } = await import('../src/config.js');
+    const steps: Step[] = [
+      { action: 'resize', width: 1280, height: 800 },
+      { action: 'goto', url: '/' },
+      { action: 'variant', variant: { device: 'iphone-se' } },
+    ];
+    expect(startingVariant(steps, { device: 'iphone-se', colorScheme: 'dark' })).toEqual({ colorScheme: 'dark' });
+    expect(startingVariant([{ action: 'goto', url: '/' }], { device: 'iphone-se' })).toEqual({ device: 'iphone-se' });
+    const t = await resolveTarget('fixtures/detector-lab');
+    const pool = new BrowserPool();
+    try {
+      const { driver, error } = await replay(steps, { baseUrl: t.baseUrl, browser: 'chromium', initialViewport: { width: 1280, height: 800 }, variant: { device: 'iphone-se' }, guardrails: Config.parse({}).guardrails, pool });
+      expect(error).toBeNull();
+      expect(await driver.page.evaluate(() => [innerWidth, innerHeight < 800, 'ontouchstart' in window])).toEqual([320, true, true]);
+      await driver.close();
+    } finally {
+      await pool.close();
+      await t.stop();
+    }
+  }, 60_000);
+});
+
+describe('scroll bugs are verified with a real gesture', () => {
+  const steps = (q: string): Step[] => [
+    { action: 'goto', url: `/scroll-menu.html${q}` },
+    { action: 'variant', variant: { device: 'iphone-se' } },
+    { action: 'click', selector: '#open' },
+  ];
+  it('swipes over the open menu: broken when the page moves and the last link stays out of reach, fine when the menu scrolls', async () => {
+    const { replay, BrowserPool } = await import('../src/triage/replay.js');
+    const { probeScroll, markTarget } = await import('../src/fix/gesture.js');
+    const { Config } = await import('../src/config.js');
+    const t = await resolveTarget('fixtures/detector-lab');
+    const pool = new BrowserPool();
+    const run = (q: string, browser: 'chromium' | 'webkit' = 'chromium', device = true) =>
+      replay(device ? steps(q) : steps(q).filter((s) => s.action !== 'variant'), { baseUrl: t.baseUrl, browser, initialViewport: { width: 1280, height: 600 }, variant: device ? { device: 'iphone-se' } : {}, guardrails: Config.parse({}).guardrails, pool });
+    try {
+      // A selector that a fix broke (class renamed) still finds the element by its text.
+      const el = { selector: 'a.renamed-by-the-fix', text: 'AI Hackathon' };
+      for (const [q, broken] of [['', true], ['?fixed=1', false]] as const) {
+        const { driver } = await run(q);
+        expect(await markTarget(driver.page, el)).toBe('[data-bugbash-target="1"]');
+        const g = await probeScroll(driver, el);
+        await driver.close();
+        expect(g.present).toBe(broken);
+        if (broken) expect(g.page_moved_px).toBeGreaterThan(20);
+        else expect(g).toMatchObject({ reachable: true, page_moved_px: 0 });
+        expect(g.container_moved_px > 0).toBe(!broken);
+      }
+      // Desktop browsers use the mouse wheel; mobile WebKit can't swipe at all (verification switches to Chromium).
+      const { driver: desk } = await run('', 'webkit', false);
+      expect((await probeScroll(desk, el)).present).toBe(true);
+      await desk.close();
+      const { driver: phone } = await run('', 'webkit');
+      expect(phone.canSwipe).toBe(false);
+      await phone.close();
+    } finally {
+      await pool.close();
+      await t.stop();
+    }
+  }, 120_000);
+
+  it('an overlay bug reported on the menu matches a finding that points at a link inside it', async () => {
+    const { replay, checkPresence, BrowserPool } = await import('../src/triage/replay.js');
+    const { Config } = await import('../src/config.js');
+    const t = await resolveTarget('fixtures/detector-lab');
+    const pool = new BrowserPool();
+    try {
+      for (const [q, want] of [['', 'present'], ['?fixed=1', 'absent']] as const) {
+        const { driver } = await replay(steps(q), { baseUrl: t.baseUrl, browser: 'chromium', initialViewport: { width: 1280, height: 600 }, variant: { device: 'iphone-se' }, guardrails: Config.parse({}).guardrails, pool });
+        const r = await checkPresence(driver, { type: 'overlay-overflow', selector: '#menu a.last', relatedSelector: null, signature: null });
+        await driver.close();
+        expect(r.presence).toBe(want);
+      }
+    } finally {
+      await pool.close();
+      await t.stop();
+    }
+  }, 120_000);
+});

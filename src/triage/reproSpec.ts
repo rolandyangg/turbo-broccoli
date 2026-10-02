@@ -41,6 +41,8 @@ function stepCode(s: Step): string {
       return `await page.keyboard.press(${q(s.key)});`;
     case 'scroll':
       return `await page.evaluate(() => window.scrollTo(${s.x}, ${s.y}));`;
+    case 'swipe':
+      return `{ const b = ${s.selector ? `await page.locator(${q(s.selector)}).first().boundingBox()` : 'null'}; const v = page.viewportSize()!; await page.mouse.move(b ? b.x + b.width / 2 : v.width / 2, b ? Math.min(b.y + b.height / 2, v.height - 10) : v.height / 2); await page.mouse.wheel(0, ${s.dy}); }`;
     case 'mutate_text':
       return `await page.locator(${q(s.selector)}).first().evaluate((el, t) => { el.textContent = t; }, ${q(s.text)});`;
     case 'wait':

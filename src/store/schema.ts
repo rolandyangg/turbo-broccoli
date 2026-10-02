@@ -86,6 +86,9 @@ export const Step = z.discriminatedUnion('action', [
   z.object({ action: z.literal('select'), selector: z.string(), value: z.string() }),
   z.object({ action: z.literal('press'), key: z.string() }),
   z.object({ action: z.literal('scroll'), x: z.number(), y: z.number() }),
+  // A person's scroll gesture (touch swipe on touch devices, mouse wheel otherwise) over an element or the screen's
+  // centre: unlike `scroll`, it respects scroll locking and scrolls whatever is under the finger. dy > 0 scrolls down.
+  z.object({ action: z.literal('swipe'), selector: z.string().nullable(), dy: z.number() }),
   z.object({ action: z.literal('mutate_text'), selector: z.string(), text: z.string() }),
   z.object({ action: z.literal('wait'), ms: z.number() }),
 ]);
@@ -219,7 +222,7 @@ export const Finding = z.object({
           /** fixed = every check shows the bug gone; present = still there; inconclusive = couldn't tell. */
           result: z.enum(['fixed', 'present', 'inconclusive']),
           method: z.enum(['detector', 'visual-review', 'none']),
-          checks: z.array(z.object({ browser: z.string(), width: z.number(), height: z.number(), present: z.boolean().nullable(), error: z.string().nullable() })).default([]),
+          checks: z.array(z.object({ browser: z.string(), width: z.number(), height: z.number(), present: z.boolean().nullable(), error: z.string().nullable(), gesture: z.object({ present: z.boolean().nullable(), reason: z.string(), page_moved_px: z.number(), container_moved_px: z.number(), reachable: z.boolean(), over: z.string().nullable() }).nullable().optional() })).default([]),
           review: z.object({ fixed: z.boolean(), confidence: z.number(), reasoning: z.string() }).nullable().default(null),
           after: z.object({ annotated: z.string().nullable(), crop: z.string().nullable(), full: z.string().nullable(), element_found: z.boolean() }).nullable().default(null),
           after_video: z.object({ mp4: z.string().nullable(), gif: z.string().nullable(), filmstrip: z.string().nullable() }).nullable().default(null),

@@ -74,13 +74,28 @@ export interface ReplayOptions {
   afterStep?: (d: Driver, step: Step, i: number) => Promise<void>;
 }
 
+/**
+ * The environment to START a replay in. A finding records its final environment, but its steps may switch device or
+ * pixel ratio on the way (e.g. resize to 1280×800, then "switch to iPhone SE"). Starting already on the final device
+ * makes that switch a no-op, and the earlier resize then leaves a phone at desktop size. So whatever the steps switch
+ * later starts from the default, and the switch step applies it (with the device's own screen size) as it did live.
+ */
+export function startingVariant(steps: Step[], variant: Partial<Variant> | undefined): Partial<Variant> | undefined {
+  if (!variant) return variant;
+  const switched = new Set(steps.flatMap((s) => (s.action === 'variant' ? Object.keys(s.variant) : [])));
+  const out: Partial<Variant> = { ...variant };
+  if (switched.has('device')) delete out.device;
+  if (switched.has('dpr')) delete out.dpr;
+  return out;
+}
+
 export async function replay(steps: Step[], o: ReplayOptions): Promise<{ driver: Driver; failedStep: number | null; error: string | null }> {
   const first = steps.find((s) => s.action === 'resize') as Extract<Step, { action: 'resize' }> | undefined;
   const driver = new Driver({
     browser: o.browser,
     baseUrl: o.baseUrl,
     viewport: first ? { width: first.width, height: first.height } : o.initialViewport,
-    variant: o.variant,
+    variant: startingVariant(steps, o.variant),
     guardrails: o.guardrails,
     sharedBrowser: o.recordVideoDir ? undefined : await o.pool?.get(o.browser),
     recordVideoDir: o.recordVideoDir ?? null,
@@ -121,8 +136,30 @@ export async function checkPresence(driver: Driver, spec: DefectSpec): Promise<{
   await driver.refreshVariant();
   const types = ALIASES[spec.type] ?? [spec.type];
   const cands = await runDetectors(driver.page, { only: types, scan: spec.selector ? { selector: spec.selector } : 'page' }).catch(() => [] as Candidate[]);
-  const c = matchCandidate(cands, spec);
+  const c = matchCandidate(cands, spec) ?? (await enclosingCandidate(driver, cands, spec));
   return { presence: c ? 'present' : 'absent', candidate: c };
+}
+
+/**
+ * Overlay detectors report the menu/overlay itself, while a finding often points at an item inside it (the link that
+ * can't be reached). For those types, a candidate on an element that contains the finding's element (or sits inside
+ * it) is the same bug; without this, an unfixed overlay would never match and would pass as "fixed".
+ */
+const CONTAINER_TYPES = new Set(['overlay-overflow', 'scroll-trap']);
+async function enclosingCandidate(driver: Driver, cands: Candidate[], spec: DefectSpec): Promise<Candidate | null> {
+  if (!spec.selector || !CONTAINER_TYPES.has(spec.type)) return null;
+  const types = ALIASES[spec.type] ?? [spec.type];
+  for (const c of cands.filter((x) => types.includes(x.type) && x.confidence >= 0.35 && x.selector)) {
+    const related = await driver.page
+      .evaluate(([a, b]) => {
+        const A = document.querySelector(a);
+        const B = document.querySelector(b);
+        return !!A && !!B && (A.contains(B) || B.contains(A));
+      }, [c.selector!, spec.selector] as const)
+      .catch(() => false);
+    if (related) return c;
+  }
+  return null;
 }
 
 export async function replayAndCheck(steps: Step[], spec: DefectSpec, o: ReplayOptions): Promise<{ presence: Presence; candidate: Candidate | null; error: string | null }> {

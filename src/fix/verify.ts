@@ -5,6 +5,8 @@ import { runDetectors, settle, type Candidate } from '../detect/index.js';
 import { annotateDefect } from '../triage/annotate.js';
 import { recordVideo } from '../triage/video.js';
 import { runAgent } from '../llm/runner.js';
+import { needsGesture, gestureSteps, probeScroll, markTarget, SWIPES, SWIPE_DY, type GestureResult } from './gesture.js';
+import type { BrowserName } from '../store/schema.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -14,7 +16,7 @@ export interface VerifyResult {
   /** true = still there; false = gone (every check agrees, or the visual review says so); null = couldn't tell. */
   present: boolean | null;
   method: 'detector' | 'visual-review' | 'none';
-  checks: { browser: string; width: number; height: number; present: boolean | null; error: string | null }[];
+  checks: { browser: string; width: number; height: number; present: boolean | null; error: string | null; gesture?: GestureResult | null }[];
   review: { fixed: boolean; confidence: number; reasoning: string } | null;
   /** After-fix stills taken for the review (absolute paths), when one ran. */
   after: { annotated: string; crop: string; full: string; element_found: boolean } | null;
@@ -37,6 +39,8 @@ function atViewport(steps: Step[], vp: { width: number; height: number }): Step[
 /** Representative viewports: the reproduction viewport plus the extremes of the affected range (max 3). */
 export function checkViewports(f: Finding) {
   const env = f.reproduction.environment.viewport;
+  // On a device profile the device sets the screen size: one check covers it.
+  if (f.reproduction.environment.variant.device) return [env];
   const vps = [env, ...f.viewports];
   const byW = new Map(vps.map((v) => [v.width, v]));
   const ws = [...byW.keys()].sort((a, b) => a - b);
@@ -55,19 +59,44 @@ export interface VerifyOptions {
 export async function verifyFinding(f: Finding, o: VerifyOptions): Promise<VerifyResult> {
   const steps = f.reproduction.steps_minimal.length ? f.reproduction.steps_minimal : f.reproduction.steps_original;
   const spec = specOf(f);
-  const res: VerifyResult = { id: f.id, verifiable: DETECTABLE.has(f.type) && f.reproduction.rate != null && f.reproduction.rate !== '0/1', present: null, method: 'none', checks: [], review: null, after: null };
+  const gesture = needsGesture(f);
+  const detectable = DETECTABLE.has(f.type) && f.reproduction.rate != null && f.reproduction.rate !== '0/1';
+  const res: VerifyResult = { id: f.id, verifiable: detectable || gesture, present: null, method: 'none', checks: [], review: null, after: null };
   if (res.verifiable) {
     const browsers = f.browsers.length ? f.browsers : [f.reproduction.environment.browser];
+    const replayIn = (st: Step[], browser: BrowserName, vp: { width: number; height: number }) => replay(atViewport(st, vp), { baseUrl: o.baseUrl, browser, initialViewport: vp, variant: f.reproduction.environment.variant, guardrails: o.guardrails, pool: o.pool });
     for (const browser of browsers) {
       for (const vp of checkViewports(f)) {
-        const { driver, error } = await replay(atViewport(steps, vp), { baseUrl: o.baseUrl, browser, initialViewport: vp, variant: f.reproduction.environment.variant, guardrails: o.guardrails, pool: o.pool });
+        // Scroll bugs: replay up to the state to scroll in (not the scripted jump), then do the gesture.
+        const { driver, error } = await replayIn(gesture ? gestureSteps(f) : steps, browser, vp);
+        let det: boolean | null = null;
+        let g: GestureResult | null = null;
+        let gestureError: string | null = null;
         try {
           // A replay that breaks (steps no longer apply) or a check that can't decide is NOT evidence of a fix.
-          const r = error ? null : await checkPresence(driver, spec);
-          res.checks.push({ browser, width: vp.width, height: vp.height, present: !r || r.presence === 'unverifiable' ? null : r.presence === 'present', error: error ?? (r?.presence === 'unverifiable' ? 'not checkable here' : null) });
+          const r = error || !detectable ? null : await checkPresence(driver, spec);
+          det = !r || r.presence === 'unverifiable' ? null : r.presence === 'present';
+          if (gesture && !error) {
+            if (driver.canSwipe) g = await probeScroll(driver, f.element);
+            else {
+              // Playwright can't swipe in mobile WebKit/Firefox: same device profile in Chromium for the gesture.
+              const c = await replayIn(gestureSteps(f), 'chromium', vp);
+              try {
+                if (c.error) gestureError = `gesture replay failed: ${c.error}`;
+                else g = await probeScroll(c.driver, f.element);
+              } finally {
+                await c.driver.close();
+              }
+            }
+          }
+        } catch (e) {
+          gestureError = (e as Error).message.split('\n')[0];
         } finally {
           await driver.close();
         }
+        // Either check seeing the bug means it's still there; it's gone only when no check sees it and one could tell.
+        const present = det === true || g?.present === true ? true : det === false || g?.present === false ? false : null;
+        res.checks.push({ browser: g && !driver.canSwipe ? `${browser} (swipe in chromium)` : browser, width: vp.width, height: vp.height, present, error: error ?? gestureError ?? (present === null ? (g?.reason ?? 'not checkable here') : null), gesture: g });
       }
     }
     if (res.checks.some((c) => c.present === true)) res.present = true;
@@ -130,12 +159,14 @@ async function visualReview(f: Finding, runDir: string, after: { annotated: stri
  * element boxed in green (blue at its old position if it's gone). Time-based bugs wait as long as triage did.
  */
 export async function captureAfter(f: Finding, file: string, o: { baseUrl: string; guardrails: Config['guardrails']; pool: BrowserPool }) {
-  const steps = f.reproduction.steps_minimal.length ? f.reproduction.steps_minimal : f.reproduction.steps_original;
+  const { steps, browser } = evidenceSteps(f);
   mkdirSync(dirname(file), { recursive: true });
-  const { driver } = await replay(steps, { baseUrl: o.baseUrl, browser: f.reproduction.environment.browser, initialViewport: f.reproduction.environment.viewport, variant: f.reproduction.environment.variant, guardrails: o.guardrails, pool: o.pool });
+  const { driver } = await replay(steps, { baseUrl: o.baseUrl, browser, initialViewport: f.reproduction.environment.viewport, variant: f.reproduction.environment.variant, guardrails: o.guardrails, pool: o.pool });
   try {
     await settle(driver.page, f.type === 'layout-shift' || f.video ? 2500 : 300);
-    return await annotateDefect(driver.page, { selector: f.element.selector, relatedSelector: null, fallbackBBox: f.element.bbox, label: `${f.id}: after fix`, color: '#00c853', files: { annotated: file, crop: file.replace(/\.png$/, '-crop.png'), full: file.replace(/\.png$/, '-full.png') } });
+    // The fix may have changed the element's classes: find it by its text then.
+    const selector = (await markTarget(driver.page, f.element)) ?? f.element.selector;
+    return await annotateDefect(driver.page, { selector, relatedSelector: null, fallbackBBox: f.element.bbox, label: `${f.id}: after fix`, color: '#00c853', files: { annotated: file, crop: file.replace(/\.png$/, '-crop.png'), full: file.replace(/\.png$/, '-full.png') } });
   } finally {
     await driver.close();
   }
@@ -143,16 +174,17 @@ export async function captureAfter(f: Finding, file: string, o: { baseUrl: strin
 
 /** Narrated after-fix video (same steps and pacing as the "before" one) for time-based or behaviour bugs. */
 export async function recordAfterVideo(f: Finding, outDir: string, o: { baseUrl: string; guardrails: Config['guardrails']; pool: BrowserPool }) {
-  const steps = f.reproduction.steps_minimal.length ? f.reproduction.steps_minimal : f.reproduction.steps_original;
+  const { steps, browser } = evidenceSteps(f);
   const v = await recordVideo(steps, {
     id: `${f.id}-after`,
     runDir: outDir,
     title: f.title,
     selector: f.element.selector,
+    text: f.element.text,
     relatedSelector: null,
     afterFix: true,
     baseUrl: o.baseUrl,
-    browser: f.reproduction.environment.browser,
+    browser,
     initialViewport: f.reproduction.environment.viewport,
     variant: f.reproduction.environment.variant,
     guardrails: o.guardrails,
@@ -162,7 +194,20 @@ export async function recordAfterVideo(f: Finding, outDir: string, o: { baseUrl:
 }
 
 /** Bugs whose behaviour over time matters: they get an after-fix video, not just a still. */
-export const needsVideo = (f: Finding) => !!f.video?.mp4 || !!f.video?.webm || f.evidence_kind === 'temporal' || ['layout-shift', 'broken-state'].includes(f.type);
+export const needsVideo = (f: Finding) => !!f.video?.mp4 || !!f.video?.webm || f.evidence_kind === 'temporal' || ['layout-shift', 'broken-state'].includes(f.type) || needsGesture(f);
+
+/**
+ * Steps (and browser) for after-fix pictures and video. Scroll bugs end with the person's swipes over the element
+ * instead of a scripted jump, so the evidence shows what scrolling does now (in Chromium when the finding's browser
+ * can't swipe on a phone profile).
+ */
+export function evidenceSteps(f: Finding): { steps: Step[]; browser: BrowserName } {
+  const browser = f.reproduction.environment.browser;
+  if (!needsGesture(f)) return { steps: f.reproduction.steps_minimal.length ? f.reproduction.steps_minimal : f.reproduction.steps_original, browser };
+  const mobile = !!f.reproduction.environment.variant.device && browser !== 'chromium';
+  const swipes: Step[] = Array.from({ length: SWIPES }, () => ({ action: 'swipe' as const, selector: f.element.selector, dy: SWIPE_DY }));
+  return { steps: [...gestureSteps(f), ...swipes], browser: mobile ? 'chromium' : browser };
+}
 
 /** High-confidence detector candidates on a page at a few widths (for regression comparison). */
 export async function pageSnapshot(path: string, o: { baseUrl: string; guardrails: Config['guardrails']; pool: BrowserPool; widths?: number[] }): Promise<Map<string, Candidate>> {

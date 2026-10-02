@@ -28,6 +28,8 @@ export function describeStep(s: Step): string {
       return `Press ${s.key}`;
     case 'scroll':
       return `Scroll to x=${Math.round(s.x)}, y=${Math.round(s.y)}`;
+    case 'swipe':
+      return `${s.dy >= 0 ? 'Scroll down' : 'Scroll up'} ${Math.abs(Math.round(s.dy))}px with a finger/wheel over ${s.selector ? label(null, s.selector) : 'the screen'}`;
     case 'mutate_text':
       return `Change the text of ${label(null, s.selector)} to ${quote(s.text)} (simulates a longer translation/label)`;
     case 'wait':
