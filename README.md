@@ -18,6 +18,10 @@ Each finding brings evidence you can inspect: screenshots, reproduction steps, c
 
 The dashboard lives in `web/`; the underlying CLI is called **`bugbash`**. You can use either interface against a live URL, a local static site, or a local application repository.
 
+![Early Turbo Broccoli dashboard showing bug counts, severity charts, open findings, and recent jobs](docs/images/dashboard-early-preview.png)
+
+*An early preview of the Turbo Broccoli dashboard. The interface has evolved since this screenshot.*
+
 ## What you can do
 
 - **Explore across environments.** Test Chromium, WebKit, and Firefox with desktop viewports, phone and tablet emulation, and personas such as everyday, phone, keyboard, and impatient users.
