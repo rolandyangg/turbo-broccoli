@@ -13,6 +13,7 @@ import { writeReport } from '../store/report.js';
 import { JobReporter, newJobId, describeAgentEvent, type JobEvent } from '../jobs/events.js';
 import { notifyFixDone } from '../notify/events.js';
 import { commitMessage, explainChanges, technicalSection, type FileStat } from './describe.js';
+import { fixBrowserTools } from './browser.js';
 
 export interface FixOptions {
   runDir: string;
@@ -210,6 +211,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     if (steer && mode !== 'verify') skipAgent = false;
     for (attempt = 1; !skipAgent && attempt <= o.maxAttempts; attempt++) {
       say(`attempt:${attempt}`, `Attempt ${attempt}/${o.maxAttempts}: fix agent is working…`, 'info', { attempt, feedback: feedback ? feedback.slice(0, 2000) : null });
+      const browserTools = fixBrowserTools(selected, config, target.baseUrl, join(assetsDir, `browser-attempt-${attempt}`));
       const r = await runAgent({
         onEvent: (e) => {
           for (const d of describeAgentEvent(e)) say(`attempt:${attempt}`, d.msg, 'agent', d.data);
@@ -217,7 +219,8 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         prompt: fixPrompt(selected, [...groups.values()], groupMembers, scopeIsGroup, o.runDir, [steer, feedback].filter(Boolean).join('\n\n')),
         systemPrompt: FIX_SYSTEM,
         tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write'],
-        allowedTools: ['Read', 'Grep', 'Glob', 'Edit', 'Write'],
+        mcpServers: browserTools.mcpServers,
+        allowedTools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', ...browserTools.allowedTools],
         cwd: worktree,
         addDirs: [o.runDir],
         provider: config.provider, model: config.model,
@@ -454,7 +457,7 @@ Rules:
 - Don't change unrelated code, formatting, dependencies, or tests. Don't touch findings outside your scope, even when they share a root cause (unless the scope is the whole group).
 - Look at the screenshots/videos (Read tool) and the source hints before editing. Confirm the rule/markup that causes it.
 - Don't run git. Don't create new files unless required.
-- Finish with a short summary: root cause, what you changed (file:line), and why it fixes every affected width/browser.`;
+- Finish with a short summary: root cause, what you changed (file:line), browser/device/viewport checks actually performed and saved screenshot paths, plus any remaining failures or untested conditions.`;
 
 function fixPrompt(selected: Finding[], groups: RootCauseGroup[], others: Finding[], wholeGroup: boolean, runDir: string, feedback: string) {
   const brief = (f: Finding) => ({
