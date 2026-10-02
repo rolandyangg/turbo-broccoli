@@ -4,7 +4,9 @@ import { loadConfig, type Config } from '../config.js';
 import type { ResolvedTarget } from '../target/resolve.js';
 import { workspaceFor, newRunId, createRunDir, writeRun, cleanRunName, type RunInfo } from '../store/store.js';
 import { scanRepo } from './codeIntel.js';
-import { Campaign } from './campaign.js';
+import { resolveCodexExecutable } from '../llm/executable.js';
+import { resolveSelection } from '../llm/selection.js';
+import { Campaign, type ExplorerJob } from './campaign.js';
 import { Memory } from '../memory/siteMemory.js';
 
 export interface ExploreOptions {
@@ -21,6 +23,14 @@ export interface ExploreOptions {
   preset?: Partial<Config>;
   /** The person's instructions for the lead and explorers. */
   instructions?: string | null;
+}
+
+/** An empty report is valid only when at least one explorer actually completed. */
+export function assertExplorersSucceeded(jobs: Pick<ExplorerJob, 'id' | 'status' | 'result'>[]) {
+  if (!jobs.length) throw new Error('No explorer sessions completed. No exploration results are available.');
+  if (jobs.some((job) => job.status === 'done')) return;
+  const reasons = [...new Set(jobs.map((job) => job.result?.error ?? 'Explorer did not complete'))];
+  throw new Error(`All ${jobs.length} explorer sessions failed. No exploration results are available. ${reasons.join('; ')}`);
 }
 
 export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; runId: string; workspace: string; config: Config }> {
@@ -57,6 +67,7 @@ export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; r
   log(`Run ${runId} → ${runDir}`);
   log(intel ? `Code intel: ${intel.breakpoints.length} breakpoints, ${intel.risky.length} risky rules, ${intel.components.length} shared components, ${intel.hypotheses.length} hypothesis seeds` : 'Black-box mode (no source).');
 
+  if (resolveSelection(config).provider === 'codex') resolveCodexExecutable();
   const campaign = new Campaign({ runId, runDir, workspace: ws, baseUrl: target.baseUrl, config, intel, log, noLead, instructions: o.instructions ?? null });
   const res = await campaign.run();
   info.ended_at = new Date().toISOString();
@@ -64,6 +75,7 @@ export async function exploreRun(o: ExploreOptions): Promise<{ runDir: string; r
   info.lead_decisions = res.leadDecisions;
   info.jobs = res.jobs;
   writeRun(runDir, info);
+  assertExplorersSucceeded(res.jobs);
   const site = memory.site();
   site.lastRun = runId;
   site.lastCommit = intel?.headCommit ?? site.lastCommit;

@@ -32,6 +32,7 @@ interface Form {
   retrospective: boolean;
   lead: boolean;
   codeIntel: boolean;
+  provider: 'claude' | 'codex' | null;
   model: string | null;
   budgetSessions: number;
   parallel: number;
@@ -51,6 +52,7 @@ const BASE: Form = {
   retrospective: true,
   lead: true,
   codeIntel: true,
+  provider: null,
   model: null,
   budgetSessions: 6,
   parallel: 3,
@@ -64,6 +66,7 @@ function fromPreset(p: Preset | undefined, cat: Catalog): Form {
   return {
     ...BASE,
     ...c,
+    provider: c.provider ?? (c.model ? 'claude' : null),
     personas: c.personas?.length ? c.personas : enabled,
     personaSessions: { ...(c.personaSessions ?? {}) },
     devices: c.devices?.length ? c.devices : cat.devices.map((d) => d.id),
@@ -325,13 +328,16 @@ export function LauncherDialog({ open, onClose }: { open: boolean; onClose: () =
                   <input type="checkbox" checked={form.retrospective} onChange={(e) => set('retrospective', e.target.checked)} /> Retrospective proposals after triage
                 </label>
                 <label className="field">
-                  <span className="label">Model</span>
-                  <select className="select" value={form.model ?? ''} onChange={(e) => set('model', e.target.value || null)}>
-                    <option value="">Claude Code default</option>
-                    <option value="opus">opus</option>
-                    <option value="sonnet">sonnet</option>
-                    <option value="haiku">haiku</option>
+                  <span className="label">Agent provider</span>
+                  <select className="select" value={form.provider ?? ''} onChange={(e) => setForm({ ...form, provider: (e.target.value || null) as Form['provider'], model: null })}>
+                    <option value="">Use Settings default</option>
+                    <option value="claude">Claude Code</option>
+                    <option value="codex">Codex</option>
                   </select>
+                </label>
+                <label className="field">
+                  <span className="label">Model name (optional)</span>
+                  <input className="input" value={form.model ?? ''} disabled={!form.provider} placeholder="Provider default" maxLength={200} onChange={(e) => set('model', e.target.value.trim() || null)} />
                 </label>
               </div>
               <div className="stack" style={{ ['--gap' as string]: '6px' }}>

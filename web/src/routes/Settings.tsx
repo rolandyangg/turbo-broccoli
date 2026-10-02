@@ -1,3 +1,4 @@
+import { ModelPicker } from '../components/ModelPicker.tsx';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { api, useApi } from '../lib/api.ts';
@@ -21,7 +22,7 @@ const CHANNELS: { id: Channel; label: string; help: string }[] = [
 const EVENTS: { id: Event; label: string; help: string }[] = [
   { id: 'run', label: 'Runs and triage finished', help: 'Counts, new critical/major bugs and regressions.' },
   { id: 'fix', label: 'Fixes finished', help: 'Verified or not, the branch and PR link. Also implemented improvements.' },
-  { id: 'failure', label: 'Failures and limits', help: 'Crashed or failed jobs, Claude usage limits, reviewer unavailable during triage, benchmark recall regressions.' },
+  { id: 'failure', label: 'Failures and limits', help: 'Crashed or failed jobs, Agent usage limits, reviewer unavailable during triage, benchmark recall regressions.' },
   { id: 'proposals', label: 'New improvement proposals', help: 'When a retrospective leaves proposals for you to review.' },
 ];
 
@@ -68,6 +69,7 @@ export function Settings() {
         </div>
         <h1 className="page-title">Settings</h1>
       </div>
+      <ModelPicker />
       <div className="dash-grid" style={{ marginTop: 20 }}>
         <section className="box span-2" aria-labelledby="ch-h">
           <div className="box-head">

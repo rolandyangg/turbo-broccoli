@@ -188,3 +188,14 @@ npm run typecheck
 ./bin/bugbash.js bench --budget-sessions 6     # end-to-end with agents on fixtures/buggy-site
 ```
 `fixtures/buggy-site` seeds 11 bugs (static, interaction-only, timing, WebKit-only, shared-component) plus guardrail traps. They are listed in `bench/manifest.json`, and results are written to `bench/results/`.
+
+## Agent providers
+
+Use Claude Code or Codex for all agent phases. Choose the default in Settings,
+override it in the launcher or config (`"provider": "codex", "model": null`), or
+pass `--provider codex --model <name>` to the CLI. Both CLIs use their existing
+login; install and sign in before selecting them.
+
+During a running job, use **Agent provider → Switch active agents** to interrupt
+and hand off to the selected provider or model. Browser state, files, and recorded
+progress carry over. See [provider design and handoff details](docs/model-providers.md).

@@ -4,7 +4,7 @@ import { BrowserPool, replay, checkPresence, DETECTABLE, type DefectSpec } from 
 import { runDetectors, settle, type Candidate } from '../detect/index.js';
 import { annotateDefect } from '../triage/annotate.js';
 import { recordVideo } from '../triage/video.js';
-import { runClaude } from '../llm/claude.js';
+import { runAgent } from '../llm/runner.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -49,7 +49,7 @@ export interface VerifyOptions {
   guardrails: Config['guardrails'];
   pool: BrowserPool;
   /** When detectors can't settle it: capture after-fix stills here and have a model compare them with the before. */
-  review?: { runDir: string; outDir: string; model?: string | null; transcriptDir?: string } | null;
+  review?: { runDir: string; outDir: string; provider?: 'claude' | 'codex' | null; model?: string | null; transcriptDir?: string } | null;
 }
 
 export async function verifyFinding(f: Finding, o: VerifyOptions): Promise<VerifyResult> {
@@ -104,7 +104,7 @@ const REVIEW_SCHEMA = {
 };
 
 /** A model compares the before and after images of the same spot, in the same environment, for the described bug. */
-async function visualReview(f: Finding, runDir: string, after: { annotated: string; crop: string; full: string; element_found: boolean }, o: { model?: string | null; transcriptDir?: string }) {
+async function visualReview(f: Finding, runDir: string, after: { annotated: string; crop: string; full: string; element_found: boolean }, o: { provider?: 'claude' | 'codex' | null; model?: string | null; transcriptDir?: string }) {
   const before = [f.screenshots.crop, f.screenshots.annotated, f.video?.filmstrip].filter(Boolean).map((p) => join(runDir, p!)).filter((p) => existsSync(p));
   const afterFiles = [after.crop, after.annotated].filter((p) => existsSync(p));
   if (!before.length || !afterFiles.length) return null;
@@ -119,7 +119,7 @@ async function visualReview(f: Finding, runDir: string, after: { annotated: stri
   ]
     .filter(Boolean)
     .join('\n');
-  const r = await runClaude({ prompt, tools: ['Read'], allowedTools: ['Read'], addDirs: [runDir, dirname(after.annotated)], jsonSchema: REVIEW_SCHEMA, model: o.model ?? null, timeoutMs: 4 * 60_000, transcriptPath: o.transcriptDir ? join(o.transcriptDir, `review-${f.id}.jsonl`) : undefined, agentName: 'fix reviewer' }).catch(() => null);
+  const r = await runAgent({ prompt, tools: ['Read'], allowedTools: ['Read'], addDirs: [runDir, dirname(after.annotated)], jsonSchema: REVIEW_SCHEMA, provider: o.provider, model: o.model ?? null, timeoutMs: 4 * 60_000, transcriptPath: o.transcriptDir ? join(o.transcriptDir, `review-${f.id}.jsonl`) : undefined, agentName: 'fix reviewer' }).catch(() => null);
   const out = r?.ok ? (r.structured as { fixed?: boolean; confidence?: number; reasoning?: string } | null) : null;
   if (!out || typeof out.fixed !== 'boolean') return null;
   return { fixed: out.fixed, confidence: Math.max(0, Math.min(1, Number(out.confidence) || 0)), reasoning: String(out.reasoning ?? '').slice(0, 800) };

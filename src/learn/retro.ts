@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runClaude } from '../llm/claude.js';
+import { runAgent } from '../llm/runner.js';
 import { readRun, readFindings, allFindings } from '../store/store.js';
 import { RawFinding, Hypothesis, FindingType, categoryOf, type Finding } from '../store/schema.js';
 import { fingerprintOf as rawFingerprint } from '../triage/cluster.js';
@@ -139,7 +139,7 @@ Rules:
 
 export interface RetroOptions {
   runDir: string;
-  model?: string | null;
+  provider?: 'claude' | 'codex' | null; model?: string | null;
   log?: (m: string) => void;
   jobId?: string | null;
 }
@@ -162,13 +162,13 @@ export async function runRetro(o: RetroOptions) {
     ].join('\n\n');
     rep.event('agent', 'Retrospective agent reviewing the run');
     log('Retrospective agent reviewing the run…');
-    const r = await runClaude({
+    const r = await runAgent({
       prompt,
       systemPrompt: RETRO_SYSTEM,
       tools: ['Read', 'Grep', 'Glob'],
       allowedTools: ['Read', 'Grep', 'Glob'],
       cwd: o.runDir,
-      model: o.model ?? null,
+      provider: o.provider, model: o.model ?? null,
       jsonSchema: RETRO_SCHEMA,
       timeoutMs: 10 * 60_000,
       transcriptPath: join(o.runDir, 'transcripts', 'retro.jsonl'),

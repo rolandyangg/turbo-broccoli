@@ -98,7 +98,7 @@ export async function triageRun(o: TriageOptions) {
   // Root-cause grouping (advisory): every finding stays an individual record.
   o.log('Grouping findings by root cause…');
   const groupingOutcome = { value: 'structural' as 'llm' | 'structural' | 'skipped' };
-  const groups = await groupFindings(findings, { intel, repo: info.repo_path, model: config.model, useLlm: o.review !== false, log: o.log, runDir: o.runDir, onMethod: (m) => (groupingOutcome.value = m) });
+  const groups = await groupFindings(findings, { intel, repo: info.repo_path, provider: config.provider, model: config.model, useLlm: o.review !== false, log: o.log, runDir: o.runDir, onMethod: (m) => (groupingOutcome.value = m) });
 
   // Re-triaging a run must not lose human decisions or fix records made since the last triage.
   carryOver(o.runDir, findings, o.log);
@@ -297,7 +297,7 @@ async function triageCluster(
   // 4. Independent review.
   let verdict: ReviewVerdict | null = null;
   if (o.review !== false) {
-    verdict = await reviewFinding(f, { runDir: o.runDir, model: o.config.model, transcriptPath: join(tdir, `review-${id}.jsonl`), images: [shots.annotated, shots.crop, ...(rep.screenshot ? [rep.screenshot] : [])], replayNote: presence === 'present' ? `detector re-confirmed the defect in ${rate} fresh replays` : presence === 'absent' ? 'the recorded steps did NOT reproduce it in a fresh browser' : 'not automatically verifiable; judge from the images' }).catch(() => null);
+    verdict = await reviewFinding(f, { runDir: o.runDir, provider: o.config.provider, model: o.config.model, transcriptPath: join(tdir, `review-${id}.jsonl`), images: [shots.annotated, shots.crop, ...(rep.screenshot ? [rep.screenshot] : [])], replayNote: presence === 'present' ? `detector re-confirmed the defect in ${rate} fresh replays` : presence === 'absent' ? 'the recorded steps did NOT reproduce it in a fresh browser' : 'not automatically verifiable; judge from the images' }).catch(() => null);
     if (verdict) {
       f.confidence_breakdown.reviewer = verdict.is_defect ? verdict.confidence : Math.min(verdict.confidence, 1 - verdict.confidence);
       f.severity = verdict.severity as Finding['severity'];
@@ -319,7 +319,7 @@ async function triageCluster(
     const vOpts = { ...rOpts, pool: undefined, id, runDir: o.runDir, title: f.title, selector: spec.selector, relatedSelector: spec.relatedSelector };
     let v = await recordVideo(minimal, vOpts).catch((e) => (notes.push(`video failed: ${e}`), null));
     if (v && o.review !== false) {
-      const check = await reviewVideo({ runDir: o.runDir, title: f.title, filmstrip: v.filmstrip, bugFrame: v.bugFrame, model: o.config.model, transcriptPath: join(tdir, `video-${id}.jsonl`) }).catch(() => null);
+      const check = await reviewVideo({ runDir: o.runDir, title: f.title, filmstrip: v.filmstrip, bugFrame: v.bugFrame, provider: o.config.provider, model: o.config.model, transcriptPath: join(tdir, `video-${id}.jsonl`) }).catch(() => null);
       if (check && !check.visible) {
         notes.push(`video re-recorded: ${check.note}`);
         videoRerecorded = true;
@@ -363,14 +363,14 @@ function rel<T extends Record<string, string | null>>(runDir: string, o: T): T {
   return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v ? relative(runDir, v) : null])) as T;
 }
 
-export async function groupFindings(findings: Finding[], o: { intel: CodeIntel | null; repo: string | null; model: string | null; useLlm: boolean; log?: (m: string) => void; runDir?: string; onMethod?: (m: 'llm' | 'structural' | 'skipped') => void }): Promise<RootCauseGroup[]> {
+export async function groupFindings(findings: Finding[], o: { intel: CodeIntel | null; repo: string | null; provider?: 'claude' | 'codex' | null; model: string | null; useLlm: boolean; log?: (m: string) => void; runDir?: string; onMethod?: (m: 'llm' | 'structural' | 'skipped') => void }): Promise<RootCauseGroup[]> {
   const byId = new Map(findings.map((f) => [f.id, f]));
   const groups: RootCauseGroup[] = [];
   const used = new Set<string>();
   let proposals: Awaited<ReturnType<typeof proposeRootCauses>> = null;
   if (o.useLlm && findings.length > 1) {
     for (let attempt = 1; attempt <= 2 && !proposals; attempt++) {
-      proposals = await proposeRootCauses(findings, { repo: o.repo, intelSummary: summarizeIntel(o.intel), model: o.model, transcriptPath: o.runDir ? join(o.runDir, 'transcripts', 'triage', `grouping-${attempt}.jsonl`) : undefined }).catch((e) => {
+      proposals = await proposeRootCauses(findings, { repo: o.repo, intelSummary: summarizeIntel(o.intel), provider: o.provider, model: o.model, transcriptPath: o.runDir ? join(o.runDir, 'transcripts', 'triage', `grouping-${attempt}.jsonl`) : undefined }).catch((e) => {
         o.log?.(`root-cause grouping attempt ${attempt} failed: ${String(e).slice(0, 200)}`);
         return null;
       });
@@ -417,7 +417,7 @@ export async function regroupRun(runDir: string, log: (m: string) => void, useLl
   const ff = readFindings(runDir);
   if (!ff) throw new Error('No findings.json yet: run triage first.');
   const intel: CodeIntel | null = existsSync(join(runDir, 'code-intel.json')) ? JSON.parse(readFileSync(join(runDir, 'code-intel.json'), 'utf8')) : null;
-  const groups = await groupFindings(allFindings(ff), { intel, repo: info.repo_path, model: config.model, useLlm, log });
+  const groups = await groupFindings(allFindings(ff), { intel, repo: info.repo_path, provider: config.provider, model: config.model, useLlm, log });
   writeFindings(runDir, { run_id: ff.run_id, target: ff.target, generated_at: ff.generated_at, groups });
   writeReport(runDir);
   log(`Regrouped ${allFindings(ff).length} findings into ${groups.length} groups.`);

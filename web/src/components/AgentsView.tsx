@@ -253,7 +253,7 @@ function RunAgents({ s, acc }: { s: RunStats; acc: Accuracy }) {
   return (
     <div className="stack" style={{ ['--gap' as string]: '20px', marginTop: 20 }}>
       <div className="stats">
-        <Stat n={usd(k.cost_usd)} label="API-equivalent cost" sub="covered by your subscription" />
+        <Stat n={usd(k.cost_usd)} label="API-equivalent cost" sub="Claude estimates; Codex cost unavailable" />
         <Stat n={compact(k.tokens)} label="Tokens" sub={`${compact(k.tokens_detail.cache_read)} cache reads`} />
         <Stat n={dur(k.agent_ms)} label="Agent time" sub={`wall clock ${dur(k.wall_ms)}`} />
         <Stat n={k.sessions} label="Explorer sessions" />
@@ -267,7 +267,7 @@ function RunAgents({ s, acc }: { s: RunStats; acc: Accuracy }) {
         <div className="span-2">
           <ChartCard
             title="Cost & effort by phase"
-            sub="API-equivalent dollars; tokens include cached input."
+            sub="Claude API-equivalent dollars; Codex cost unavailable. Tokens include cached input."
             table={
               <DataTable
                 head={['Phase', 'Agents', 'Cost', 'Input', 'Cache read', 'Cache write', 'Output', 'Thinking', 'Agent time']}

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
-import { runClaude } from '../llm/claude.js';
+import { runAgent } from '../llm/runner.js';
 import { JobReporter, newJobId, describeAgentEvent, type JobEvent } from '../jobs/events.js';
 import { backlog, updateBacklogItem, type BacklogItem } from './proposals.js';
 import { notifyDetached } from '../notify/notify.js';
@@ -129,7 +129,7 @@ export async function implementBacklogItems(o: BatchOptions) {
       let error: string | null = null;
       for (let attempt = 1; attempt <= o.maxAttempts && !verified; attempt++) {
         say(stage, `Attempt ${attempt}: implementing ${item.id}`);
-        const r = await runClaude({
+        const r = await runAgent({
           prompt: (o.instructions?.trim() ? `# Instructions from the person (follow them within your rules)\n${o.instructions.trim()}\n\n` : '') + prompt(item, feedback, done),
           systemPrompt: SYSTEM,
           tools: ['Read', 'Edit', 'Write', 'Glob', 'Grep'],

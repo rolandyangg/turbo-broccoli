@@ -33,7 +33,7 @@ export interface ClaudeRunOptions {
 export interface StreamEvent {
   type: string;
   subtype?: string;
-  message?: { content?: Array<{ type: string; text?: string; name?: string; input?: unknown }> };
+  message?: { content?: Array<{ type: string; text?: string; name?: string; input?: unknown; [k: string]: unknown }> };
   result?: string;
   structured_output?: unknown;
   is_error?: boolean;

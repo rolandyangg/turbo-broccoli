@@ -165,6 +165,20 @@ describe('bugbash web API', () => {
     expect(got.deliveries).toEqual([]);
   });
 
+  it('validates provider settings and persists switches only for active jobs', async () => {
+    const put = (path: string, body: unknown) => app.request(`/api${path}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await get('/models')).status).toBe(200);
+    expect((await put('/models', { provider: 'other' })).status).toBe(400);
+    expect((await put('/models', { provider: 'codex', model: '' })).status).toBe(400);
+    expect(await (await put('/models', { provider: 'codex', model: 'my-model' })).json()).toEqual({ provider: 'codex', model: 'my-model' });
+    expect(await (await get('/models')).json()).toEqual({ provider: 'codex', model: 'my-model' });
+    expect((await put('/jobs/fix-20260101000000-bbbbbb/models', { provider: 'codex' })).status).toBe(409);
+    expect((await put('/jobs/fix-20260101000000-aaaaaa/models', { provider: 'other' })).status).toBe(400);
+    expect((await put('/jobs/fix-20260101000000-aaaaaa/models', { provider: 'claude', model: null })).status).toBe(200);
+    expect(await (await get('/jobs/fix-20260101000000-aaaaaa/models')).json()).toEqual({ provider: 'claude', model: null });
+    expect(await (await get('/models')).json()).toEqual({ provider: 'codex', model: 'my-model' });
+  });
+
   it('guards reports, unverified publishing and reproducing a fix branch', async () => {
     const post = (p: string, body: unknown) => app.request(`/api${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     expect((await post(`/runs/${wsId}/${RUN}/bugs/BB-0001/report`, { category: 'nonsense' })).status).toBe(400);

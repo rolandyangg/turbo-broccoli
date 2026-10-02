@@ -57,6 +57,7 @@ export class JobReporter {
     mkdirSync(this.dir, { recursive: true });
     // Agents started from this process can receive messages sent to this job (see jobs/inbox.ts).
     process.env.BUGBASH_INBOX = join(this.dir, 'messages.jsonl');
+    process.env.BUGBASH_MODEL_SELECTION ??= join(this.dir, 'model-selection.json');
     const now = new Date().toISOString();
     this.status = {
       id,

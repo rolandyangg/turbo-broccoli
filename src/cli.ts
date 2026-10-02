@@ -64,13 +64,23 @@ function overrides(o: Record<string, any>): Partial<Config> {
     strategies: o.strategies || o.excludeStrategies ? { include: o.strategies ? o.strategies.split(',').map((x: string) => x.trim()) : [], exclude: o.excludeStrategies ? o.excludeStrategies.split(',').map((x: string) => x.trim()) : [] } : undefined,
     focusPaths: o.focus ? o.focus.split(',').map((x: string) => x.trim()) : undefined,
     disabledPersonas: o.disablePersonas !== undefined ? o.disablePersonas.split(',').map((x: string) => x.trim()).filter(Boolean) : undefined,
-    model: o.model,
+    provider: o.provider, model: o.model,
     devCommand: o.devCommand,
     devPort: o.devPort,
   };
 }
 
 const program = new Command();
+program.option('--model <model>', 'Model name for agent work').option('--provider <provider>', 'Agent provider: claude or codex').hook('preAction', (root, command) => {
+  const options = command.optsWithGlobals();
+  if (options.provider) {
+    if (!['claude', 'codex'].includes(options.provider)) throw new Error('provider must be claude or codex');
+    process.env.BUGBASH_PROVIDER = options.provider;
+    process.env.BUGBASH_MODEL = options.model ?? '';
+  } else if (options.model) {
+    process.env.BUGBASH_MODEL = options.model;
+  }
+});
 program.name('bugbash').description('Agentic UI bug-bash: explore → triage → (only when asked) fix').version('0.1.0');
 
 const exploreOpts = (c: Command) =>
@@ -92,7 +102,7 @@ const exploreOpts = (c: Command) =>
     .option('--focus <paths>', 'Pages the lead must cover')
     .option('--personas <list>', 'Only use these personas (e.g. everyday-user,phone-user)')
     .option('--disable-personas <list>', 'Personas to turn off (default: low-vision-user; pass "" to enable all)')
-    .option('--model <model>', 'Claude model alias for all agents')
+    .option('--model <model>', 'Model name for the selected provider')
     .option('--dev-command <cmd>', 'Command that starts the app')
     .option('--dev-port <port>', 'Port the dev server listens on', int)
     .option('--no-lead', 'Skip the lead agent; run a fixed default plan')
@@ -145,7 +155,7 @@ exploreOpts(program.command('explore').description('Agentically bug-bash a site 
         if (config.retrospective) {
           // Proposals only: nothing is applied until approved on the Improvements page.
           const { runRetro } = await import('./learn/retro.js');
-          await runRetro({ runDir, model: config.model, log: logf }).catch((e) => logf(`Retrospective failed: ${(e as Error).message}`));
+          await runRetro({ runDir, provider: config.provider, model: config.model, log: logf }).catch((e) => logf(`Retrospective failed: ${(e as Error).message}`));
         }
       } else logf(`Next: bugbash triage --run ${runDir}`);
       (await import('./notify/events.js')).notifyRunDone(runDir);
@@ -400,7 +410,7 @@ program
     const I = await import('./learn/investigate.js');
     if (!(o.category in I.REPORT_CATEGORIES)) throw new Error(`category must be one of ${Object.keys(I.REPORT_CATEGORIES).join(', ')}`);
     const reportId = o.reportId ?? I.addReport(info.workspace, { run: info.run_id, bug: id.toUpperCase(), category: o.category, text: o.text ?? '' }).id;
-    const r = await I.investigateReport({ ws: info.workspace, reportId, runDir, model: o.model, jobId: o.job, log });
+    const r = await I.investigateReport({ ws: info.workspace, reportId, runDir, provider: o.provider, model: o.model, jobId: o.job, log });
     console.log(`${r.diagnosis.stage}: ${r.diagnosis.summary}\nRecommended: ${r.diagnosis.recommended_action}\n${r.proposals.length} proposal(s) on the Improvements page.`);
   });
 
@@ -474,7 +484,7 @@ program
   .action(async (o) => {
     const runDir = findRunDir(o);
     const { runRetro } = await import('./learn/retro.js');
-    const r = await runRetro({ runDir, model: o.model, log, jobId: o.job });
+    const r = await runRetro({ runDir, provider: o.provider, model: o.model, log, jobId: o.job });
     for (const p of r.added) console.log(`${p.id} [${p.kind}] ${p.title}`);
     console.log(`Review them in the web app (Improvements) or with: bugbash improvements approve|reject <id>`);
   });

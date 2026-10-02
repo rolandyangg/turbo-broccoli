@@ -1,4 +1,4 @@
-import { runClaude } from '../llm/claude.js';
+import { runAgent } from '../llm/runner.js';
 import type { Finding, RootCauseGroup } from '../store/schema.js';
 
 /** A reviewer-facing explanation of a fix, written from the actual diff. */
@@ -48,7 +48,7 @@ Be concrete (CSS properties, selectors, values, components, breakpoints). Only d
  * Explains a committed fix from its diff (one small model call, no tools). Returns null if it can't, so callers
  * fall back to file stats and the fix agent's own summary.
  */
-export async function explainChanges(d: { diff: string; stats: FileStat[]; findings: Finding[]; groups: RootCauseGroup[]; agentSummary: string; model?: string | null; transcriptPath?: string }): Promise<ChangeExplanation | null> {
+export async function explainChanges(d: { diff: string; stats: FileStat[]; findings: Finding[]; groups: RootCauseGroup[]; agentSummary: string; provider?: 'claude' | 'codex' | null; model?: string | null; transcriptPath?: string }): Promise<ChangeExplanation | null> {
   if (!d.diff.trim()) return null;
   const prompt = [
     `# Bugs this fixes\n${JSON.stringify(
@@ -61,7 +61,7 @@ export async function explainChanges(d: { diff: string; stats: FileStat[]; findi
     `# Changed files\n${d.stats.map((s) => `- ${s.file} (+${s.added} −${s.removed})`).join('\n')}`,
     `# Diff\n${d.diff.slice(0, 24_000)}${d.diff.length > 24_000 ? '\n… (diff truncated)' : ''}`,
   ].join('\n\n');
-  const r = await runClaude({ prompt, systemPrompt: SYSTEM, tools: [], jsonSchema: SCHEMA, model: d.model ?? null, timeoutMs: 3 * 60_000, transcriptPath: d.transcriptPath }).catch(() => null);
+  const r = await runAgent({ prompt, systemPrompt: SYSTEM, tools: [], jsonSchema: SCHEMA, provider: d.provider, model: d.model ?? null, timeoutMs: 3 * 60_000, transcriptPath: d.transcriptPath }).catch(() => null);
   const out = r?.ok ? (r.structured as ChangeExplanation | null) : null;
   if (!out || !Array.isArray(out.changes) || !out.summary) return null;
   return { commit_subject: String(out.commit_subject ?? ''), summary: String(out.summary), root_cause: String(out.root_cause ?? ''), changes: out.changes.filter((c) => c && c.file).map((c) => ({ file: String(c.file), what: String(c.what ?? ''), why: String(c.why ?? '') })), notes: (out.notes ?? []).map(String).filter(Boolean) };

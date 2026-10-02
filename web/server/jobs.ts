@@ -121,7 +121,7 @@ export function launchJob(kind: JobKind, args: string[], init: Partial<JobStatus
     cwd: REPO_ROOT,
     detached: true,
     stdio: ['ignore', logFd, logFd],
-    env: { ...process.env, BUGBASH_JOB_DIR: WEB_JOBS, FORCE_COLOR: '0' },
+    env: { ...process.env, BUGBASH_JOB_DIR: WEB_JOBS, BUGBASH_MODEL_SELECTION: join(dir, 'model-selection.json'), FORCE_COLOR: '0' },
   });
   closeSync(logFd);
   placeholder.pid = child.pid ?? 0;

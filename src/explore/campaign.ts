@@ -4,7 +4,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import getPort from 'get-port';
-import { runClaude, tsxServer, type ClaudeRunResult } from '../llm/claude.js';
+import { runAgent, tsxServer, type AgentRunResult } from '../llm/runner.js';
 import type { Config } from '../config.js';
 import type { BrowserName, RawFinding } from '../store/schema.js';
 import { mergeAll, summarize, pageKey } from './coverage.js';
@@ -51,7 +51,7 @@ export interface ExplorerJob {
   status: 'queued' | 'running' | 'done' | 'failed';
   startedAt?: number;
   endedAt?: number;
-  result?: Pick<ClaudeRunResult, 'ok' | 'toolCalls' | 'durationMs' | 'error'> & { summary: string };
+  result?: Pick<AgentRunResult, 'ok' | 'toolCalls' | 'durationMs' | 'error'> & { summary: string };
   newFindings?: number;
   totalFindings?: number;
 }
@@ -267,24 +267,24 @@ export class Campaign {
     const excluded = this.excludedStrategies();
     if (excluded.length) env.BUGBASH_EXCLUDE_STRATEGIES = excluded.join(',');
     if (this.cfg.devices.length) env.BUGBASH_ALLOWED_DEVICES = this.allowedDevices().join(',');
-    const r = await runClaude({
+    const r = await runAgent({
       prompt: this.explorerPrompt(job),
       systemPrompt: readFileSync(join(here, 'prompts', 'explorer.md'), 'utf8'),
       mcpServers: { bugbash: tsxServer(join(SRC, 'mcp', 'browserServer.ts'), env) },
       // Enforced twice: the allowlist here and the tool set check inside the MCP server.
       allowedTools: persona?.toolset === 'everyday' ? EVERYDAY_TOOLS.map((t) => `mcp__bugbash__${t}`) : ['mcp__bugbash'],
-      model: this.cfg.model,
+      provider: this.cfg.provider, model: this.cfg.model,
       timeoutMs: this.cfg.sessionTimeoutMs,
       transcriptPath: join(this.o.runDir, 'transcripts', `${job.id}.jsonl`),
     });
-    // Claude usage/session limits end sessions early: stop the campaign instead of burning the budget.
+    // Agent usage/session limits end sessions early: stop the campaign instead of burning the budget.
     const limited = /hit your (session|usage|weekly) limit|usage limit reached|rate limit/i.test(`${r.text} ${r.error ?? ''}`);
     job.status = r.ok && !limited ? 'done' : 'failed';
-    job.result = { ok: r.ok && !limited, toolCalls: r.toolCalls, durationMs: r.durationMs, error: limited ? `Claude usage limit: ${r.text.slice(0, 200)}` : r.error, summary: r.text.slice(0, 1500) };
+    job.result = { ok: r.ok && !limited, toolCalls: r.toolCalls, durationMs: r.durationMs, error: limited ? `Agent usage limit: ${r.text.slice(0, 200)}` : r.error, summary: r.text.slice(0, 1500) };
     if (limited && !this.stopReason) {
-      this.stopReason = `Stopped early: Claude usage limit reached (${r.text.slice(0, 160)}). Findings recorded so far are kept.`;
+      this.stopReason = `Stopped early: Agent usage limit reached (${r.text.slice(0, 160)}). Findings recorded so far are kept.`;
       this.decisions.push(`STOP: ${this.stopReason}`);
-      notifyFailure('Claude usage limit reached', `The bug bash stopped early; findings recorded so far are kept. ${r.text.slice(0, 200)}`, runPath(this.o.workspace, this.o.runId));
+      notifyFailure('Agent usage limit reached', `The bug bash stopped early; findings recorded so far are kept. ${r.text.slice(0, 200)}`, runPath(this.o.workspace, this.o.runId));
       this.o.log(this.stopReason);
     }
   }
@@ -466,7 +466,7 @@ export class Campaign {
       this.o.instructions?.trim() ? `INSTRUCTIONS FROM THE PERSON RUNNING THIS BUG BASH (follow them within your rules; pass them on to explorers in their goals):\n${this.o.instructions.trim()}` : '',
       `Begin by reading memory, code_intel and site_map, then plan and spawn the first wave.`,
     ].join('\n');
-    const lead = runClaude({
+    const lead = runAgent({
       prompt: leadPrompt,
       systemPrompt: readFileSync(join(here, 'prompts', 'lead.md'), 'utf8'),
       mcpServers: { lead: tsxServer(join(SRC, 'mcp', 'leadServer.ts'), { BUGBASH_CONTROL: control, BUGBASH_TOKEN: this.token }) },
@@ -474,7 +474,7 @@ export class Campaign {
       tools: this.o.intel ? ['Read', 'Grep', 'Glob'] : [],
       addDirs: this.o.intel ? [this.o.intel.repo] : [],
       cwd: this.o.intel?.repo,
-      model: this.cfg.model,
+      provider: this.cfg.provider, model: this.cfg.model,
       timeoutMs: this.cfg.timeLimitMs + 10 * 60_000,
       transcriptPath: join(this.o.runDir, 'transcripts', 'lead.jsonl'),
     });
@@ -484,7 +484,7 @@ export class Campaign {
     // Safety net: if the lead died before doing anything useful, fall back to a fixed plan.
     // Strict: required persona sessions the lead didn't schedule are run anyway (budget permitting).
     const unmet = this.unmetPersonaSessions();
-    const limitStop = this.stopReason?.startsWith('Stopped early: Claude usage limit');
+    const limitStop = this.stopReason?.startsWith('Stopped early: Agent usage limit');
     if (Object.keys(unmet).length && this.budgetLeft().sessions > 0 && !limitStop) {
       this.o.log(`Running required sessions the lead did not schedule: ${JSON.stringify(unmet)}`);
       this.decisions.push(`Required sessions added after the lead finished: ${JSON.stringify(unmet)}`);

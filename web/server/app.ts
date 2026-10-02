@@ -31,6 +31,8 @@ import { schedulesOverview, previewCron, createSchedule, toggleSchedule, deleteS
 import { publicSettings, saveSettings, inbox, readMany, sendTest } from './notifications.ts';
 import { improvementsOverview, decideProposal, launchRetro, launchImplement, launchImplementBatch } from './improvements.ts';
 
+import { Selection, readSelection, saveSelection, selectionFile } from '../../src/llm/selection.ts';
+
 const exec = promisify(execFile);
 const ID = /^(BB|RC)-\d{3,5}$/i;
 
@@ -150,6 +152,26 @@ app.post('/github/connect', (c) => c.json(connectGitHub(), 202));
 app.post('/github/disconnect', async (c) => c.json(await disconnectGitHub()));
 app.get('/notifications', (c) => c.json(inbox()));
 app.post('/notifications/read', async (c) => c.json(readMany(await c.req.json<{ ids?: string[]; all?: boolean }>().catch(() => ({})))));
+// Machine default and live job selections use separate files so a switch does not race status writes.
+app.get('/models', (c) => c.json(readSelection(selectionFile()) ?? { provider: 'claude', model: null }));
+app.put('/models', async (c) => {
+  const parsed = Selection.safeParse(await c.req.json());
+  if (!parsed.success) throw new HttpError(400, parsed.error.issues[0].message);
+  return c.json(saveSelection(selectionFile(), parsed.data));
+});
+app.get('/jobs/:id/models', (c) => {
+  const j = getJob(c.req.param('id'));
+  const saved = readSelection(join(j.dir, 'model-selection.json'));
+  const config = j.run_dir ? Config.parse(readRun(j.run_dir).config) : null;
+  return c.json(saved ?? (config?.provider || config?.model ? { provider: config.provider ?? 'claude', model: config.model } : readSelection(selectionFile()) ?? { provider: 'claude', model: null }));
+});
+app.put('/jobs/:id/models', async (c) => {
+  const j = getJob(c.req.param('id'));
+  if (!j.alive) throw new HttpError(409, 'Only running jobs can switch active agents');
+  const parsed = Selection.safeParse(await c.req.json());
+  if (!parsed.success) throw new HttpError(400, parsed.error.issues[0].message);
+  return c.json(saveSelection(join(j.dir, 'model-selection.json'), parsed.data));
+});
 app.get('/settings', (c) => c.json(publicSettings()));
 app.put('/settings', async (c) => c.json(saveSettings(await c.req.json())));
 app.post('/settings/test', async (c) => c.json(await sendTest((await c.req.json<{ channel: string }>()).channel)));

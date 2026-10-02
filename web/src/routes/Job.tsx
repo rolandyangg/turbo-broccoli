@@ -1,3 +1,4 @@
+import { ModelPicker } from '../components/ModelPicker.tsx';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { api, useApi, useJobStream } from '../lib/api.ts';
@@ -74,6 +75,7 @@ export function Job() {
           )}
         </div>
         <aside className="stack" style={{ ['--gap' as string]: '18px' }}>
+          {job.alive && job.kind !== 'connect' && <ModelPicker jobId={job.id} />}
           <Box head="Job">
             <dl className="kv">
               <dt>Kind</dt>

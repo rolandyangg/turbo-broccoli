@@ -46,7 +46,8 @@ export const Config = z.object({
     })
     .default(() => ({ minGapPx: 4, minTapTargetPx: 24, edgePaddingPx: 2 })),
   confidenceThreshold: z.number().default(0.5),
-  model: z.string().nullable().default(null), // passed to `claude --model` when set
+  provider: z.enum(['claude', 'codex']).nullable().default(null), // null = machine default
+  model: z.string().trim().min(1).max(200).nullable().default(null),
   /** Command to start the app for a local repo; auto-detected when null. */
   devCommand: z.string().nullable().default(null),
   devPort: z.number().nullable().default(null),

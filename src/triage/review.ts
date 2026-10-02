@@ -1,4 +1,4 @@
-import { runClaude, tryParseJson } from '../llm/claude.js';
+import { runAgent, tryParseJson } from '../llm/runner.js';
 import type { Finding } from '../store/schema.js';
 import { FindingType, Severity } from '../store/schema.js';
 
@@ -43,7 +43,7 @@ Severity: critical (blocks a task or makes key content unreadable/unreachable), 
 needs_video: true if the defect is about change over time (flicker, layout shift, a transition, hover/timing/race behaviour) so a still image can't show it.
 Write expected/actual as one sentence each. fix_hint: the most likely CSS/markup change. Output JSON only.`;
 
-export async function reviewFinding(f: Finding, o: { runDir: string; model?: string | null; images: string[]; replayNote: string; transcriptPath?: string }): Promise<ReviewVerdict | null> {
+export async function reviewFinding(f: Finding, o: { runDir: string; provider?: 'claude' | 'codex' | null; model?: string | null; images: string[]; replayNote: string; transcriptPath?: string }): Promise<ReviewVerdict | null> {
   const prompt = [
     `Reported defect ${f.id}`,
     `type: ${f.type}  severity (reporter): ${f.severity}  reporter confidence: ${f.confidence_breakdown.explorer}`,
@@ -56,22 +56,22 @@ export async function reviewFinding(f: Finding, o: { runDir: string; model?: str
     `replay: ${o.replayNote}`,
     `\nView these images with the Read tool before deciding:\n${o.images.map((i) => `- ${i}`).join('\n')}`,
   ].join('\n');
-  const r = await runClaude({ prompt, systemPrompt: REVIEWER_SYSTEM, tools: ['Read'], allowedTools: ['Read'], addDirs: [o.runDir], cwd: o.runDir, jsonSchema: REVIEW_SCHEMA, model: o.model, timeoutMs: 5 * 60_000, transcriptPath: o.transcriptPath });
+  const r = await runAgent({ prompt, systemPrompt: REVIEWER_SYSTEM, tools: ['Read'], allowedTools: ['Read'], addDirs: [o.runDir], cwd: o.runDir, jsonSchema: REVIEW_SCHEMA, provider: o.provider, model: o.model, timeoutMs: 5 * 60_000, transcriptPath: o.transcriptPath });
   const v = (r.structured ?? tryParseJson(r.text)) as ReviewVerdict | null;
   if (!v || typeof v.is_defect !== 'boolean') return null;
   return { ...v, confidence: clamp(v.confidence) };
 }
 
-export async function reviewVideo(o: { runDir: string; title: string; filmstrip: string | null; bugFrame: string | null; model?: string | null; transcriptPath?: string }): Promise<{ visible: boolean; paceMs?: number; holdMs?: number; settleMs?: number; note: string } | null> {
+export async function reviewVideo(o: { runDir: string; title: string; filmstrip: string | null; bugFrame: string | null; provider?: 'claude' | 'codex' | null; model?: string | null; transcriptPath?: string }): Promise<{ visible: boolean; paceMs?: number; holdMs?: number; settleMs?: number; note: string } | null> {
   const imgs = [o.filmstrip, o.bugFrame].filter(Boolean) as string[];
   if (!imgs.length) return null;
-  const r = await runClaude({
+  const r = await runAgent({
     prompt: `A narrated screen recording was made to show this UI defect: "${o.title}".\nLook at the filmstrip (one still per step, left to right) and the final annotated frame with the Read tool:\n${imgs.map((i) => `- ${i}`).join('\n')}\nIs the defect clearly visible and highlighted in the recording? If not, suggest slower pacing (paceMs per step), a longer hold on the bug (holdMs), or a longer wait before annotating (settleMs, for bugs that appear late). JSON only.`,
     tools: ['Read'],
     allowedTools: ['Read'],
     addDirs: [o.runDir],
     cwd: o.runDir,
-    model: o.model,
+    provider: o.provider, model: o.model,
     timeoutMs: 3 * 60_000,
     transcriptPath: o.transcriptPath,
     jsonSchema: { type: 'object', properties: { visible: { type: 'boolean' }, paceMs: { type: 'number' }, holdMs: { type: 'number' }, settleMs: { type: 'number' }, note: { type: 'string' } }, required: ['visible', 'note'] },
@@ -89,7 +89,7 @@ export interface GroupProposal {
   finding_ids: string[];
 }
 
-export async function proposeRootCauses(findings: Finding[], o: { repo: string | null; intelSummary: string; model?: string | null; transcriptPath?: string }): Promise<GroupProposal[] | null> {
+export async function proposeRootCauses(findings: Finding[], o: { repo: string | null; intelSummary: string; provider?: 'claude' | 'codex' | null; model?: string | null; transcriptPath?: string }): Promise<GroupProposal[] | null> {
   const compact = findings.map((f) => ({
     id: f.id,
     type: f.type,
@@ -102,12 +102,12 @@ export async function proposeRootCauses(findings: Finding[], o: { repo: string |
     likely_cause: f.likely_cause,
     source_hints: f.source_hints.slice(0, 3).map((h) => `${h.file}:${h.line ?? '?'} (${h.reason})`),
   }));
-  const r = await runClaude({
+  const r = await runAgent({
     prompt: `Group these UI findings by ROOT CAUSE (the same CSS rule/component/layout decision). Findings in one group should be fixable by one change. Every finding id must appear in exactly one group; a finding with no shared cause gets its own group. Do not merge unrelated bugs just because they're on the same page. 'summary' is one neutral sentence naming the shared cause (e.g. "'.plan-card .cta' has a fixed 40px height with overflow:hidden below 400px"); do not judge whether findings are valid — that is decided elsewhere. When you read the code, verify the cascade/specificity actually applies before stating a cause.\n${o.repo ? 'You may use Read/Grep/Glob in the repo to confirm causes (cite files).' : 'No source code is available; infer from selectors/signatures.'}\n\nCode intelligence:\n${o.intelSummary.slice(0, 4000)}\n\nFindings:\n${JSON.stringify(compact, null, 1)}\n\nReturn JSON {"groups":[{"summary","component","css_rule","files","fix_plan","confidence","finding_ids"}]}.`,
     tools: o.repo ? ['Read', 'Grep', 'Glob'] : [],
     allowedTools: o.repo ? ['Read', 'Grep', 'Glob'] : [],
     cwd: o.repo ?? undefined,
-    model: o.model,
+    provider: o.provider, model: o.model,
     timeoutMs: 10 * 60_000,
     transcriptPath: o.transcriptPath,
     jsonSchema: {

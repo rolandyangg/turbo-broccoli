@@ -5,7 +5,7 @@ import { Config } from '../config.js';
 import type { Finding, FixVerification, RootCauseGroup } from '../store/schema.js';
 import { readRun, readFindings, writeFindings, findById, allFindings } from '../store/store.js';
 import { resolveTarget } from '../target/resolve.js';
-import { runClaude } from '../llm/claude.js';
+import { runAgent } from '../llm/runner.js';
 import { BrowserPool } from '../triage/replay.js';
 import { verifyFinding, captureAfter, recordAfterVideo, needsVideo, pageSnapshot, type VerifyResult } from './verify.js';
 import { Memory } from '../memory/siteMemory.js';
@@ -172,7 +172,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   mkdirSync(assetsDir, { recursive: true });
 
   // After-fix checks: detectors where they can decide, a visual before/after review where they can't.
-  const reviewed = (attempt: number | string) => ({ ...vo, review: { runDir: o.runDir, outDir: join(assetsDir, `check-${attempt}`), model: config.model, transcriptDir: assetsDir } });
+  const reviewed = (attempt: number | string) => ({ ...vo, review: { runDir: o.runDir, outDir: join(assetsDir, `check-${attempt}`), provider: config.provider, model: config.model, transcriptDir: assetsDir } });
   const label = (a: VerifyResult) => (a.present === null ? 'inconclusive' : a.present ? 'STILL PRESENT' : a.method === 'visual-review' ? 'fixed (visual review)' : 'fixed');
   try {
     // ---- baseline: confirm the bug is present in the worktree ----
@@ -210,7 +210,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     if (steer && mode !== 'verify') skipAgent = false;
     for (attempt = 1; !skipAgent && attempt <= o.maxAttempts; attempt++) {
       say(`attempt:${attempt}`, `Attempt ${attempt}/${o.maxAttempts}: fix agent is working…`, 'info', { attempt, feedback: feedback ? feedback.slice(0, 2000) : null });
-      const r = await runClaude({
+      const r = await runAgent({
         onEvent: (e) => {
           for (const d of describeAgentEvent(e)) say(`attempt:${attempt}`, d.msg, 'agent', d.data);
         },
@@ -220,7 +220,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         allowedTools: ['Read', 'Grep', 'Glob', 'Edit', 'Write'],
         cwd: worktree,
         addDirs: [o.runDir],
-        model: config.model,
+        provider: config.provider, model: config.model,
         timeoutMs: 20 * 60_000,
         transcriptPath: join(assetsDir, `agent-attempt-${attempt}.jsonl`),
         agentName: 'fix agent',
@@ -325,7 +325,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       .map((l) => l.split('\t'))
       .map(([a, r, file]) => ({ file, added: Number(a) || 0, removed: Number(r) || 0 }));
     say('commit', 'Writing a description of the change');
-    const explanation = await explainChanges({ diff: (await git(worktree, ['diff', '--cached', baseSha])).stdout, stats, findings: selected, groups: [...groups.values()], agentSummary, model: config.model, transcriptPath: join(assetsDir, 'explain.jsonl') });
+    const explanation = await explainChanges({ diff: (await git(worktree, ['diff', '--cached', baseSha])).stdout, stats, findings: selected, groups: [...groups.values()], agentSummary, provider: config.provider, model: config.model, transcriptPath: join(assetsDir, 'explain.jsonl') });
     if (!explanation) say('commit', "Couldn't write a description of the change; using the changed files and the fix agent's notes", 'warn');
     const technical = technicalSection(explanation, stats, agentSummary);
     const title = scopeIsGroup ? groups.get(o.ids[0])!.summary : selected.length === 1 ? selected[0].title : `${selected.length} UI fixes: ${selected.map((f) => f.id).join(', ')}`;

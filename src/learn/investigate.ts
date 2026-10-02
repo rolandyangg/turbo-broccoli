@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { runClaude } from '../llm/claude.js';
+import { runAgent } from '../llm/runner.js';
 import { readRun, readFindings, findById } from '../store/store.js';
 import { RawFinding } from '../store/schema.js';
 import { fingerprintOf } from '../triage/cluster.js';
@@ -82,7 +82,7 @@ Find out which stage went wrong and why, using the evidence files (Read them; lo
 Then propose improvements (0-5) for a person to approve: detector changes (include a detection sketch), prompt/config tweaks, triage or verification changes, or lessons for this site. Each must be specific and cite the evidence. Never propose anything that would hide real bugs.`;
 
 /** Investigates a report and files proposals (pending approval). */
-export async function investigateReport(o: { ws: string; reportId: string; runDir: string; model?: string | null; jobId?: string | null; log?: (m: string) => void }) {
+export async function investigateReport(o: { ws: string; reportId: string; runDir: string; provider?: 'claude' | 'codex' | null; model?: string | null; jobId?: string | null; log?: (m: string) => void }) {
   const log = o.log ?? (() => {});
   const report = readReports(o.ws).find((r) => r.id === o.reportId);
   if (!report) throw new Error(`No report ${o.reportId}`);
@@ -129,14 +129,14 @@ export async function investigateReport(o: { ws: string; reportId: string; runDi
     ].join('\n\n');
     rep.event('investigate', `Investigating ${f.id}: ${REPORT_CATEGORIES[report.category]}`);
     log(`Investigating ${f.id}…`);
-    const r = await runClaude({
+    const r = await runAgent({
       prompt,
       systemPrompt: SYSTEM,
       tools: ['Read', 'Grep', 'Glob'],
       allowedTools: ['Read', 'Grep', 'Glob'],
       cwd: o.runDir,
       addDirs: [o.runDir],
-      model: o.model ?? null,
+      provider: o.provider, model: o.model ?? null,
       jsonSchema: SCHEMA,
       timeoutMs: 12 * 60_000,
       transcriptPath: join(o.runDir, 'transcripts', `investigate-${report.id}.jsonl`),
