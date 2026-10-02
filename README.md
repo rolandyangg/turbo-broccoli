@@ -4,7 +4,7 @@
 
 **Find UI bugs. Review the evidence. Fix what matters.**
 
-An agent-driven UI testing toolkit with a local dashboard, reproducible findings, and verified fix workflows. Powered by Playwright, Claude Code, and Codex.
+An agentic UI testing toolkit where a lead agent coordinates browser explorers, independent reviewers assess the evidence, and fixing agents tackle the bugs you choose. Includes a local dashboard, reproducible findings, and verified fix workflows. Powered by Playwright, Claude Code, and Codex.
 
 [Quick start](#quick-start) · [How it works](#how-it-works) · [CLI](#cli) · [Development](#development)
 
@@ -94,11 +94,30 @@ Track coverage          Group by root cause        Replay verification
                                                   Optional pull request
 ```
 
-**Explore.** A lead agent plans sessions across personas and browsers, then adjusts its plan as findings emerge. When source is available, code inspection supplies hypotheses about risky layout rules and shared components. Browser tools support navigation, interaction, device emulation, viewport sweeps, and geometry detectors. Session, tool-call, and time budgets constrain the campaign.
+### Agents that plan, probe, and adapt
 
-**Triage.** Findings are clustered and replayed three times by default, then reduced to smaller reproduction sequences. Screenshots are annotated, video evidence is generated where appropriate, and an independent agent reviews the evidence. Root-cause grouping and confidence scoring help prioritize investigation; labels can calibrate future scores.
+You give the agents a target and a budget. They choose which flows to investigate, interact with the actual UI through Playwright tools, inspect screenshots and measurements, and decide what to try next. The exploration path develops as they learn about the app.
 
-**Fix.** Fixing starts when requested. The agent works in a separate Git worktree and branch with scoped file and browser tools. Verification replays affected environments and checks detector snapshots for regressions. The dashboard exposes verification outcomes and branch changes before publishing a PR.
+| Role | What the agent does |
+| --- | --- |
+| **Lead agent** | Reads the site map, prior-run memory, and available code hints. Assigns concrete goals to explorer agents across personas, browsers, and devices, then replans as their results arrive. |
+| **Explorer agents** | Work in parallel within the configured limit. Follow a **guess → probe → confirm** loop: identify a weak spot, test it through browser actions, inspect the result, and record a finding or a refuted hypothesis. |
+| **Independent reviewer** | Assesses findings from their evidence in a fresh context, without the explorer’s reasoning, to help separate real defects from false positives. |
+| **Root-cause grouping agent** | Helps connect findings that may share an underlying component or source-level cause, so related bugs can be investigated and fixed together. |
+| **Fixing agent** | When requested, edits the local source in a separate branch and worktree, using scoped file and browser tools to investigate and check the change. |
+| **Retrospective agent** | Reviews a run and proposes lessons, strategy changes, or detector improvements for your approval. |
+
+The lead reacts to discoveries: it can send explorers deeper into a page where bugs cluster, ask them to check other instances of a shared component, cross-check a Chromium finding in WebKit or Firefox, and fill gaps in page or device coverage. Its decisions are recorded for inspection. Configured session, tool-call, and time limits constrain the campaign; it can also stop when new findings dry up.
+
+For example, an explorer might discover that opening a navigation menu on a short phone hides its close button. That finding can prompt another session to test the same menu elsewhere in the app or in another browser. Triage then replays the recorded steps in fresh browsers, measures reproducibility, and prepares evidence for review.
+
+### Evidence and human control
+
+Agents work alongside deterministic checks. Geometry detectors supply measurable candidates; replay checks whether a finding reproduces; step minimization reduces the sequence needed to trigger it. Triage replays findings three times by default and produces annotated screenshots, generated Playwright specs, and video evidence where appropriate. Confidence combines several signals, with calibration informed by your labels.
+
+You can follow agent activity in the dashboard, send instructions during a job, and switch between Claude Code and Codex or change models. Provider changes start a new agent session with a bounded handoff of the task and recorded progress, while the job’s browser sessions and files carry over. See [the provider guide](docs/model-providers.md) for the handoff details.
+
+Exploration records findings; fixes start when you request them. Fix verification replays affected environments and compares detector snapshots for regressions, with feedback available for another fix attempt. The dashboard exposes verification outcomes and branch changes before publishing a PR. Retrospective proposals also require approval before they are applied. Browser guardrails and campaign budgets are enforced by the tool layer.
 
 Geometry detectors and agent judgments can produce false positives or miss defects. Confidence scores and replay evidence support review; they are not guarantees that a finding or fix is correct.
 
