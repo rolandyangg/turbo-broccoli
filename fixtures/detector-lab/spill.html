@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Section spill lab</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 0; color: #eee; background: #1d1f2b; }
+  .case { padding: 24px 0 64px; }
+  section { position: relative; padding: 16px 24px 32px; }
+  section p { max-width: 420px; margin: 0; }
+  /* LAB-X1: a whole Tracks section of 3D flip cards pulled up into the previous section's text. */
+  #tracks { margin-top: -90px; }
+  .outer { display: inline-block; width: 220px; height: 150px; perspective: 900px; }
+  .outer .inner { position: relative; width: 100%; height: 100%; transform-style: preserve-3d; transform: rotateX(8deg); }
+  .outer .face { position: absolute; inset: 0; padding: 12px; background: #12131c; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+  .outer .back { transform: rotateY(180deg); }
+  /* Controls: decorative shapes (aria-hidden, pointer-events: none, background image) reaching over a neighbour. */
+  .blob { position: absolute; top: -120px; left: 24px; width: 440px; height: 140px; background: rgba(90, 123, 181, 0.3); }
+  .glow { position: absolute; top: -120px; left: 24px; width: 440px; height: 140px; pointer-events: none; }
+  .art { position: absolute; top: -120px; left: 24px; width: 440px; height: 140px; background-image: linear-gradient(#335, #224); }
+</style>
+</head>
+<body>
+<div class="case">
+  <section id="about">
+    <h2>What we do</h2>
+    <p id="about-text">Students spend 36 hours developing technical projects with mentors and workshops, then demo them to judges and sponsors at the end.</p>
+  </section>
+  <section id="tracks">
+    <div class="outer"><div class="inner"><div class="face front">Sustain the Spark</div><div class="face back">Track details</div></div></div>
+    <div class="outer"><div class="inner"><div class="face front">Catalyst for Care</div><div class="face back">Track details</div></div></div>
+  </section>
+</div>
+<div class="case">
+  <section id="intro">
+    <h2>Schedule</h2>
+    <p id="intro-text">Technical and educational sessions run during the weekend so everyone can learn something new, whatever their level.</p>
+  </section>
+  <section id="deco">
+    <div class="blob" aria-hidden="true"></div>
+    <div class="glow"><span>Glow</span></div>
+    <div class="art"></div>
+    <h2>Sponsors</h2>
+    <p>Thanks to everyone who makes the weekend possible.</p>
+  </section>
+</div>
+</body>
+</html>

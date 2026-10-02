@@ -200,6 +200,24 @@ describe('section collisions and hidden faces', () => {
     }
   });
 
+  it('LAB-X1: flags a section of 3D flip cards spilling over a sibling section\'s text (WebKit and Chromium)', async () => {
+    for (const browser of [wk, cr]) {
+      const c = await at('/spill.html', DESKTOP, undefined, browser);
+      const spill = c.find((x) => x.type === 'spill-out' && x.selector === '#tracks');
+      expect(spill?.metrics.section_spill).toBe(true);
+      expect(spill?.metrics.spilled_into).toBe('#about');
+      expect(spill?.related?.selector).toBe('#about-text');
+      expect((spill?.metrics.overlap_px as number[])[1]).toBeGreaterThan(24);
+    }
+  });
+
+  it('does not flag decorative shapes (aria-hidden, pointer-events: none, background image) reaching into a sibling section', async () => {
+    for (const browser of [wk, cr]) {
+      const c = await at('/spill.html', DESKTOP, undefined, browser);
+      expect(c.some((x) => x.type === 'spill-out' && x.metrics.section_spill && x.selector !== '#tracks')).toBe(false);
+    }
+  });
+
   it('does not count see-through or faded panels as opaque covers', async () => {
     for (const browser of [wk, cr]) {
       const c = await at('/occlusion.html', DESKTOP, undefined, browser);

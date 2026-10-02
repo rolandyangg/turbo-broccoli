@@ -247,6 +247,85 @@
     return out;
   }
 
+  /**
+   * Content of one section drawn over a sibling section's text: for each pair of sibling layout blocks, union the
+   * rects of one block's painted descendants (skipping decorative, fixed/sticky and overlay content; clipped
+   * subtrees count as their clip box) and test it against the other's text. Box-level, so it still catches
+   * 3D-transformed content that the point-sampling text checks miss.
+   */
+  const BLOCK_SEL = 'body > *, main > *, section, article, header, footer, [role=region]';
+  function contentUnion(block) {
+    let box = null;
+    const add = (r) => {
+      if (r.width < 1 || r.height < 1) return;
+      box = box ? union(box, r) : { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    };
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_ELEMENT, {
+      acceptNode(el) {
+        if (el.hasAttribute('data-bugbash-overlay') || el.getAttribute('aria-hidden') === 'true') return NodeFilter.FILTER_REJECT;
+        const s = cs(el);
+        if (s.display === 'none' || Number(s.opacity) === 0 || s.pointerEvents === 'none') return NodeFilter.FILTER_REJECT;
+        if (s.position === 'fixed' || s.position === 'sticky') return NodeFilter.FILTER_REJECT;
+        if (el.matches('dialog, [popover], [role=dialog], [role=alertdialog], [role=menu], [role=listbox], [role=tooltip]') || OVERLAY_RE.test(typeof el.className === 'string' ? el.className : '')) return NodeFilter.FILTER_REJECT;
+        if (s.backgroundImage !== 'none' && !el.textContent.trim() && !el.querySelector('img, svg, video, canvas')) return NodeFilter.FILTER_REJECT;
+        if (((s.backfaceVisibility || s.webkitBackfaceVisibility) === 'hidden') && hiddenFace(el)) return NodeFilter.FILTER_REJECT;
+        if (s.visibility === 'hidden') return NodeFilter.FILTER_SKIP;
+        // A clipping box hides whatever overflows it: count the box, not its children.
+        if (/(hidden|clip)/.test(s.overflowX) && /(hidden|clip)/.test(s.overflowY)) {
+          add(rectOf(el));
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let n;
+    let k = 0;
+    while ((n = walker.nextNode()) && k++ < 600) add(rectOf(n));
+    return box;
+  }
+  function detectSectionSpill(els) {
+    const out = [];
+    const groups = new Map();
+    for (const el of els) {
+      if (!el.matches(BLOCK_SEL) || !el.parentElement) continue;
+      const pos = cs(el).position;
+      if (pos === 'fixed' || pos === 'sticky' || !isVisible(el)) continue;
+      if (!groups.has(el.parentElement)) groups.set(el.parentElement, []);
+      groups.get(el.parentElement).push(el);
+    }
+    for (const blocks of groups.values()) {
+      if (blocks.length < 2 || blocks.length > 40) continue;
+      const info = blocks.map((b) => ({
+        b,
+        content: contentUnion(b),
+        texts: [...b.querySelectorAll('*')]
+          .filter((t) => directText(t).length >= 3 && isVisible(t) && !isFixedLike(t))
+          .slice(0, 200)
+          .map((t) => ({ t, r: textRect(t) }))
+          .filter((x) => x.r),
+      }));
+      for (const src of info) {
+        if (!src.content) continue;
+        for (const dst of info) {
+          if (dst === src) continue;
+          let best = null;
+          for (const { t, r } of dst.texts) {
+            const ix = intersect(src.content, r);
+            if (!ix || ix.width <= 24 || ix.height <= 24) continue;
+            if (!best || ix.width * ix.height > best.ix.width * best.ix.height) best = { t, ix };
+          }
+          if (!best) continue;
+          const { ix } = best;
+          const from = sectionLabel(src.b);
+          const over = sectionLabel(best.t);
+          out.push(cand('spill-out', src.b, Math.min(0.9, 0.6 + Math.min(ix.width, ix.height) / 200), `Content of this section spills into the neighbouring section and over its text by ${Math.round(ix.width)}×${Math.round(ix.height)}px${from && over && from !== over ? ` ("${from}" over "${over}")` : ''}.`, { section_spill: true, overlap_px: [Math.round(ix.width), Math.round(ix.height)], overlap_area: Math.round(ix.width * ix.height), spilled_into: selectorFor(dst.b), content_section: from, text_section: over }, best.t));
+          if (out.length >= 20) return out;
+        }
+      }
+    }
+    return out;
+  }
+
   function contentBoxes(els) {
     // Leaf-ish visible content: elements with direct text, media, form controls.
     const items = [];
@@ -1156,6 +1235,7 @@
     const all = [
       ...run('text-overflow', () => detectTextOverflow(els)),
       ...run('spill-out', () => detectSpillOut(els)),
+      ...run('spill-out', () => detectSectionSpill(els)),
       ...run('overlap', () => detectOverlap(els)),
       ...run('too-close', () => detectSpacing(els, o)),
       ...run('viewport-overflow', () => detectViewportOverflow(els)),
