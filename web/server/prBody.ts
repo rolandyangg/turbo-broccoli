@@ -1,3 +1,4 @@
+import { isFixJob } from '../../src/jobs/kinds.ts';
 import { existsSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { join, relative, isAbsolute } from 'node:path';
 import { execa } from 'execa';
@@ -20,7 +21,7 @@ export async function updatePrBody(b: { ws?: string; run?: string; url?: string;
   const dir = runDirOf(b.ws, b.run);
   const ff = readFindings(dir);
   if (!ff) throw new HttpError(409, 'This run has no findings');
-  const jobs = listJobs({ runDir: dir }).filter((j) => j.kind === 'fix');
+  const jobs = listJobs({ runDir: dir }).filter((j) => isFixJob(j));
   const known = allFindings(ff).some((f) => f.fix?.pr_url === b.url) || jobs.some((j) => j.pr_url === b.url);
   if (!known) throw new HttpError(404, 'This PR was not opened by this run');
   if (updating) throw new HttpError(409, 'Another PR body update is in progress');

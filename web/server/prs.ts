@@ -1,3 +1,4 @@
+import { isFixJob } from '../../src/jobs/kinds.ts';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -93,7 +94,7 @@ export async function listPRs(scope: { ws: string; run: string } | null, fresh =
     const dir = join(r.ws_path, 'runs', r.run);
     const ff = r.triaged ? readFindings(dir) : null;
     const fs = ff ? allFindings(ff) : [];
-    const jobs = listJobs({ runDir: dir }).filter((j) => j.kind === 'fix');
+    const jobs = listJobs({ runDir: dir }).filter((j) => isFixJob(j));
     const row = (url: string, branch: string | null): PrRow => {
       let e = rows.get(url);
       if (!e) {

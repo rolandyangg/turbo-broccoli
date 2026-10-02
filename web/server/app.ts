@@ -1,3 +1,4 @@
+import { isFixJob, fixJobKind } from '../../src/jobs/kinds.ts';
 import { randomUUID } from 'node:crypto';
 import { readCapture } from '../../src/repro/capture.ts';
 import { updatePrBody } from './prBody.ts';
@@ -144,7 +145,7 @@ app.post('/runs/:ws/:run/fix', async (c) => {
   if (b.base && !/^[\w./-]+$/.test(b.base)) throw new HttpError(400, 'Bad base branch');
   const info = readRun(dir);
   if (!info.repo_path) throw new HttpError(409, 'This run has no local repository, so it cannot be fixed.');
-  const busy = listJobs({ runDir: dir }).find((j) => j.kind === 'fix' && j.alive && j.finding_ids.some((x) => ids.includes(x)));
+  const busy = listJobs({ runDir: dir }).find((j) => isFixJob(j) && j.alive && j.finding_ids.some((x) => ids.includes(x)));
   if (busy) throw new HttpError(409, `A fix job (${busy.id}) is already running for ${busy.finding_ids.join(', ')}`);
   const args = ['fix', ...ids, '--run', dir, '--max-attempts', String(Math.min(5, Math.max(1, b.maxAttempts ?? 3)))];
   if (b.pr) args.push('--pr');
@@ -157,7 +158,7 @@ app.post('/runs/:ws/:run/fix', async (c) => {
   if (b.instructions?.trim()) args.push('--instructions', b.instructions.trim());
   if (b.publishUnverified) args.push('--publish-unverified');
   if (b.keepEvidence) args.push('--keep-evidence');
-  return c.json(launchJob('fix', args, { run_dir: dir, finding_ids: ids, scope: ids.join(','), branch: b.mode === 'continue' ? (b.branch ?? null) : null, options: { pr: !!b.pr, draft: b.draft !== false, base: b.base ?? null, mode: b.mode ?? 'new', branch: b.branch ?? null, instructions: b.instructions?.trim() || null, publishUnverified: !!b.publishUnverified, keepEvidence: !!b.keepEvidence } }), 202);
+  return c.json(launchJob(fixJobKind(b), args, { run_dir: dir, finding_ids: ids, scope: ids.join(','), branch: b.mode === 'continue' ? (b.branch ?? null) : null, options: { pr: !!b.pr, draft: b.draft !== false, base: b.base ?? null, mode: b.mode ?? 'new', branch: b.branch ?? null, instructions: b.instructions?.trim() || null, publishUnverified: !!b.publishUnverified, keepEvidence: !!b.keepEvidence } }), 202);
 });
 
 app.get('/github', async (c) => c.json(await githubStatus(c.req.query('fresh') === '1')));
@@ -380,7 +381,7 @@ app.get('/jobs/:id', async (c) => {
   const j = getJob(c.req.param('id'));
   // For finished fix jobs: does the branch still exist locally (so "Continue" is possible)?
   let branch_exists: boolean | null = null;
-  if (j.kind === 'fix' && j.branch && j.run_dir && !j.alive) {
+  if (isFixJob(j) && j.branch && j.run_dir && !j.alive) {
     try {
       const repo = readRun(j.run_dir).repo_path;
       if (repo) branch_exists = await exec('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${j.branch}`], { cwd: repo }).then(() => true, () => false);
@@ -479,7 +480,7 @@ app.post('/jobs/:id/captures/:capture/replace-after', (c) => {
   const ff = readFindings(j.run_dir);
   const f = ff && findById(ff, j.finding_ids[0])?.finding;
   if (!f?.fix || f.fix.branch !== j.branch) throw new HttpError(409, 'The fix branch has changed; reproduce the current fix first');
-  if (listJobs({ runDir: j.run_dir }).some((job) => job.kind === 'fix' && job.alive && job.branch === j.branch)) throw new HttpError(409, 'Wait for the fix or verification job to finish');
+  if (listJobs({ runDir: j.run_dir }).some((job) => isFixJob(job) && job.alive && job.branch === j.branch)) throw new HttpError(409, 'Wait for the fix or verification job to finish');
   if (!existsSync(safePath(j.run_dir, capture.path))) throw new HttpError(409, 'The screenshot is no longer available');
   f.fix.manual_after = { ...capture, job_id: j.id };
   writeFindings(j.run_dir, ff!);

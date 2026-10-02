@@ -1,3 +1,4 @@
+import { fixJobKind } from '../jobs/kinds.js';
 import { existsSync, mkdirSync, copyFileSync, symlinkSync, writeFileSync, readFileSync, realpathSync, readdirSync } from 'node:fs';
 import { join, basename, dirname, relative } from 'node:path';
 import { execa } from 'execa';
@@ -59,7 +60,8 @@ const slug = (s: string) =>
     .slice(0, 40);
 
 export async function fixFindings(o: FixOptions) {
-  const rep = new JobReporter(join(o.runDir, 'jobs'), o.jobId ?? newJobId('fix'), 'fix', {
+  const kind = fixJobKind(o);
+  const rep = new JobReporter(join(o.runDir, 'jobs'), o.jobId ?? newJobId(kind), kind, {
     run_dir: o.runDir,
     finding_ids: o.ids,
     scope: o.ids.join(','),

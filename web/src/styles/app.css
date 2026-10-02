@@ -95,6 +95,47 @@
   right: 8px;
   bottom: 8px;
 }
+.bug-card.bug-fix-review { --fix-accent: #9a5800; --fix-bg: #fff0ce; }
+.bug-card.bug-fix-draft { --fix-accent: #575757; --fix-bg: #eeeeee; }
+.bug-card.bug-fix-raised { --fix-accent: #0d6a48; --fix-bg: #c5ffd6; }
+.bug-card.bug-fix-merged { --fix-accent: #7041a3; --fix-bg: #eee0ff; }
+.bug-card.bug-fix-closed { --fix-accent: #575757; --fix-bg: #eeeeee; }
+.bug-card[class*='bug-fix-'] { border-color: var(--fix-accent); }
+.bug-card-content { color: inherit; text-decoration: none; }
+.bug-preview-link { position: relative; display: block; height: 100%; }
+.bug-card[class*='bug-fix-'] .bug-preview-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--fix-bg);
+  opacity: 0.22;
+  pointer-events: none;
+}
+.bug-card .thumb:hover .bug-preview-link::after,
+.bug-card .thumb:focus-within .bug-preview-link::after { opacity: 0; }
+.bug-pr-link { color: inherit; text-underline-offset: 3px; }
+.bug-pr-link:hover { text-decoration-thickness: 2px; }
+.bug-pr-link:focus-visible { outline: 2px solid var(--fix-accent); outline-offset: 3px; }
+.bug-fix-ribbon {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  color: var(--fix-accent);
+  background: var(--fix-bg);
+  border-bottom: 3px solid var(--fix-accent);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.thumb .bug-fix-ribbon {
+  position: absolute;
+  inset: 0 0 auto;
+}
+.bug-fix-ribbon > span:first-child { font-size: 20px; font-weight: 700; }
+@supports (color: contrast-color(white)) {
+  .bug-fix-ribbon { color: contrast-color(var(--fix-bg)); }
+}
 
 /* ---------- bug page ---------- */
 .bug-grid {

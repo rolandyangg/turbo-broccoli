@@ -4,13 +4,18 @@ import { fileUrl } from '../lib/api.ts';
 import { widthRange } from '../lib/format.ts';
 import { Arrow, BugGlyph, Chip, ConfidenceBar, FileIcon, SevChip, StatusChip } from './ui.tsx';
 import { WorkflowControls } from './Workflow.tsx';
+import { bugFixStatus, type BugPr } from '../lib/bugFixStatus.ts';
 
 /** Greptile-style square card: mono header strip + tag chip, badge row + title, gray footer bar. */
-export function BugCard({ f, ws, run, selected, onSelect, onWorkflow }: { f: Finding; ws: string; run: string; selected?: boolean; onSelect?: (on: boolean) => void; onWorkflow?: () => void }) {
+export function BugCard({ f, ws, run, prs, selected, onSelect, onWorkflow }: { f: Finding; ws: string; run: string; prs?: readonly BugPr[]; selected?: boolean; onSelect?: (on: boolean) => void; onWorkflow?: () => void }) {
   const href = `/runs/${ws}/${encodeURIComponent(run)}/bugs/${f.id}`;
   const thumb = f.screenshots.crop ?? f.screenshots.annotated;
+  const fixStatus = bugFixStatus(f, prs);
+  let fixIcon = '↗';
+  if (fixStatus?.kind === 'merged') fixIcon = '✓';
+  if (fixStatus?.kind === 'closed') fixIcon = '×';
   return (
-    <div className={`box bug-card ${selected ? 'selected' : ''}`}>
+    <div className={`box bug-card ${selected ? 'selected' : ''} ${fixStatus ? `bug-fix-${fixStatus.kind}` : ''}`}>
       <div className="box-head">
         {onSelect && <input type="checkbox" checked={!!selected} onChange={(e) => onSelect(e.target.checked)} aria-label={`Select ${f.id}`} style={{ accentColor: 'var(--ink)' }} />}
         <div className="path">
@@ -19,14 +24,21 @@ export function BugCard({ f, ws, run, selected, onSelect, onWorkflow }: { f: Fin
         </div>
         <Chip>{f.type}</Chip>
       </div>
-      <Link to={href} className="bug-card-body">
-        {thumb && (
-          <div className="thumb">
-            <img loading="lazy" src={fileUrl(ws, run, thumb)} alt="" />
-            {f.video && <span className="chip ink thumb-badge">▶ video</span>}
+      <div className="bug-card-body">
+        {(thumb || fixStatus) && (
+          <div className={thumb ? 'thumb' : 'bug-fix-preview'}>
+            {thumb && <Link to={href} className="bug-preview-link" aria-label={`View bug ${f.id}`}><img loading="lazy" src={fileUrl(ws, run, thumb)} alt="" /></Link>}
+            {fixStatus && (
+              <div className="bug-fix-ribbon" title={fixStatus.detail}>
+                <span aria-hidden="true">{fixIcon}</span>
+                <strong>{fixStatus.label}</strong>
+                {fixStatus.number && fixStatus.url && <a className="bug-pr-link mono small" href={fixStatus.url} target="_blank" rel="noreferrer" aria-label={`Open pull request #${fixStatus.number}`}>#{fixStatus.number} ↗</a>}
+              </div>
+            )}
+            {thumb && f.video && <span className="chip ink thumb-badge">▶ video</span>}
           </div>
         )}
-        <div className="box-body">
+        <Link to={href} className="box-body bug-card-content">
           <div className="badge-row">
             <span className="badge-sq">
               <BugGlyph />
@@ -44,8 +56,8 @@ export function BugCard({ f, ws, run, selected, onSelect, onWorkflow }: { f: Fin
             <ConfidenceBar value={f.confidence} />
             <span className="mono small muted">{f.reproduction.rate ? `repro ${f.reproduction.rate}` : 'visual'}</span>
           </div>
-        </div>
-      </Link>
+        </Link>
+      </div>
       {onWorkflow && (
         <div className="bug-card-wf">
           <WorkflowControls ws={ws} run={run} f={f} onChanged={onWorkflow} compact />

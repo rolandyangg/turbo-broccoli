@@ -1,3 +1,4 @@
+import { isFixJob } from '../../../src/jobs/kinds.ts';
 import { MarkdownDescription } from '../components/MarkdownPreview.tsx';
 import { BugPullRequest } from '../components/PrList.tsx';
 import { ReproCapture } from '../components/ReproCapture.tsx';
@@ -38,7 +39,7 @@ export function Bug() {
   const defaultMedia: Media = f.video?.mp4 || f.video?.webm ? 'video' : 'annotated';
   const m = media ?? defaultMedia;
   const canFix = !!data.run.repo_path;
-  const fixJobs = data.jobs.filter((j) => j.kind === 'fix');
+  const fixJobs = data.jobs.filter((j) => isFixJob(j));
   const latestJob = fixJobs[0] ?? null;
   const existingPrUrl = f.fix?.pr_url ?? fixJobs.find((j) => j.pr_url)?.pr_url ?? null;
   const showSidebarBranch = SHOW_SIDEBAR_PR_DETAILS || !existingPrUrl;
@@ -81,7 +82,7 @@ export function Bug() {
         <div className="stack" style={{ ['--gap' as string]: '22px', minWidth: 0 }}>
           <MediaPanel f={f} ws={ws} run={run} m={m} setM={setMedia} chapters={chapters} seek={seek} afterShot={data.after_shot} onChapter={(c) => setActiveStep(c?.kind === 'step' ? c.step_index : null)} />
 
-          <BugPullRequest key={`${ws}/${run}/${f.id}`} ws={ws} run={run} id={f.id} url={existingPrUrl} body={data.pr_body} branch={f.fix?.branch ?? fixJobs.find((j) => j.pr_url)?.branch ?? null} onUpdated={reload} />
+          <BugPullRequest key={`${ws}/${run}/${f.id}`} ws={ws} run={run} id={f.id} url={existingPrUrl} body={data.pr_body} branch={f.fix?.branch ?? latestJob?.branch ?? null} base={f.fix?.base} readyToPublish={canFix && !runningJob && !!f.fix?.verified && f.fix.verification?.result === 'fixed' && !f.fix.flags?.length && !f.fix.blocked} onUpdated={reload} />
 
           <FixVerification f={f} ws={ws} run={run} branch={f.fix?.branch ?? latestJob?.branch ?? null} afterShot={data.after_shot} running={!!runningJob} prUrl={f.fix?.pr_url ?? latestJob?.pr_url ?? null} reproducing={!!liveRepro} onReproduceStarted={(job) => setReproJob(job.id)} />
 

@@ -8,9 +8,9 @@ import { notifyDetached } from '../notify/notify.js';
  *   <runDir>/jobs/<jobId>/status.json   current state (rewritten on every change)
  *   <runDir>/jobs/<jobId>/events.jsonl  append-only event stream
  */
-export type JobKind = 'fix' | 'explore' | 'triage' | 'reproduce' | 'retro' | 'improve' | 'connect' | 'investigate';
+export type JobKind = 'fix' | 'publish' | 'explore' | 'triage' | 'reproduce' | 'retro' | 'improve' | 'connect' | 'investigate';
 export type JobState = 'running' | 'succeeded' | 'failed' | 'cancelled';
-const KIND_LABEL: Record<JobKind, string> = { fix: 'Fix', explore: 'Bug bash', triage: 'Triage', reproduce: 'Reproduction', retro: 'Retrospective', improve: 'Improvement', connect: 'GitHub sign-in', investigate: 'Investigation' };
+const KIND_LABEL: Record<JobKind, string> = { fix: 'Fix', publish: 'Publish pull request', explore: 'Bug bash', triage: 'Triage', reproduce: 'Reproduction', retro: 'Retrospective', improve: 'Improvement', connect: 'GitHub sign-in', investigate: 'Investigation' };
 
 export interface JobEvent {
   t: string;

@@ -12,13 +12,14 @@ export function FixDialog({ open, onClose, ws, run, ids, title, onStarted }: { o
   const [draft, setDraft] = useState(true);
   const [confirmPush, setConfirmPush] = useState(false);
   const [base, setBase] = useState('');
+  const [instructions, setInstructions] = useState('');
   const [attempts, setAttempts] = useState(3);
   const [keep, setKeep] = useState(false);
   const [busy, setBusy] = useState(false);
   const start = async () => {
     setBusy(true);
     try {
-      const job = await api<JobView>(`/runs/${ws}/${encodeURIComponent(run)}/fix`, { json: { ids, pr, draft, base: base.trim() || undefined, maxAttempts: attempts, keepWorktree: keep, confirmPush: pr ? confirmPush : undefined } });
+      const job = await api<JobView>(`/runs/${ws}/${encodeURIComponent(run)}/fix`, { json: { ids, pr, draft, base: base.trim() || undefined, instructions: instructions.trim() || undefined, maxAttempts: attempts, keepWorktree: keep, confirmPush: pr ? confirmPush : undefined } });
       toast(`Fix job started for ${ids.join(', ')}`);
       onClose();
       if (onStarted) onStarted(job);
@@ -51,6 +52,11 @@ export function FixDialog({ open, onClose, ws, run, ids, title, onStarted }: { o
       <p className="small muted" style={{ margin: 0 }}>
         The agent creates a new branch in a separate git worktree, edits the code, re-runs the repro checks at every affected browser and width, looks for regressions, and commits. Your working copy stays untouched.
       </p>
+      <label className="field">
+        <span className="label">Instructions for the fix agent (optional)</span>
+        <textarea className="input" rows={3} maxLength={4000} value={instructions} onChange={(e) => setInstructions(e.target.value)} placeholder="e.g. Keep the existing breakpoint; the issue is inside the carousel. Check the shared component for the root cause." />
+        <span className="small muted">Add context, expected behavior, or constraints to guide the fix. Up to 4,000 characters.</span>
+      </label>
       <div className="grid-2" style={{ gap: 12 }}>
         <label className="field">
           <span className="label">Base branch</span>

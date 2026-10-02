@@ -1,5 +1,5 @@
 import { MarkdownDescription } from './MarkdownPreview.tsx';
-import { BranchPanel } from './Jobs.tsx';
+import { BranchPanel, OpenPullRequestButton } from './Jobs.tsx';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { api, useApi } from '../lib/api.ts';
@@ -211,10 +211,20 @@ function UpdatePrBody({ p, onUpdated }: { p: PrRow; onUpdated: () => Promise<voi
 }
 
 /** Existing PR details belong beside the bug evidence, outside the action sidebar. */
-export function BugPullRequest({ ws, run, id, url, body, branch, onUpdated }: { ws: string; run: string; id: string; url: string | null; body: string | null; branch: string | null; onUpdated: () => Promise<void> }) {
+export function BugPullRequest({ ws, run, id, url, body, branch, base, readyToPublish = false, onUpdated }: { ws: string; run: string; id: string; url: string | null; body: string | null; branch: string | null; base?: string | null; readyToPublish?: boolean; onUpdated: () => Promise<void> }) {
   const { data, error, reload } = useApi<PrData>(`/prs?ws=${encodeURIComponent(ws)}&run=${encodeURIComponent(run)}`, { pollMs: 60_000 });
   const p = data?.prs.find((p) => p.url === url || (!url && p.bugs.some((b) => b.id === id)));
-  if (!p && !url) return null;
+  if (!p && !url) {
+    if (!readyToPublish || !branch) return null;
+    return (
+      <Box head="Pull request" chip={<Chip tone="mint">Ready to publish</Chip>}>
+        <div className="stack" style={{ ['--gap' as string]: '12px' }}>
+          <p className="small muted" style={{ margin: 0 }}>The fix is verified. Open a pull request to re-check the fix, commit changes, and push the branch.</p>
+          <div><OpenPullRequestButton ws={ws} run={run} ids={[id]} branch={branch} base={base} /></div>
+        </div>
+      </Box>
+    );
+  }
   const prBranch = p?.branch ?? branch;
   const content = (
     <div className="stack" style={{ ['--gap' as string]: '14px', marginBottom: 14 }}>

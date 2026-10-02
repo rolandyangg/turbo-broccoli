@@ -1,3 +1,4 @@
+import { isFixJob } from '../../src/jobs/kinds.ts';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { readRun, readFindings, allFindings } from '../../src/store/store.ts';
@@ -191,7 +192,7 @@ export function runAgentStats(dir: string) {
   const lead = summarizeTranscript(join(dir, 'transcripts', 'lead.jsonl'));
   const triageDir = join(dir, 'transcripts', 'triage');
   const triageT = existsSync(triageDir) ? readdirSync(triageDir).filter((f) => f.endsWith('.jsonl')).map((f) => summarizeTranscript(join(triageDir, f))!).filter(Boolean) : [];
-  const fixJobs = listJobs({ runDir: dir }).filter((j) => j.kind === 'fix');
+  const fixJobs = listJobs({ runDir: dir }).filter((j) => isFixJob(j));
   const fixes = fixJobs.map((j) => {
     const events = readEvents(j.dir).events;
     const attempts = new Set(events.filter((e) => /^attempt:\d+$/.test(e.stage)).map((e) => e.stage)).size;

@@ -1,3 +1,4 @@
+import { isFixJob } from '../../../src/jobs/kinds.ts';
 import { ReproCapture } from '../components/ReproCapture.tsx';
 import { useReviewJobResults } from '../lib/jobReview.ts';
 import { ModelPicker } from '../components/ModelPicker.tsx';
@@ -46,13 +47,13 @@ function JobDetails({ id, onFollowup }: { id: string; onFollowup: (job: JobView)
           )}
         </div>
         <h1 className="display" style={{ fontSize: 'clamp(28px, 4vw, 54px)', marginTop: 12 }}>
-          {job.kind === 'fix' ? `Fixing ${job.finding_ids.join(', ')}` : job.kind === 'explore' ? `Bug bash: ${targetName(target ?? '')}` : job.kind === 'reproduce' ? `Reproducing ${job.finding_ids.join(', ')}` : job.kind === 'retro' ? 'Retrospective' : job.kind === 'improve' ? `Implementing ${job.scope ?? 'improvement'}` : job.kind === 'connect' ? 'Connecting GitHub' : job.kind === 'investigate' ? `Investigating ${job.scope ?? 'a report'}` : 'Triage'}
+          {job.kind === 'publish' ? `Publishing pull request for ${job.finding_ids.join(', ')}` : isFixJob(job) ? `Fixing ${job.finding_ids.join(', ')}` : job.kind === 'explore' ? `Bug bash: ${targetName(target ?? '')}` : job.kind === 'reproduce' ? `Reproducing ${job.finding_ids.join(', ')}` : job.kind === 'retro' ? 'Retrospective' : job.kind === 'improve' ? `Implementing ${job.scope ?? 'improvement'}` : job.kind === 'connect' ? 'Connecting GitHub' : job.kind === 'investigate' ? `Investigating ${job.scope ?? 'a report'}` : 'Triage'}
         </h1>
         <p className="mono small muted" style={{ margin: '8px 0 0' }}>
           started {dateTime(job.started_at)} ({ago(job.started_at)}) · {duration(job.started_at, job.ended_at)}
           {job.ended_at ? '' : ' so far'}
         </p>
-        {job.kind === 'fix' && <FixOutcome job={job} />}
+        {isFixJob(job) && <FixOutcome job={job} />}
         {(job.kind === 'retro' || job.kind === 'improve') && (
           <p style={{ margin: '8px 0 0' }}>
             <Link to={job.kind === 'retro' ? '/improvements' : '/improvements?tab=backlog'}>Open Improvements →</Link>

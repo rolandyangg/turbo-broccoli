@@ -264,8 +264,18 @@ export function CancelButton({ job, onDone }: { job: JobView; onDone?: () => voi
 }
 
 // ---------- branch ----------
-export function BranchPanel({ ws, run, branch, base, live, publish, children }: { ws: string; run: string; branch: string; base?: string | null; live?: boolean; publish?: { ids: string[] }; children?: ReactNode }) {
+/** Shared entry point for the sidebar and the bug's main pull request area. */
+export function OpenPullRequestButton({ ws, run, ids, branch, base, small = false }: { ws: string; run: string; ids: string[]; branch: string; base?: string | null; small?: boolean }) {
   const [publishing, setPublishing] = useState(false);
+  return (
+    <>
+      <Chamfer small={small} tone="green" onClick={() => setPublishing(true)}>Open pull request</Chamfer>
+      {publishing && <FixRunDialog ws={ws} run={run} ids={ids} mode="continue" branch={branch} defaults={{ pr: true, draft: true, base: base ?? null }} title={`Open a pull request for ${branch}`} submitLabel="Open pull request" onClose={() => setPublishing(false)} />}
+    </>
+  );
+}
+
+export function BranchPanel({ ws, run, branch, base, live, publish, children }: { ws: string; run: string; branch: string; base?: string | null; live?: boolean; publish?: { ids: string[] }; children?: ReactNode }) {
   const q = `/branches?ws=${ws}&run=${encodeURIComponent(run)}&branch=${encodeURIComponent(branch)}${base ? `&base=${encodeURIComponent(base)}` : ''}`;
   const { data, error } = useApi<BranchInfo>(q, { pollMs: live ? 4000 : 60_000 });
   const [showDiff, setShowDiff] = useState(false);
@@ -291,9 +301,6 @@ export function BranchPanel({ ws, run, branch, base, live, publish, children }: 
       }
       chip={prStatus ? <Chip tone={prStatus.tone}>{prStatus.label}</Chip> : data?.exists ? <Chip tone="ink">local branch</Chip> : <Chip tone="outline">{error ? 'error' : data ? 'not created yet' : '…'}</Chip>}
     >
-      {publishing && publish && (
-        <FixRunDialog ws={ws} run={run} ids={publish.ids} mode="continue" branch={branch} defaults={{ pr: true, draft: true, base: data?.base ?? base ?? null }} title={`Open a pull request for ${branch}`} submitLabel="Open pull request" onClose={() => setPublishing(false)} />
-      )}
       {error && <p className="small" style={{ color: 'var(--err)' }}>{error}</p>}
       {data && !data.exists && <p className="muted small">The branch doesn't exist yet. It's created when the fix job reaches “Create branch &amp; worktree”.</p>}
       {children}
@@ -337,9 +344,7 @@ export function BranchPanel({ ws, run, branch, base, live, publish, children }: 
             <div className="stack" style={{ ['--gap' as string]: '8px' }}>
               {publish && !live && data.commits.length > 0 && (
                 <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
-                  <Chamfer small tone="green" onClick={() => setPublishing(true)}>
-                    Open pull request…
-                  </Chamfer>
+                  <OpenPullRequestButton small ws={ws} run={run} ids={publish.ids} branch={branch} base={data.base ?? base} />
                   <span className="small muted">Happy with the diff? This re-checks the bug on the branch, then pushes it and opens a draft PR.</span>
                 </div>
               )}

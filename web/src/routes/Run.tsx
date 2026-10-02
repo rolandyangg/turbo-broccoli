@@ -5,6 +5,7 @@ import type { CampaignJob, Finding, JobView, RunDetail } from '../lib/types.ts';
 import { ACTIVE, SEV_ORDER, ago, categoryOf, dateTime, duration, targetName } from '../lib/format.ts';
 import { Chamfer, Chip, ErrorBox, Loading, Section, Stat, Tabs, useToast } from '../components/ui.tsx';
 import { BugCard } from '../components/BugCard.tsx';
+import type { BugPr } from '../lib/bugFixStatus.ts';
 import { FixDialog } from '../components/Actions.tsx';
 import { JobsTable } from '../components/Jobs.tsx';
 import { DashboardView } from './Dashboard.tsx';
@@ -21,6 +22,7 @@ type Tab = 'overview' | 'bugs' | 'fixed' | 'prs' | 'archived' | 'campaign' | 'co
 export function Run() {
   const { ws = '', run = '' } = useParams();
   const { data, error, reload } = useApi<RunDetail>(`/runs/${ws}/${encodeURIComponent(run)}`, { pollMs: 6000 });
+  const { data: prData } = useApi<{ prs: BugPr[] }>(`/prs?ws=${encodeURIComponent(ws)}&run=${encodeURIComponent(run)}`, { pollMs: 60_000 });
   const [tab, setTab] = useState<Tab>('overview');
   const [f, setF] = useState({ status: 'active', cat: 'layout', sev: '', type: '', browser: '', persona: '', minConf: 0, q: '' });
   const [sel, setSel] = useState<string[]>([]);
@@ -266,7 +268,7 @@ export function Run() {
               >
                 <div className="grid-2">
                   {g.shown.map((x) => (
-                    <BugCard key={x.id} f={x} ws={ws} run={run} selected={sel.includes(x.id)} onSelect={(on) => setSel((cur) => (on ? [...cur, x.id] : cur.filter((y) => y !== x.id)))} onWorkflow={reload} />
+                    <BugCard key={x.id} f={x} ws={ws} run={run} prs={prData?.prs} selected={sel.includes(x.id)} onSelect={(on) => setSel((cur) => (on ? [...cur, x.id] : cur.filter((y) => y !== x.id)))} onWorkflow={reload} />
                   ))}
                 </div>
               </Section>
