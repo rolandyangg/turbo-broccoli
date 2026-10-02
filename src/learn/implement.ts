@@ -148,12 +148,14 @@ export async function implementBacklogItems(o: BatchOptions) {
         say(stage, 'Running typecheck and tests');
         const failures: string[] = [];
         for (const cmd of o.checks ?? DEFAULT_CHECKS) {
-          const res = await execa(cmd[0], cmd.slice(1), { cwd: worktree, reject: false, all: true, timeout: 15 * 60_000 });
+          // A clean environment: the job's own BUGBASH_* settings (job folder, inbox, home) must not leak into the
+          // repo's tests, or they write into the real job folders and fail for reasons unrelated to the change.
+          const res = await execa(cmd[0], cmd.slice(1), { cwd: worktree, reject: false, all: true, timeout: 15 * 60_000, extendEnv: false, env: cleanEnv() });
           if (res.exitCode !== 0) failures.push(`$ ${cmd.join(' ')} (exit ${res.exitCode})\n${String(res.all ?? '').slice(-4000)}`);
         }
         verified = failures.length === 0;
         error = verified ? null : 'Typecheck/tests failed';
-        say(stage, verified ? 'Typecheck and tests pass' : `Verification failed (${failures.length} check(s))`, verified ? 'success' : 'warn');
+        say(stage, verified ? 'Typecheck and tests pass' : `Verification failed (${failures.length} check(s)):\n${failures.map((x) => x.split('\n').slice(0, 1).concat(failingLines(x)).join('\n')).join('\n\n')}`, verified ? 'success' : 'warn', verified ? undefined : { output: failures.map((x) => x.slice(-3000)) });
         feedback = failures.join('\n\n');
       }
       if (verified) {
@@ -216,4 +218,17 @@ function prBodyFor(done: BacklogItem[], failed: { item: BacklogItem; error: stri
   if (failed.length) lines.push('## Not included', '', ...failed.map((f) => `- ${f.item.id}: ${f.item.title} (${f.error})`), '');
   lines.push('## Verification', '', '✅ Typecheck and tests pass after each item.', '', 'Consider running `bugbash bench` on this branch to check recall before merging.', '', '🤖 Generated with [Claude Code](https://claude.com/claude-code)', '');
   return lines.join('\n');
+}
+
+/** The current environment minus bugbash's own job settings (BUGBASH_*), for running the repo's checks. */
+export function cleanEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith('BUGBASH_') && k !== 'VITEST') env[k] = v;
+  return env;
+}
+
+/** The lines of a test/typecheck run that say what failed (for the job page). */
+function failingLines(out: string): string[] {
+  const lines = out.split('\n').filter((l) => /(×|FAIL|error TS|AssertionError|Error:|expected)/.test(l)).map((l) => l.trim());
+  return [...new Set(lines)].slice(0, 8);
 }

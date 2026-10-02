@@ -130,7 +130,13 @@ describe('job reporter', () => {
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const root = mkdtempSync(join(tmpdir(), 'bb-jobs-'));
+    // Run in isolation even when the test process itself was started by a job (it would set these).
+    const saved = { dir: process.env.BUGBASH_JOB_DIR, inbox: process.env.BUGBASH_INBOX };
+    delete process.env.BUGBASH_JOB_DIR;
     const r = new JobReporter(root, 'fix-1', 'fix', { finding_ids: ['BB-0001'] });
+    if (saved.dir !== undefined) process.env.BUGBASH_JOB_DIR = saved.dir;
+    if (saved.inbox !== undefined) process.env.BUGBASH_INBOX = saved.inbox;
+    else delete process.env.BUGBASH_INBOX;
     r.event('worktree', 'Created branch', 'success', { branch: 'bugbash/x' });
     r.update({ branch: 'bugbash/x' });
     r.event('attempt:1', 'Edit …/src/a.css', 'agent');
@@ -425,5 +431,19 @@ describe('bug reports', () => {
     const r = addReport(ws, { run: 'r1', bug: 'BB-0050', category: 'missed', text: ' Cards cover the What we do text ' });
     expect(r).toMatchObject({ status: 'investigating', text: 'Cards cover the What we do text', proposals: [] });
     expect(readReports(ws).map((x) => x.id)).toEqual([r.id]);
+  });
+});
+
+describe('improvement checks', () => {
+  it('run without the job’s own BUGBASH_* settings', async () => {
+    const { cleanEnv } = await import('../src/learn/implement.js');
+    process.env.BUGBASH_JOB_DIR = '/tmp/should-not-leak';
+    try {
+      const env = cleanEnv();
+      expect(Object.keys(env).some((k) => k.startsWith('BUGBASH_'))).toBe(false);
+      expect(env.PATH).toBe(process.env.PATH);
+    } finally {
+      delete process.env.BUGBASH_JOB_DIR;
+    }
   });
 });
