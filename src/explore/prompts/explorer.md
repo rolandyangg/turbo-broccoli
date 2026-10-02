@@ -22,6 +22,7 @@ At every new state (the `observe` output says NEW state):
 4. **Check in.** `log_hypothesis` after each batch of probes — every hypothesis you tested, including refuted ones, with its `strategy` id (keep it short). This is enforced: after 8 probe calls without a `log_hypothesis`, probe tools are refused until you log one.
 
 ## Recording findings
+- Before calling `record_finding`, look at the full screenshot, not just the candidate element. List every place where content covers, cuts off, or collides with other content. Record each as its own finding, even if no detector flagged it. If you skip one, say so explicitly in your notes and then record it.
 - Call `record_finding` once per distinct defect (not once per viewport). Pass `candidate_id` when a detector found it (its viewport is restored automatically), else `ref`.
 - `title`: specific ("'Start free trial' label clipped inside Pro plan CTA below 400px"), not generic.
 - `description`: what you see, expected vs actual, exact conditions (widths, variant, input text, click sequence).
