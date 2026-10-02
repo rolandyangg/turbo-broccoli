@@ -379,3 +379,19 @@ describe('bugbash web API', () => {
     expect((await wf({ ids: ['../x'], archived: true })).status).toBe(400);
   });
 });
+
+describe('improvement pull requests', () => {
+  const post = (p: string, body: unknown) => app.request(`/api${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  it('lists none when no improvement opened a PR', async () => {
+    const r = await get('/improvements/prs');
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.counts.total).toBe(0);
+  });
+  it('refuses to merge without confirmation, or a PR bugbash did not open', async () => {
+    expect((await post('/improvements/prs/merge', { url: 'https://github.com/a/b/pull/1' })).status).toBe(400);
+    expect((await post('/improvements/prs/merge', { url: 'https://github.com/a/b/pull/1', confirm: true, method: 'octopus' })).status).toBe(400);
+    expect((await post('/improvements/prs/merge', { url: 'https://github.com/a/b/pull/1', confirm: true })).status).toBe(404);
+    expect((await post('/improvements/prs/close', { url: 'https://github.com/a/b/pull/1' })).status).toBe(404);
+  });
+});

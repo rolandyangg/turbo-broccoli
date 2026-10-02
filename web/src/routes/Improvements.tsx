@@ -5,6 +5,7 @@ import type { JobView } from '../lib/types.ts';
 import { ago, targetName } from '../lib/format.ts';
 import { Chamfer, Chip, Dialog, ErrorBox, Loading, Stat, Tabs, useToast } from '../components/ui.tsx';
 import { DataTable } from '../components/Charts.tsx';
+import { ImprovementPrList } from '../components/ImprovementPrList.tsx';
 
 type Kind = 'lesson' | 'prior' | 'detector' | 'tweak';
 interface Proposal {
@@ -43,7 +44,7 @@ interface BacklogItem {
   body: string;
   detector: Proposal['detector'];
   tweak: Proposal['tweak'];
-  status: 'open' | 'implementing' | 'implemented' | 'failed' | 'closed';
+  status: 'open' | 'implementing' | 'implemented' | 'merged' | 'failed' | 'closed';
   branch: string | null;
   job_id: string | null;
   pr_url: string | null;
@@ -68,7 +69,7 @@ const APPROVE_EFFECT: Record<Kind, string> = {
   detector: 'Approving puts it on the backlog. Code only changes if you implement it on a branch and merge it.',
   tweak: 'Approving puts it on the backlog. Code only changes if you implement it on a branch and merge it.',
 };
-type Tab = 'pending' | 'backlog' | 'knowledge' | 'bench' | 'history';
+type Tab = 'pending' | 'backlog' | 'prs' | 'knowledge' | 'bench' | 'history';
 const pct = (x: number | null | undefined) => (x == null ? '—' : `${Math.round(x * 100)}%`);
 
 export function Improvements() {
@@ -79,8 +80,9 @@ export function Improvements() {
   if (!data) return <Loading what="Loading improvements" />;
   const all = data.runs.flatMap((r) => r.proposals.map((p) => ({ p, r })));
   const approved = all.filter(({ p }) => p.status === 'approved').length;
-  const openBacklog = data.backlog.filter((b) => b.status !== 'closed' && b.status !== 'implemented').length;
+  const openBacklog = data.backlog.filter((b) => b.status !== 'closed' && b.status !== 'implemented' && b.status !== 'merged').length;
   const regressed = data.bench.some((v) => v.regression);
+  const prOpen = new Set(data.backlog.filter((b) => b.pr_url && b.status === 'implemented').map((b) => b.pr_url)).size;
   return (
     <>
       <div className="run-head">
@@ -105,6 +107,7 @@ export function Improvements() {
           tabs={[
             { id: 'pending', label: `Pending (${data.pending})` },
             { id: 'backlog', label: `Backlog (${data.backlog.length})` },
+            { id: 'prs', label: `Pull requests${prOpen ? ` (${prOpen} open)` : ''}` },
             { id: 'knowledge', label: 'Approved knowledge' },
             { id: 'bench', label: 'Benchmark gate' },
             { id: 'history', label: 'History' },
@@ -116,6 +119,7 @@ export function Improvements() {
       <div style={{ marginTop: 20 }}>
         {tab === 'pending' && <Pending runs={data.runs} reload={reload} />}
         {tab === 'backlog' && <Backlog items={data.backlog} runs={data.runs} reload={reload} />}
+        {tab === 'prs' && <ImprovementPrList onChanged={reload} />}
         {tab === 'knowledge' && <Knowledge data={data} />}
         {tab === 'bench' && <Bench data={data} />}
         {tab === 'history' && <History rows={all.filter(({ p }) => p.status !== 'pending')} />}
@@ -340,7 +344,7 @@ function Evidence({ p, ws }: { p: Proposal; ws: string }) {
   );
 }
 
-const STATUS_TONE: Record<BacklogItem['status'], string> = { open: 'outline', implementing: 'green live', implemented: 'mint', failed: 'sev-critical dot', closed: 'outline' };
+const STATUS_TONE: Record<BacklogItem['status'], string> = { open: 'outline', implementing: 'green live', implemented: 'mint', merged: 'mint', failed: 'sev-critical dot', closed: 'outline' };
 
 function Backlog({ items, runs, reload }: { items: BacklogItem[]; runs: RunGroup[]; reload: () => void }) {
   const [impl, setImpl] = useState<{ ws: string; ids: string[]; all: boolean } | null>(null);

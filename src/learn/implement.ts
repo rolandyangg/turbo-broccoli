@@ -8,7 +8,7 @@ import { backlog, updateBacklogItem, type BacklogItem } from './proposals.js';
 import { notifyDetached } from '../notify/notify.js';
 
 /** The bugbash repo itself: approved detector suggestions and prompt/config tweaks are code changes here. */
-const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+export const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const git = (cwd: string, args: string[]) => execa('git', args, { cwd, reject: false });
 const slug = (s: string) =>
   s

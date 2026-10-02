@@ -21,6 +21,11 @@ export interface PrStatus {
   additions: number;
   deletions: number;
   checks: { name: string; state: string }[];
+  /** MERGEABLE | CONFLICTING | UNKNOWN */
+  mergeable: string | null;
+  /** CLEAN, BLOCKED, BEHIND, DIRTY, UNSTABLE, DRAFT… */
+  mergeStateStatus: string | null;
+  commits: number;
 }
 
 export interface PrRow {
@@ -40,12 +45,12 @@ export interface PrRow {
 const cache = new Map<string, { at: number; status: PrStatus | null; error: string | null }>();
 const TTL = 60_000;
 
-async function prStatus(url: string, fresh: boolean): Promise<{ status: PrStatus | null; error: string | null }> {
+export async function prStatus(url: string, fresh: boolean): Promise<{ status: PrStatus | null; error: string | null }> {
   const hit = cache.get(url);
   if (!fresh && hit && Date.now() - hit.at < TTL) return hit;
   let out: { status: PrStatus | null; error: string | null };
   try {
-    const { stdout } = await exec('gh', ['pr', 'view', url, '--json', 'number,title,state,isDraft,mergedAt,closedAt,updatedAt,reviewDecision,headRefName,baseRefName,additions,deletions,statusCheckRollup'], { timeout: 20_000 });
+    const { stdout } = await exec('gh', ['pr', 'view', url, '--json', 'number,title,state,isDraft,mergedAt,closedAt,updatedAt,reviewDecision,headRefName,baseRefName,additions,deletions,statusCheckRollup,mergeable,mergeStateStatus,commits'], { timeout: 20_000 });
     const j = JSON.parse(stdout);
     out = {
       status: {
@@ -61,6 +66,9 @@ async function prStatus(url: string, fresh: boolean): Promise<{ status: PrStatus
         baseRefName: j.baseRefName,
         additions: j.additions ?? 0,
         deletions: j.deletions ?? 0,
+        mergeable: j.mergeable || null,
+        mergeStateStatus: j.mergeStateStatus || null,
+        commits: (j.commits ?? []).length,
         checks: (j.statusCheckRollup ?? []).map((c: { name?: string; context?: string; conclusion?: string; state?: string; status?: string }) => ({ name: c.name ?? c.context ?? 'check', state: c.conclusion || c.state || c.status || 'PENDING' })),
       },
       error: null,

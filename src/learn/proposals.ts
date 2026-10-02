@@ -71,7 +71,7 @@ export const BacklogItem = z.object({
   body: z.string(),
   detector: Proposal.shape.detector,
   tweak: Proposal.shape.tweak,
-  status: z.enum(['open', 'implementing', 'implemented', 'failed', 'closed']).default('open'),
+  status: z.enum(['open', 'implementing', 'implemented', 'merged', 'failed', 'closed']).default('open'),
   branch: z.string().nullable().default(null),
   job_id: z.string().nullable().default(null),
   pr_url: z.string().nullable().default(null),

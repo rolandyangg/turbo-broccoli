@@ -25,6 +25,7 @@ import { compareRuns } from './compare.ts';
 import { addReport, readReports, REPORT_CATEGORIES } from '../../src/learn/investigate.ts';
 import { postMessage, readMessages } from '../../src/jobs/inbox.ts';
 import { listPRs } from './prs.ts';
+import { listImprovementPRs, mergeImprovementPR, closeImprovementPR } from './improvementPrs.ts';
 import { githubStatus, connectGitHub, disconnectGitHub } from './github.ts';
 import { schedulesOverview, previewCron, createSchedule, toggleSchedule, deleteSchedule, runScheduleNow } from './schedules.ts';
 import { publicSettings, saveSettings, inbox, readMany, sendTest } from './notifications.ts';
@@ -174,6 +175,9 @@ app.get('/compare', (c) => {
   return c.json(compareRuns(a, b));
 });
 app.get('/improvements', (c) => c.json(improvementsOverview()));
+app.get('/improvements/prs', async (c) => c.json(await listImprovementPRs(c.req.query('fresh') === '1')));
+app.post('/improvements/prs/merge', async (c) => c.json(await mergeImprovementPR(await c.req.json().catch(() => ({})))));
+app.post('/improvements/prs/close', async (c) => c.json(await closeImprovementPR(await c.req.json().catch(() => ({})))));
 app.post('/improvements/:ws/:run/:id', async (c) => {
   runDirOf(c.req.param('ws'), c.req.param('run')); // validates the run
   const b = await c.req.json<{ action: 'approve' | 'reject'; title?: string; body?: string; note?: string }>();
