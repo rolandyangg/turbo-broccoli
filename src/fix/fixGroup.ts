@@ -38,6 +38,12 @@ export interface FixOptions {
   instructions?: string | null;
   /** Publish even though the fix isn't fully verified (an explicit, separately confirmed override). */
   publishUnverified?: boolean;
+  /**
+   * With publishUnverified on a continued branch: publish with the saved verification and the before/after pictures
+   * the person reviewed (including a manually chosen after screenshot), instead of re-checking the branch and
+   * capturing new after pictures right before publishing.
+   */
+  keepEvidence?: boolean;
 }
 
 const git = (cwd: string, args: string[], input?: string) => execa('git', args, { cwd, reject: false, ...(input !== undefined ? { input } : {}) });
@@ -57,7 +63,7 @@ export async function fixFindings(o: FixOptions) {
     run_dir: o.runDir,
     finding_ids: o.ids,
     scope: o.ids.join(','),
-    options: { pr: o.pr, draft: o.draft, base: o.base ?? null, maxAttempts: o.maxAttempts, mode: o.mode ?? 'new', branch: o.branch ?? null, instructions: o.instructions ?? null, publishUnverified: !!o.publishUnverified },
+    options: { pr: o.pr, draft: o.draft, base: o.base ?? null, maxAttempts: o.maxAttempts, mode: o.mode ?? 'new', branch: o.branch ?? null, instructions: o.instructions ?? null, publishUnverified: !!o.publishUnverified, keepEvidence: !!o.keepEvidence },
   });
   const say = (stage: string, msg: string, level: JobEvent['level'] = 'info', data?: Record<string, unknown>) => {
     if (level !== 'agent') o.log(msg);
@@ -120,6 +126,14 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   if (status.length) say('worktree', `Your working tree has uncommitted changes (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? ', …' : ''}). They stay as they are and aren't part of the fix branch.`, 'warn', { uncommitted: dirty.slice(0, 50) });
   const baseBranch = o.base ?? ((await git(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim() || 'main');
   const mode = o.mode ?? 'new';
+  // Publishing with the saved evidence: no re-check, no new pictures, no agent.
+  const keep = !!o.keepEvidence;
+  if (keep && !(mode === 'continue' && o.publishUnverified && o.pr)) throw new Error('Keeping the current before/after pictures only applies when publishing a continued fix anyway (--continue --pr --publish-unverified)');
+  if (keep && o.instructions?.trim()) throw new Error("Instructions change the fix, so its pictures can't be kept; send instructions without keeping the pictures");
+  if (keep) {
+    const missing = selected.filter((f) => !f.fix?.verification).map((f) => f.id);
+    if (missing.length) throw new Error(`No saved verification for ${missing.join(', ')} to publish with; publish without keeping the pictures so it is checked first`);
+  }
   const branchExists = async (b: string) => (await git(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${b}`])).exitCode === 0;
   const defaultBranch = `bugbash/${scopeLabel.toLowerCase()}-${slug(scopeIsGroup ? groups.get(o.ids[0])!.summary : selected[0].title)}`;
   let branch = defaultBranch;
@@ -179,11 +193,12 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   try {
     // ---- baseline: confirm the bug is present in the worktree ----
     const before: VerifyResult[] = [];
-    for (const f of selected) before.push(await verifyFinding(f, vo));
+    if (keep) say('evidence', 'Publishing with the current before/after pictures and the saved verification: the branch is not re-checked and no new pictures are taken', 'info');
+    else for (const f of selected) before.push(await verifyFinding(f, vo));
     // In continue mode the "baseline" is the branch as it stands (used to spot regressions from further attempts).
     if (mode !== 'continue' && mode !== 'verify') for (const b of before) say('baseline', `Baseline ${b.id}: ${b.present === null ? 'not auto-checkable (visual review after the fix)' : b.present ? 'present ✓' : 'NOT present (already fixed or not reproducible here)'}`, b.present === false ? 'warn' : 'info', { result: b });
     const baselineSnap = new Map<string, Awaited<ReturnType<typeof pageSnapshot>>>();
-    for (const p of touchedPages) baselineSnap.set(p, await pageSnapshot(p, vo));
+    if (!keep) for (const p of touchedPages) baselineSnap.set(p, await pageSnapshot(p, vo));
 
     // ---- fix loop ----
     let feedback = '';
@@ -193,7 +208,12 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     let attempt = 0;
     // Continue: check the branch as it stands first; only bring the agent back if the bug is still there.
     let skipAgent = false;
-    if (mode === 'continue' || mode === 'verify') {
+    if (keep) {
+      after = selected.map((f) => savedResult(f));
+      skipAgent = true;
+      agentSummary = (await git(worktree, ['log', '-1', '--format=%B', branch])).stdout.trim();
+      say('verify:continue', `Saved verification: ${after.map((a) => `${a.id}=${label(a)}`).join(' ')}`, 'info', { after });
+    } else if (mode === 'continue' || mode === 'verify') {
       for (const f of selected) after.push(await verifyFinding(f, reviewed('branch')));
       const changed = (await git(worktree, ['diff', '--stat', baseSha])).stdout.trim();
       const still = after.filter((a) => a.present);
@@ -263,15 +283,16 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
 
     // ---- other findings in the group that this fix also resolved ----
     const alsoFixed: string[] = [];
-    for (const m of groupMembers) {
+    for (const m of keep ? [] : groupMembers) {
       const r = await verifyFinding(m, vo);
       if (r.present === false) alsoFixed.push(m.id);
     }
-    if (groupMembers.length) say('also-fixed', alsoFixed.length ? `Also resolves ${alsoFixed.join(', ')}` : 'No other findings in the group were resolved', 'info', { also_fixed: alsoFixed });
+    if (groupMembers.length && !keep) say('also-fixed', alsoFixed.length ? `Also resolves ${alsoFixed.join(', ')}` : 'No other findings in the group were resolved', 'info', { also_fixed: alsoFixed });
 
     // ---- evidence: after stills of the same spot, plus a video for behaviour bugs ----
     const evidence = new Map<string, FixVerification>();
-    for (const f of selected) {
+    if (keep) for (const f of selected) evidence.set(f.id, f.fix!.verification!);
+    for (const f of keep ? [] : selected) {
       const a = after.find((x) => x.id === f.id)!;
       const shotFile = join(assetsDir, `${f.id}-after.png`);
       const shot = await captureAfter(f, shotFile, vo).catch(() => null);
@@ -292,7 +313,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         at: new Date().toISOString(),
       });
     }
-    say('evidence', `Captured after-fix evidence${[...evidence.values()].some((e) => e.after_video) ? ' (stills and video)' : ''}`, 'info', { after: Object.fromEntries(evidence) });
+    if (!keep) say('evidence', `Captured after-fix evidence${[...evidence.values()].some((e) => e.after_video) ? ' (stills and video)' : ''}`, 'info', { after: Object.fromEntries(evidence) });
 
     // Anything that keeps this fix from being fully trusted, in words a reviewer can act on.
     const flags = verificationFlags(selected, after, evidence, regressions);
@@ -360,7 +381,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       // GitHub itself once the branch is pushed (see attachImages below).
       let images: Map<string, string> | null = null;
       const bodyFile = join(assetsDir, 'pr-body.md');
-      const writeBody = () => writeFileSync(bodyFile, prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images, attempts: attempt, flags, manualOverride: !!o.publishUnverified, evidenceAt: Object.fromEntries([...evidence].map(([id, ev]) => [id, ev.at])) }));
+      const writeBody = () => writeFileSync(bodyFile, prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images, attempts: attempt, flags, manualOverride: !!o.publishUnverified && !verified, evidenceAt: Object.fromEntries([...evidence].map(([id, ev]) => [id, ev.at])) }));
       writeBody();
       const prArgs = ['pr', 'create', '--base', baseBranch, '--head', branch, '--title', `fix(ui): ${clip(title, 90)}`, '--body-file', bodyFile, ...(o.draft ? ['--draft'] : [])];
       // Publishing can fail for reasons unrelated to the fix (network, auth, GitHub limits). The verified commit is
@@ -375,7 +396,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         if (push.exitCode !== 0) throw new Error(`git push failed: ${push.stderr.trim()}`);
         const existing = (await execa('gh', ['pr', 'view', branch, '--json', 'url,state', '-q', 'select(.state == "OPEN") | .url'], { cwd: worktree, reject: false })).stdout.trim();
         const nwo = (await execa('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'], { cwd: worktree, reject: false })).stdout.trim();
-        images = await attachImages(nwo, existing || `https://github.com/${nwo}/compare/${encodeURIComponent(baseBranch)}...${encodeURIComponent(branch)}?expand=1`, selected, o.runDir, assetsDir, say);
+        images = await attachImages(nwo, existing || `https://github.com/${nwo}/compare/${encodeURIComponent(baseBranch)}...${encodeURIComponent(branch)}?expand=1`, selected, o.runDir, assetsDir, say, keep);
         writeBody();
         if (existing) {
           prUrl = existing;
@@ -395,7 +416,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         o.keepWorktree = true;
       }
     } else {
-      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images: null, attempts: attempt, flags, manualOverride: !!o.publishUnverified, evidenceAt: Object.fromEntries([...evidence].map(([id, ev]) => [id, ev.at])) }));
+      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images: null, attempts: attempt, flags, manualOverride: !!o.publishUnverified && !verified, evidenceAt: Object.fromEntries([...evidence].map(([id, ev]) => [id, ev.at])) }));
       say('commit', `Not pushed (no PR requested). PR description draft saved.`, 'info', { pr_body: relative(o.runDir, join(assetsDir, 'pr-body.md')) });
     }
 
@@ -407,7 +428,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       const isAlso = alsoFixed.includes(f.id);
       if (!isSel && !isAlso) continue;
       f.status = 'fixing';
-      f.fix = { branch, base: baseBranch, pr_url: prUrl, verified: isSel ? verified : true, fixed_by: isSel ? scopeLabel : `${scopeLabel} (side effect)`, job_id: rep.status.id, at: now, verification: evidence.get(f.id) ?? null, flags: isSel ? flags.filter((x) => x.startsWith(`${f.id}:`) || !/^BB-\d+:/.test(x)) : [], blocked: isSel && blocked, manual_after: null };
+      f.fix = { branch, base: baseBranch, pr_url: prUrl, verified: isSel ? verified : true, fixed_by: isSel ? scopeLabel : `${scopeLabel} (side effect)`, job_id: rep.status.id, at: now, verification: evidence.get(f.id) ?? null, flags: isSel ? flags.filter((x) => x.startsWith(`${f.id}:`) || !/^BB-\d+:/.test(x)) : [], blocked: isSel && blocked, manual_after: keep ? (f.fix?.manual_after ?? null) : null };
       memory.setBugStatus(f.fingerprint, 'fixing', info.run_id, f.id);
     }
     writeFindings(o.runDir, { run_id: fresh.run_id, target: fresh.target, generated_at: fresh.generated_at, groups: fresh.groups });
@@ -546,11 +567,16 @@ async function shrinkImages(dir: string) {
  * Before/after pictures hosted by GitHub (user-attachments, like dragging an image into a PR), so nothing is
  * committed. Needs a connected GitHub session; without one, or if GitHub refuses, the PR goes out without pictures.
  */
-async function attachImages(nwo: string, pageUrl: string, selected: Finding[], runDir: string, assetsDir: string, say: (stage: string, msg: string, level?: JobEvent['level']) => void) {
+async function attachImages(nwo: string, pageUrl: string, selected: Finding[], runDir: string, assetsDir: string, say: (stage: string, msg: string, level?: JobEvent['level']) => void, current = false) {
   if (!nwo) return null;
+  // current: the after picture the person reviewed (a manually chosen one first), not a freshly captured one.
+  const afterOf = (f: Finding) => {
+    const saved = f.fix?.manual_after?.path ?? f.fix?.verification?.after?.annotated;
+    return current && saved ? join(runDir, saved) : join(assetsDir, `${f.id}-after.png`);
+  };
   const files = selected.flatMap((f) => [
     ...(f.video?.gif ? [{ path: join(runDir, f.video.gif), name: `${f.id}-before.gif` }] : f.screenshots.annotated ? [{ path: join(runDir, f.screenshots.annotated), name: `${f.id}-before.png` }] : []),
-    { path: join(assetsDir, `${f.id}-after.png`), name: `${f.id}-after.png` },
+    ...(existsSync(afterOf(f)) ? [{ path: afterOf(f), name: `${f.id}-after.png` }] : []),
   ]);
   try {
     const { uploadToGitHub } = await import('./githubImages.js');
@@ -565,6 +591,12 @@ async function attachImages(nwo: string, pageUrl: string, selected: Finding[], r
 }
 
 /** Reasons a fix can't be fully trusted yet, one line each (prefixed with the bug id when it's about one bug). */
+/** A finding's saved verification as a check result (for publishing with the evidence the person reviewed). */
+export function savedResult(f: Finding): VerifyResult {
+  const v = f.fix?.verification;
+  return { id: f.id, verifiable: !!v?.checks.length, present: !v || v.result === 'inconclusive' ? null : v.result === 'present', method: v?.method ?? 'none', checks: v?.checks ?? [], review: v?.review ?? null, after: null };
+}
+
 export function verificationFlags(selected: Finding[], after: VerifyResult[], evidence: Map<string, FixVerification>, regressions: string[]): string[] {
   const out: string[] = [];
   for (const f of selected) {

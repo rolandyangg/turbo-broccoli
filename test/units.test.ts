@@ -521,3 +521,13 @@ describe('dev servers outlive no job', () => {
     expect(alive(pgid)).toBe(false);
   }, 60_000);
 });
+
+describe('publishing with the saved verification', () => {
+  it('turns a saved verification back into the check result the PR body shows', async () => {
+    const { savedResult } = await import('../src/fix/fixGroup.js');
+    const f = { id: 'BB-0001', fix: { verification: { result: 'inconclusive', method: 'visual-review', checks: [{ browser: 'webkit', width: 390, height: 844, present: null, error: null }], review: { fixed: true, confidence: 0.4, reasoning: 'unsure' }, after: null, after_video: null, at: 'now' } } } as never;
+    expect(savedResult(f)).toMatchObject({ id: 'BB-0001', present: null, method: 'visual-review', review: { confidence: 0.4 } });
+    const fixed = { id: 'BB-0002', fix: { verification: { result: 'fixed', method: 'detector', checks: [], review: null, after: null, after_video: null, at: 'now' } } } as never;
+    expect(savedResult(fixed).present).toBe(false);
+  });
+});

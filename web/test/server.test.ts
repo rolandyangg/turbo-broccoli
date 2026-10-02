@@ -470,3 +470,12 @@ describe('run deletion', () => {
     expect(existsSync(other)).toBe(true);
   });
 });
+
+describe('publish anyway with the current pictures', () => {
+  const fix = (body: unknown) => app.request(`/api/runs/${wsId}/${RUN}/fix`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  it('only keeps the pictures when publishing a continued fix anyway, without new instructions', async () => {
+    expect((await fix({ ids: ['BB-0001'], mode: 'continue', keepEvidence: true })).status).toBe(400);
+    expect((await fix({ ids: ['BB-0001'], mode: 'verify', pr: true, confirmPush: true, publishUnverified: true, confirmUnverified: true, keepEvidence: true })).status).toBe(400);
+    expect((await fix({ ids: ['BB-0001'], mode: 'continue', pr: true, confirmPush: true, publishUnverified: true, confirmUnverified: true, keepEvidence: true, instructions: 'change it' })).status).toBe(400);
+  });
+});

@@ -216,12 +216,13 @@ program
   .option('--verify [branch]', 'Only re-verify an existing fix branch (checks, visual review, after evidence); no agent, commit or push')
   .option('--instructions <text>', 'Your instructions for the fix agent (with --continue: re-steer it on the branch)')
   .option('--publish-unverified', 'With --pr: publish even if the fix is not fully verified (otherwise publishing is blocked)')
+  .option('--keep-evidence', 'With --continue --pr --publish-unverified: publish with the current before/after pictures and saved verification instead of re-checking first')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
   .action(async (ids: string[], o) => {
     const runDir = findRunDir(o);
     const { fixFindings } = await import('./fix/fixGroup.js');
     if ([o.retry, o.continue, o.verify].filter(Boolean).length > 1) throw new Error('Pick one of --retry, --continue, --verify');
-    await fixFindings({ mode: o.verify ? 'verify' : o.continue ? 'continue' : o.retry ? 'retry' : 'new', branch: typeof o.continue === 'string' ? o.continue : typeof o.verify === 'string' ? o.verify : null, instructions: o.instructions ?? null, publishUnverified: !!o.publishUnverified, runDir, ids: ids.map((x) => x.toUpperCase()), pr: !!o.pr, draft: !!o.draft, base: o.base, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
+    await fixFindings({ mode: o.verify ? 'verify' : o.continue ? 'continue' : o.retry ? 'retry' : 'new', branch: typeof o.continue === 'string' ? o.continue : typeof o.verify === 'string' ? o.verify : null, instructions: o.instructions ?? null, publishUnverified: !!o.publishUnverified, keepEvidence: !!o.keepEvidence, runDir, ids: ids.map((x) => x.toUpperCase()), pr: !!o.pr, draft: !!o.draft, base: o.base, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
   });
 
 program

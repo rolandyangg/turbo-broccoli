@@ -315,6 +315,8 @@ export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title,
   const [pr, setPr] = useState(anyway || !!opts.pr);
   const [confirmPush, setConfirmPush] = useState(false);
   const [confirmUnverified, setConfirmUnverified] = useState(false);
+  // Publishing anyway: keep the before/after pictures the person just reviewed (otherwise a pre-publish re-check replaces them).
+  const [keepEvidence, setKeepEvidence] = useState(true);
   const [attempts, setAttempts] = useState(Math.min(5, Math.max(1, opts.maxAttempts ?? 3)));
   const [instructions, setInstructions] = useState('');
   const [busy, setBusy] = useState(false);
@@ -333,7 +335,7 @@ export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title,
           maxAttempts: attempts,
           confirmPush: pr ? confirmPush : undefined,
           instructions: instructions.trim() || undefined,
-          ...(anyway ? { publishUnverified: true, confirmUnverified } : {}),
+          ...(anyway ? { publishUnverified: true, confirmUnverified, keepEvidence } : {}),
         },
       });
       toast(mode === 'verify' ? 'Re-verifying the fix' : anyway ? 'Publishing the unverified fix' : mode === 'continue' ? 'Continuing the fix' : 'Retrying the fix');
@@ -368,7 +370,7 @@ export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title,
           </>
         ) : anyway ? (
           <>
-            This fix is <b>not fully verified</b>. Publishing it anyway pushes <span className="mono">{branch}</span> and opens a PR with the automatic results and your reported manual verification noted in its Verification section.
+            This fix is <b>not fully verified</b>. Publishing it anyway pushes <span className="mono">{branch}</span> and opens a PR whose Verification section shows the automatic results and, under 👤 Manual verification, that you approved publishing it anyway.
           </>
         ) : mode === 'continue' ? (
           <>
@@ -397,6 +399,17 @@ export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title,
       {mode !== 'verify' && !anyway && (
         <label className="check">
           <input type="checkbox" checked={pr} onChange={(e) => setPr(e.target.checked)} /> <span>Push the branch and open a {opts.draft !== false ? 'draft ' : ''}pull request (only if it's fully verified)</span>
+        </label>
+      )}
+      {anyway && (
+        <label className="check">
+          <input type="checkbox" checked={keepEvidence} onChange={(e) => setKeepEvidence(e.target.checked)} />{' '}
+          <span>
+            Publish with the current before/after pictures
+            <span className="small muted" style={{ display: 'block' }}>
+              {keepEvidence ? 'The PR uses the pictures and verification results you see now (including an after screenshot you chose yourself). The branch is not re-checked first.' : 'Unticked: the branch is re-checked right before publishing, and new after pictures replace the current ones (a manually chosen after screenshot too).'}
+            </span>
+          </span>
         </label>
       )}
       {anyway && (

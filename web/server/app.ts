@@ -131,8 +131,10 @@ app.get('/runs/:ws/:run/files/*', (c) => {
 // ---------- actions ----------
 app.post('/runs/:ws/:run/fix', async (c) => {
   const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
-  const b = await c.req.json<{ ids: string[]; pr?: boolean; draft?: boolean; base?: string; maxAttempts?: number; keepWorktree?: boolean; confirmPush?: boolean; mode?: string; branch?: string; instructions?: string; publishUnverified?: boolean; confirmUnverified?: boolean }>();
+  const b = await c.req.json<{ ids: string[]; pr?: boolean; draft?: boolean; base?: string; maxAttempts?: number; keepWorktree?: boolean; confirmPush?: boolean; mode?: string; branch?: string; instructions?: string; publishUnverified?: boolean; confirmUnverified?: boolean; keepEvidence?: boolean }>();
   if (b.publishUnverified && !(b.pr && b.confirmUnverified)) throw new HttpError(400, 'Publishing an unverified fix needs pr and an explicit confirmUnverified');
+  if (b.keepEvidence && !(b.publishUnverified && b.mode === 'continue')) throw new HttpError(400, 'keepEvidence only applies when publishing a continued fix anyway');
+  if (b.keepEvidence && b.instructions?.trim()) throw new HttpError(400, "Instructions change the fix, so its pictures can't be kept");
   if (b.mode !== undefined && !['new', 'retry', 'continue', 'verify'].includes(b.mode)) throw new HttpError(400, 'mode must be new, retry, continue or verify');
   if (b.instructions !== undefined && (typeof b.instructions !== 'string' || b.instructions.length > 4000)) throw new HttpError(400, 'instructions must be text (4000 characters max)');
   if (b.branch !== undefined && !/^bugbash\/[\w./-]+$/.test(b.branch)) throw new HttpError(400, 'Bad branch (must be a bugbash/… branch)');
@@ -154,7 +156,8 @@ app.post('/runs/:ws/:run/fix', async (c) => {
   if (b.mode === 'verify') args.push('--verify', ...(b.branch ? [b.branch] : []));
   if (b.instructions?.trim()) args.push('--instructions', b.instructions.trim());
   if (b.publishUnverified) args.push('--publish-unverified');
-  return c.json(launchJob('fix', args, { run_dir: dir, finding_ids: ids, scope: ids.join(','), branch: b.mode === 'continue' ? (b.branch ?? null) : null, options: { pr: !!b.pr, draft: b.draft !== false, base: b.base ?? null, mode: b.mode ?? 'new', branch: b.branch ?? null, instructions: b.instructions?.trim() || null } }), 202);
+  if (b.keepEvidence) args.push('--keep-evidence');
+  return c.json(launchJob('fix', args, { run_dir: dir, finding_ids: ids, scope: ids.join(','), branch: b.mode === 'continue' ? (b.branch ?? null) : null, options: { pr: !!b.pr, draft: b.draft !== false, base: b.base ?? null, mode: b.mode ?? 'new', branch: b.branch ?? null, instructions: b.instructions?.trim() || null, publishUnverified: !!b.publishUnverified, keepEvidence: !!b.keepEvidence } }), 202);
 });
 
 app.get('/github', async (c) => c.json(await githubStatus(c.req.query('fresh') === '1')));
