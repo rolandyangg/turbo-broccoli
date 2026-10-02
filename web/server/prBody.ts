@@ -84,7 +84,9 @@ export async function updatePrBody(b: { ws?: string; run?: string; url?: string;
     const diff = (await execa('gh', ['pr', 'diff', b.url, '--patch'])).stdout;
     const explanation = await explainChanges({ diff, stats, findings: selected, groups, agentSummary: '', provider: config.provider, model: config.model, transcriptPath: join(assetsDir, 'refresh-explain.jsonl') });
     const technical = technicalSection(explanation, stats, selected.map((f) => f.title).join('; '));
-    const body = prBody({ selected, groups, before, after, verified, flags, technical, images, runId: info.run_id, attempts: 0, evidenceAt: Object.fromEntries(selected.filter((f) => f.fix?.verification).map((f) => [f.id, f.fix!.verification!.at])), regressions: [], alsoFixed, manualVerified: b.manuallyVerified === true, manualOverride: branchJobs.some((j) => j.pr_url === b.url && j.options.publishUnverified === true) });
+    const publishedAnyway = branchJobs.some((j) => j.pr_url === b.url && j.options.publishUnverified === true);
+    const manualVerified = b.manuallyVerified === true;
+    const body = prBody({ selected, groups, before, after, verified, flags, technical, images, runId: info.run_id, attempts: 0, evidenceAt: Object.fromEntries(selected.filter((f) => f.fix?.verification).map((f) => [f.id, f.fix!.verification!.at])), regressions: [], alsoFixed, manualVerified, manualOverride: !verified && publishedAnyway });
     // Avoid overwriting if another process pushed while evidence/description were being prepared.
     const current = JSON.parse((await execa('gh', ['pr', 'view', b.url, '--json', 'headRefOid,state'])).stdout);
     if (current.headRefOid !== pr.headRefOid || current.state !== 'OPEN') throw new HttpError(409, 'The PR changed during refresh. Try again');
@@ -92,7 +94,7 @@ export async function updatePrBody(b: { ws?: string; run?: string; url?: string;
     writeFileSync(file, body);
     await execa('gh', ['pr', 'edit', b.url, '--body-file', file]);
     writeFileSync(join(assetsDir, 'pr-body.md'), body);
-    writeFileSync(join(assetsDir, 'pr-body-approval.json'), JSON.stringify({ pr_url: b.url, head_commit: pr.headRefOid, manually_verified: b.manuallyVerified === true, approved_at: new Date().toISOString() }, null, 2));
+    writeFileSync(join(assetsDir, 'pr-body-approval.json'), JSON.stringify({ pr_url: b.url, head_commit: pr.headRefOid, manually_verified: manualVerified, approved_at: new Date().toISOString() }, null, 2));
     return { ok: true, images: images.size };
   } finally {
     updating = false;

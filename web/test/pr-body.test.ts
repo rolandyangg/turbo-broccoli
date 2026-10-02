@@ -81,27 +81,43 @@ describe('refresh PR body', () => {
     await update();
     let body = readFileSync(join(dir, 'fixes/bugbash__nav/pr-body.md'), 'utf8');
     expect(body).toContain('Firefox verification did not complete');
-    expect(body).not.toContain('manual approval');
+    expect(body).not.toContain("user's explicit approval");
     job.options = { publishUnverified: true };
     await update();
     body = readFileSync(join(dir, 'fixes/bugbash__nav/pr-body.md'), 'utf8');
     expect(body).not.toContain('the user reports manually verifying the fix');
-    expect(body).toContain('explicit manual approval by the user');
+    expect(body).toContain("⚠️ Published despite incomplete automatic verification, with the user's explicit approval.");
+    expect(body).toContain('### 👤 Manual verification');
     expect(body).not.toContain('[!WARNING]');
     expect(body).toMatch(/^## Summary/);
-    expect(body).toContain('### 🤖 Automated verification results');
+    expect(body).toContain('### 🤖 Automated verification');
     expect(body).toContain('Please see the results below.');
     expect(body.indexOf('Firefox verification did not complete')).toBeGreaterThan(body.indexOf('## Verification'));
   });
   it('adds manual verification only when explicitly confirmed on this update', async () => {
     await updatePrBody({ ws: 'ws', run: 'run', url, manuallyVerified: true });
     let body = readFileSync(join(dir, 'fixes/bugbash__nav/pr-body.md'), 'utf8');
-    expect(body).toContain('✅ Manual verification: the user reports manually verifying the fix');
-    expect(body.indexOf('Manual verification:')).toBeGreaterThan(body.indexOf('## Verification'));
+    expect(body).toContain('### 👤 Manual verification');
+    expect(body).toContain('✅ The user reports manually verifying the fix');
+    expect(body.indexOf('👤 Manual verification')).toBeGreaterThan(body.indexOf('🤖 Automated verification'));
     await update();
     body = readFileSync(join(dir, 'fixes/bugbash__nav/pr-body.md'), 'utf8');
-    expect(body).not.toContain('Manual verification:');
+    expect(body).not.toContain('Manual verification');
     await expect(updatePrBody({ ws: 'ws', run: 'run', url, manuallyVerified: 'yes' as any })).rejects.toThrow('must be true or false');
+  });
+  it('uses the same verification layout as a fix job publishing the PR', async () => {
+    const { prBody } = await import('../../src/fix/prBody.ts');
+    const common = { selected: [finding], groups: [], alsoFixed: [], before: [], regressions: [], technical: { summary: 's', technical: 't' }, runId: 'run', images: null, attempts: 1 };
+    const fromFix = prBody({ ...common, after: [], verified: false, flags: ['BB-0001: no after-fix screenshot'], manualOverride: true });
+    await updatePrBody({ ws: 'ws', run: 'run', url, manuallyVerified: true });
+    const refreshed = readFileSync(join(dir, 'fixes/bugbash__nav/pr-body.md'), 'utf8');
+    for (const tag of ['## Verification', '### 🤖 Automated verification']) {
+      expect(fromFix).toContain(tag);
+      expect(refreshed).toContain(tag);
+    }
+    expect(fromFix).toContain('⚠️ Automatic verification was not fully complete');
+    expect(fromFix).toContain("### 👤 Manual verification\n\n⚠️ Published despite incomplete automatic verification, with the user's explicit approval.");
+    expect(refreshed).toContain('### 👤 Manual verification\n\n✅ The user reports manually verifying the fix');
   });
   it.each(['unpublished', 'dirty', 'running', 'closed', 'unknown'])('rejects %s before changing the body', async (reason) => {
     if (reason === 'unpublished') head = 'new-local';
