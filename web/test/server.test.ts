@@ -409,3 +409,64 @@ describe('improvement pull requests', () => {
     expect((await post('/improvements/prs/close', { url: 'https://github.com/a/b/pull/1' })).status).toBe(404);
   });
 });
+
+
+describe('run deletion', () => {
+  const remove = (run: string, body: unknown = { confirm: true }) => app.request(`/api/runs/${wsId}/${encodeURIComponent(run)}`, {
+    method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const makeRun = (run: string) => {
+    const dir = join(ws, 'runs', run);
+    mkdirSync(join(dir, 'videos'), { recursive: true });
+    writeFileSync(join(dir, 'run.json'), JSON.stringify({ run_id: run, target: 'test', started_at: '2026-01-01', jobs: [] }));
+    writeFileSync(join(dir, 'videos', 'test.mp4'), 'video');
+    return dir;
+  };
+  it('requires confirmation and removes only the selected run and its history', async () => {
+    const { existsSync } = await import('node:fs');
+    const run = 'delete-completed';
+    const dir = makeRun(run);
+    const other = makeRun('delete-keep');
+    const history = join(jobsDir, 'delete-history');
+    mkdirSync(history, { recursive: true });
+    writeFileSync(join(history, 'status.json'), JSON.stringify({ id: 'delete-history', run_dir: dir, state: 'done', finding_ids: [], started_at: 'now' }));
+    writeFileSync(join(history, 'log.txt'), 'history');
+    mkdirSync(join(ws, 'improvements'), { recursive: true });
+    const proposals = join(ws, 'improvements', `${run}.json`);
+    writeFileSync(proposals, JSON.stringify({ run, proposals: [] }));
+    expect((await remove(run, {})).status).toBe(400);
+    expect((await remove(run, { confirm: 'true' })).status).toBe(400);
+    expect(existsSync(dir)).toBe(true);
+    expect((await remove(run)).status).toBe(200);
+    expect(existsSync(dir)).toBe(false);
+    expect(existsSync(history)).toBe(false);
+    expect(existsSync(proposals)).toBe(false);
+    expect(existsSync(other)).toBe(true);
+    expect(existsSync(join(ws, 'memory', 'secret.txt'))).toBe(true);
+    expect((await get(`/runs/${wsId}/${run}`)).status).toBe(404);
+    expect((await get('/runs')).status).toBe(200);
+    expect((await remove(run)).status).toBe(404);
+  });
+  it('blocks active jobs and running campaigns without deleting anything', async () => {
+    const { existsSync } = await import('node:fs');
+    const dir = makeRun('delete-active');
+    const history = join(jobsDir, 'delete-active-job');
+    mkdirSync(history, { recursive: true });
+    writeFileSync(join(history, 'status.json'), JSON.stringify({ id: 'delete-active-job', run_dir: dir, state: 'running', pid: process.pid, finding_ids: [], started_at: 'now' }));
+    expect((await remove('delete-active')).status).toBe(409);
+    expect(existsSync(dir)).toBe(true);
+    expect(existsSync(history)).toBe(true);
+    const campaign = makeRun('delete-campaign');
+    writeFileSync(join(campaign, 'campaign.json'), JSON.stringify({ phase: 'running' }));
+    expect((await remove('delete-campaign')).status).toBe(409);
+    expect(existsSync(campaign)).toBe(true);
+  });
+  it('rejects traversal and symlinked run directories', async () => {
+    const { symlinkSync, existsSync } = await import('node:fs');
+    const other = makeRun('delete-symlink-target');
+    symlinkSync(other, join(ws, 'runs', 'delete-link'));
+    expect((await remove('delete-link')).status).toBe(403);
+    expect((await remove('../memory')).status).toBe(400);
+    expect(existsSync(other)).toBe(true);
+  });
+});

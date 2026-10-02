@@ -18,7 +18,7 @@ import { STRATEGIES } from '../../src/explore/strategies.ts';
 import { listPresets, getPreset, savePreset, deletePreset, DEFAULT_PRESET } from '../../src/presets.ts';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { workspaces, workspaceById, runDirOf, addWorkspace, HttpError } from './workspaces.ts';
-import { listAllRuns, runDetail, transcriptFor, findFinding, sessionTail } from './runs.ts';
+import { deleteRun, listAllRuns, runDetail, transcriptFor, findFinding, sessionTail } from './runs.ts';
 import { safePath, fileResponse } from './files.ts';
 import { listJobs, getJob, followupJob, launchJob, cancelJob, readEvents, CLI, REPO_ROOT, WEB_JOBS } from './jobs.ts';
 import { branchInfo } from './git.ts';
@@ -71,6 +71,13 @@ app.get('/runs/:ws/:run', (c) => {
   const w = workspaceById(c.req.param('ws'));
   runDirOf(w.id, c.req.param('run'));
   return c.json(runDetail(w.id, w.path, c.req.param('run')));
+});
+
+app.delete('/runs/:ws/:run', async (c) => {
+  const body = await c.req.json<{ confirm?: unknown }>().catch(() => ({ confirm: undefined }));
+  if (body.confirm !== true) throw new HttpError(400, 'Confirm permanent deletion of all run data and history.');
+  deleteRun(c.req.param('ws'), c.req.param('run'));
+  return c.json({ deleted: true });
 });
 
 app.post('/runs/:ws/:run/rename', async (c) => {

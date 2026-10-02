@@ -1,11 +1,40 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { readRun, readFindings, allFindings, type RunInfo } from '../../src/store/store.ts';
 import { mergeAll, summarize } from '../../src/explore/coverage.ts';
 import { Config } from '../../src/config.ts';
 import { categoryOf, type Finding, type FindingsFile } from '../../src/store/schema.ts';
-import { workspaces, readJsonSafe, mtime, HttpError } from './workspaces.ts';
-import { listJobs } from './jobs.ts';
+import { workspaces, readJsonSafe, mtime, HttpError, runDirOf, workspaceById, samePath } from './workspaces.ts';
+import { jobRoots, listJobs } from './jobs.ts';
+
+/** Delete only run-owned artifacts; shared memory and source repositories stay intact. */
+export function deleteRun(ws: string, run: string) {
+  if (run === '.' || run === '..') throw new HttpError(400, 'Bad run id');
+  const dir = runDirOf(ws, run);
+  const workspace = workspaceById(ws);
+  if (lstatSync(dir).isSymbolicLink() || dirname(realpathSync(dir)) !== realpathSync(join(workspace.path, 'runs'))) {
+    throw new HttpError(403, 'Run directory is outside this workspace');
+  }
+  if (isLive(dir, listJobs({ runDir: dir }))) {
+    throw new HttpError(409, 'Stop all active jobs for this run before deleting it.');
+  }
+  // Scan every record, including duplicate job IDs in different job roots.
+  const histories = jobRoots().flatMap((root) => readdirSync(root).flatMap((id) => {
+    const path = join(root, id);
+    const status = readJsonSafe<{ run_dir?: string; state?: string; pid?: number } | null>(join(path, 'status.json'), null);
+    if (!samePath(status?.run_dir, dir)) return [];
+    if (status?.state === 'running' && status.pid) {
+      let alive = false;
+      try { process.kill(status.pid, 0); alive = true; } catch {}
+      if (alive) throw new HttpError(409, 'Stop all active jobs for this run before deleting it.');
+    }
+    return [path];
+  }));
+  for (const history of histories) rmSync(history, { recursive: true, force: true });
+  const proposals = join(workspace.path, 'improvements', `${run}.json`);
+  if (readJsonSafe<{ run?: string } | null>(proposals, null)?.run === run) rmSync(proposals);
+  rmSync(dir, { recursive: true });
+}
 
 export const isFunctional = (f: Pick<Finding, 'type' | 'category'>) => (f.category ?? categoryOf(f.type)) === 'ux-functional';
 

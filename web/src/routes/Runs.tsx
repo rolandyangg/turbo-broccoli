@@ -6,6 +6,7 @@ import { ago, targetName } from '../lib/format.ts';
 import { Arrow, Box, Chamfer, Chip, ErrorBox, FileIcon, Loading, Section, useToast } from '../components/ui.tsx';
 import { LauncherDialog } from '../components/Launcher.tsx';
 import { RunName } from '../components/RunName.tsx';
+import { DeleteRun } from '../components/DeleteRun.tsx';
 
 export function Runs() {
   const { data, error, reload } = useApi<RunSummary[]>('/runs', { pollMs: 8000 });
@@ -49,7 +50,7 @@ export function Runs() {
         <Section key={target} kicker={`${runs[0].target_kind} · ${runs.length} run${runs.length > 1 ? 's' : ''}`} title={targetName(target)} meta={<span className="mono small muted">{runs[0].repo_path ?? runs[0].base_url}</span>}>
           <div className="grid-auto">
             {runs.map((r) => (
-              <RunCard key={r.ws + r.run} r={r} />
+              <RunCard key={r.ws + r.run} r={r} onDeleted={() => void reload()} />
             ))}
           </div>
         </Section>
@@ -77,7 +78,7 @@ export function Runs() {
   );
 }
 
-function RunCard({ r }: { r: RunSummary }) {
+function RunCard({ r, onDeleted }: { r: RunSummary; onDeleted: () => void }) {
   const sev = r.counts.by_severity;
   const href = `/runs/${r.ws}/${encodeURIComponent(r.run)}`;
   return (
@@ -132,6 +133,9 @@ function RunCard({ r }: { r: RunSummary }) {
           </p>
         )}
       </Link>
+      <div className="row" style={{ justifyContent: 'flex-end', marginTop: 12 }}>
+        <DeleteRun ws={r.ws} run={r.run} name={r.name} live={r.live} onDeleted={onDeleted} />
+      </div>
     </Box>
   );
 }

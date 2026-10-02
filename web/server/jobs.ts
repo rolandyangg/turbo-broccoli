@@ -30,7 +30,7 @@ function alive(pid: number) {
 }
 
 /** Every jobs/ folder we know about: web-launched, per-workspace (explore), per-run (fix/triage from the CLI). */
-function jobRoots(): string[] {
+export function jobRoots(): string[] {
   const roots = [WEB_JOBS];
   for (const w of workspaces()) {
     roots.push(join(w.path, 'jobs'));

@@ -9,6 +9,7 @@ import { FixDialog } from '../components/Actions.tsx';
 import { JobsTable } from '../components/Jobs.tsx';
 import { DashboardView } from './Dashboard.tsx';
 import { RunName } from '../components/RunName.tsx';
+import { DeleteRun } from '../components/DeleteRun.tsx';
 import { RetroButton } from './Improvements.tsx';
 import { PrList } from '../components/PrList.tsx';
 import { WF_LABEL, isArchived, updateWorkflow, wfStateOf, type WfState } from '../components/Workflow.tsx';
@@ -107,6 +108,7 @@ export function Run() {
               {s.triaged ? 'Re-triage' : 'Triage now'}
             </button>
             <RetroButton ws={ws} run={run} triaged={s.triaged} />
+            <DeleteRun ws={ws} run={run} name={data.run.name} live={s.live} onDeleted={() => nav('/runs')} />
             {s.triaged && (
               <Link className="btn-ghost" to={`/compare?b=${ws}/${encodeURIComponent(run)}`}>
                 Compare…
