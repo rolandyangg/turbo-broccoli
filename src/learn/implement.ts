@@ -100,6 +100,12 @@ export async function implementBacklogItems(o: BatchOptions) {
   for (let n = 2; await branchExists(branch); n++) branch = `${branch.replace(/-\d+$/, '')}-${n}`;
   const worktree = join(dirname(repo), `${basename(repo)}-improve-worktrees`, branch.replace(/\//g, '__'));
   for (const it of items) updateBacklogItem(o.ws, it.id, { status: 'implementing', branch, job_id: rep.status.id, error: null });
+  // Cancelled from the web app: items not finished yet go back to open (not "implementing" forever).
+  process.once('SIGTERM', () => {
+    for (const it of items) if (!done.includes(it)) updateBacklogItem(o.ws, it.id, { status: 'open', branch: null, job_id: null, error: null });
+    rep.finish('cancelled', { error: 'cancelled' });
+    process.exit(143);
+  });
   const done: BacklogItem[] = [];
   const failed: { item: BacklogItem; error: string }[] = [];
   const summaries: { item: BacklogItem; summary: string }[] = [];
