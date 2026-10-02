@@ -854,6 +854,35 @@
     return out;
   }
 
+  // ---------- primary content landmarks ----------
+  // Not a detect() check: the viewport sweep compares these across widths (missingLandmarks in detect/index.ts).
+  const CTA = 'a.button, a[href*=apply]';
+  /** Why a landmark can't be seen (absent, zero-size, display:none, visibility:hidden, opacity 0, off-screen), or null. */
+  function landmarkHidden(el) {
+    if (!el) return 'absent';
+    for (let p = el; p && p !== document.documentElement; p = p.parentElement) {
+      const s = cs(p);
+      if (s.display === 'none') return 'display:none';
+      if (Number(s.opacity) === 0) return 'opacity 0';
+    }
+    if (cs(el).visibility === 'hidden' || cs(el).visibility === 'collapse') return 'visibility:hidden';
+    const r = rectOf(el);
+    if (r.width < 1 || r.height < 1) return 'zero size';
+    if (r.right <= 0 || r.left >= innerWidth || r.bottom + scrollY <= 0) return 'outside the viewport';
+    return null;
+  }
+  /** The first h1, the primary CTA and the hero form, each with the reason it is hidden (null when shown). */
+  function landmarks() {
+    const h1 = document.querySelector('h1');
+    const hero = document.querySelector('[class*=hero i]') || (h1 && h1.closest('section, header, main'));
+    const items = [
+      ['h1', 'Main heading (h1)', h1],
+      ['cta', 'Primary call-to-action', (hero && hero.querySelector(CTA)) || document.querySelector(CTA)],
+      ['form', 'Hero form', hero ? hero.querySelector('form') : null],
+    ];
+    return items.map(([key, label, el]) => ({ key, label, hidden: landmarkHidden(el), selector: el ? selectorFor(el) : null, text: el ? textOf(el) : '', bbox: el ? r2(rectOf(el)) : { x: 0, y: 0, width: 0, height: 0 }, signature: el ? signatureOf(el) : '' }));
+  }
+
   // ---------- layout shift tracking ----------
   // Chromium: PerformanceObserver layout-shift entries. Only pointer input discounts a shift (a Tab keypress
   // near a timer-driven shift must not hide it). WebKit/Firefox: sample element positions for the first seconds.
@@ -1046,5 +1075,5 @@
     return allElements().filter((e) => isVisible(e) && signatureOf(e) === signature).slice(0, 50).map((e) => ({ selector: selectorFor(e), text: textOf(e), bbox: r2(rectOf(e)) }));
   }
 
-  window.__bugbash = { version: 1, detect, detectFocus, flipFaces, selectorFor, signatureOf, interactives, domHash, elementInfo, findBySignature, drawBox, caption, ring, clearOverlay, shifts, resetShifts: () => (shifts.length = 0) };
+  window.__bugbash = { version: 1, detect, detectFocus, flipFaces, landmarks, selectorFor, signatureOf, interactives, domHash, elementInfo, findBySignature, drawBox, caption, ring, clearOverlay, shifts, resetShifts: () => (shifts.length = 0) };
 })();

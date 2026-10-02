@@ -74,6 +74,59 @@ export async function runDetectors(page: Page, opts: DetectOptions = {}): Promis
   return [...best.values()].sort((a, b) => b.confidence - a.confidence);
 }
 
+export interface Landmark {
+  key: string;
+  label: string;
+  /** Why it can't be seen at this width (absent, display:none, …), or null when shown. */
+  hidden: string | null;
+  selector: string | null;
+  text: string;
+  bbox: BBox;
+  signature: string;
+}
+
+/** The page's primary content (first h1, primary CTA, hero form) and whether each is shown at the current width. */
+export async function landmarks(page: Page): Promise<Landmark[]> {
+  await ensureDetectors(page);
+  return (await page.evaluate('window.__bugbash.landmarks()')) as Landmark[];
+}
+
+/**
+ * Primary content shown at one sweep width but missing at a neighbouring one (within `near` px): a 'broken-state'
+ * candidate per landmark, with the widths where it is missing.
+ */
+export function missingLandmarks(rows: { width: number; marks: Landmark[] }[], near = 100): { candidate: Candidate; widths: number[] }[] {
+  const out: { candidate: Candidate; widths: number[] }[] = [];
+  const keys = [...new Set(rows.flatMap((r) => r.marks.map((m) => m.key)))];
+  for (const key of keys) {
+    const at = rows.map((r) => ({ width: r.width, m: r.marks.find((m) => m.key === key) })).filter((a): a is { width: number; m: Landmark } => !!a.m);
+    const shown = at.filter((a) => !a.m.hidden);
+    const missing = at.filter((a) => a.m.hidden && shown.some((s) => Math.abs(s.width - a.width) <= near));
+    if (!missing.length) continue;
+    const widths = missing.map((a) => a.width).sort((a, b) => a - b);
+    const neighbours = [...new Set(shown.filter((s) => missing.some((a) => Math.abs(s.width - a.width) <= near)).map((s) => s.width))].sort((a, b) => a - b);
+    const ref = shown.find((s) => s.width === neighbours[0])!.m;
+    const why = [...new Set(missing.map((a) => a.m.hidden))].join(', ');
+    const range = widths.length > 1 ? `${widths[0]}–${widths[widths.length - 1]}px` : `${widths[0]}px`;
+    const bbox = missing.find((a) => a.m.selector)?.m.bbox ?? ref.bbox;
+    out.push({
+      widths,
+      candidate: {
+        type: 'broken-state',
+        selector: ref.selector,
+        text: ref.text,
+        bbox,
+        signature: ref.signature,
+        confidence: 0.8,
+        message: `${ref.label} "${ref.text.slice(0, 40)}" is missing at ${range} (${why}) but shown at ${neighbours.join(', ')}px.`,
+        metrics: { landmark: key, hidden_reason: why, widths, shown_widths: neighbours, width_range: [widths[0], widths[widths.length - 1]] },
+        related: null,
+      },
+    });
+  }
+  return out;
+}
+
 /**
  * Turned-away flip-card faces should not be painted (backface-visibility: hidden), but some engines draw them
  * anyway, mirrored (e.g. Safari inside scrolling or will-change containers). The page's styles can't reveal that, so

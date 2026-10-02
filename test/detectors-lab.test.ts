@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, webkit, devices, type Browser, type BrowserContextOptions, type Page } from 'playwright';
 import { resolveTarget, type ResolvedTarget } from '../src/target/resolve.js';
-import { installDetectors, runDetectors, settle, type Candidate } from '../src/detect/index.js';
+import { installDetectors, runDetectors, settle, landmarks, missingLandmarks, type Candidate, type Landmark } from '../src/detect/index.js';
 
 // Seeded fixture for the focus, overlay, touch and visual-polish detectors (fixtures/detector-lab).
 let target: ResolvedTarget;
@@ -142,6 +142,39 @@ describe('visual polish detectors', () => {
     });
     expect(has(c, 'low-contrast', /faint/)).toBe(true);
     expect(has(c, 'low-contrast', /ok-text/)).toBe(false);
+  });
+});
+
+describe('primary content across widths', () => {
+  // What sweep_viewports does: read the landmarks at each width, then compare neighbouring widths.
+  async function sweep(path: string, widths: number[]) {
+    const ctx = await cr.newContext(DESKTOP);
+    await installDetectors(ctx);
+    const page = await ctx.newPage();
+    await page.goto(target.baseUrl + path);
+    await settle(page, 50);
+    const rows: { width: number; marks: Landmark[] }[] = [];
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 800 });
+      rows.push({ width, marks: await landmarks(page) });
+    }
+    await ctx.close();
+    return missingLandmarks(rows);
+  }
+  const WIDTHS = [1024, 1100, 1180, 1280, 1440];
+
+  it('LAB-H1: flags the hero heading, CTA and form vanishing at a width where neighbours show them', async () => {
+    const found = await sweep('/hero.html', WIDTHS);
+    expect(found.map((f) => f.candidate.metrics.landmark).sort()).toEqual(['cta', 'form', 'h1']);
+    for (const f of found) {
+      expect(f.candidate.type).toBe('broken-state');
+      expect(f.widths).toEqual([1180]);
+      expect(f.candidate.message).toMatch(/1180px \(display:none\).*1100, 1280px/);
+    }
+  });
+
+  it('does not flag a hero that is shown at every width', async () => {
+    expect(await sweep('/hero.html#good', WIDTHS)).toEqual([]);
   });
 });
 

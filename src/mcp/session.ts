@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Driver } from '../replay/driver.js';
-import { ensureDetectors, runDetectors, settle, temporalSignals, type Candidate } from '../detect/index.js';
+import { ensureDetectors, runDetectors, settle, temporalSignals, landmarks, missingLandmarks, type Candidate, type Landmark } from '../detect/index.js';
 import { Coverage, mergeAll, pageKey, summarize } from '../explore/coverage.js';
 import { STRATEGIES, STRATEGY_IDS } from '../explore/strategies.js';
 import { DEVICE_PROFILES, deviceById, deviceContextOptions } from '../explore/devices.js';
@@ -498,6 +498,7 @@ export class BrowserSession {
     const height = opts.height ?? this.driver.viewport.height;
     const orig = { ...this.driver.viewport };
     const agg = new Map<string, { ids: string[]; widths: number[]; c: Candidate }>();
+    const marks: { width: number; marks: Landmark[] }[] = [];
     for (const w of widths) {
       await this.driver.resize(w, height);
       this.coverage.width(this.driver.path(), w, height);
@@ -510,6 +511,18 @@ export class BrowserSession {
         if (c.confidence > a.c.confidence) a.c = c;
         agg.set(key, a);
       }
+      const m = await landmarks(this.page).catch(() => null);
+      if (m) marks.push({ width: w, marks: m });
+    }
+    // Hero heading / CTA / form shown at one width but gone at a neighbouring one.
+    for (const { candidate: c, widths: ws } of missingLandmarks(marks)) {
+      if (c.confidence < (opts.minConfidence ?? 0.4)) continue;
+      const ids = ws.map((w) => {
+        const id = `c${++this.candCounter}`;
+        this.candidates.set(id, { id, candidate: c, viewport: { width: w, height }, variant: { ...this.driver.variant }, path: this.driver.path(), traceLength: this.trace.length });
+        return id;
+      });
+      agg.set(`${c.type}|${c.selector}|${c.metrics.landmark}`, { ids, widths: ws, c });
     }
     await this.driver.resize(orig.width, orig.height);
     this.tagStrategy('size.sweep');
