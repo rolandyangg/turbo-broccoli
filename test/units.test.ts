@@ -6,6 +6,7 @@ import { scanRepo } from '../src/explore/codeIntel.js';
 import { pageKey } from '../src/explore/coverage.js';
 import { tryParseJson } from '../src/llm/claude.js';
 import { RawFinding, Variant, type Step } from '../src/store/schema.js';
+import { cleanHtmlUrl, resolveTarget } from '../src/target/resolve.js';
 
 const raw = (o: Partial<RawFinding> & { selector: string; width: number; session?: string; related?: string }) =>
   RawFinding.parse({
@@ -444,6 +445,29 @@ describe('improvement checks', () => {
       expect(env.PATH).toBe(process.env.PATH);
     } finally {
       delete process.env.BUGBASH_JOB_DIR;
+    }
+  });
+});
+
+describe('static target server', () => {
+  it('rewrites .html URLs internally instead of redirecting away the query', () => {
+    expect(cleanHtmlUrl('/focus.html?ok=1')).toBe('/focus?ok=1');
+    expect(cleanHtmlUrl('/anchor.html#terms')).toBe('/anchor#terms');
+    expect(cleanHtmlUrl('/index.html?x')).toBe('/?x');
+    expect(cleanHtmlUrl('/a/index.html')).toBe('/a/');
+    expect(cleanHtmlUrl('/style.css?v=2')).toBe('/style.css?v=2');
+  });
+
+  it('serves page.html?query with a 200 and keeps the query', async () => {
+    const t = await resolveTarget('fixtures/detector-lab');
+    try {
+      const r = await fetch(`${t.baseUrl}/focus.html?ok=1`, { redirect: 'manual' });
+      expect(r.status).toBe(200);
+      expect(await r.text()).toContain('<');
+      const i = await fetch(`${t.baseUrl}/index.html?x=1`, { redirect: 'manual' });
+      expect(i.status).toBe(200);
+    } finally {
+      await t.stop();
     }
   });
 });

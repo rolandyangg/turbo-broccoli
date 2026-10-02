@@ -62,7 +62,10 @@ export async function resolveTarget(input: string, opts: ResolveOptions = {}): P
 
   const root = findStaticRoot(dir);
   const port = await getPort();
-  const server: Server = createServer((req, res) => handler(req, res, { public: root, directoryListing: false }));
+  const server: Server = createServer((req, res) => {
+    req.url = cleanHtmlUrl(req.url ?? '/');
+    return handler(req, res, { public: root, directoryListing: false });
+  });
   await new Promise<void>((r) => server.listen(port, '127.0.0.1', () => r()));
   log(`Serving ${root} at http://127.0.0.1:${port}`);
   return {
@@ -116,4 +119,17 @@ function killTree(child: ResultPromise) {
 
 function stripSlash(u: string) {
   return u.replace(/\/+$/, '');
+}
+
+/**
+ * serve-handler answers `/page.html?x=1` with a 301 to `/page` and drops the query (and with it any state a test page
+ * reads from it). Rewrite to the clean URL internally instead, so the page is served as requested.
+ */
+export function cleanHtmlUrl(url: string): string {
+  const i = url.search(/[?#]/);
+  const path = i < 0 ? url : url.slice(0, i);
+  const rest = i < 0 ? '' : url.slice(i);
+  if (/(^|\/)index\.html$/.test(path)) return path.replace(/index\.html$/, '') + rest;
+  if (path.endsWith('.html')) return path.slice(0, -5) + rest;
+  return url;
 }
