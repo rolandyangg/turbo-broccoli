@@ -193,5 +193,22 @@ describe('section collisions and hidden faces', () => {
     const c = await at('/sections.html');
     expect(has(c, 'text-overflow', /back/)).toBe(false);
     expect(c.some((x) => x.type === 'mirrored-text')).toBe(false);
+    expect(has(c, 'broken-state', /back|Front side/)).toBe(false);
+  });
+
+  it('LAB-B1/B2: flags a mirrored flip-card face and two faces showing at once, from computed styles (WebKit and Chromium)', async () => {
+    for (const browser of [wk, cr]) {
+      const c = await at('/flip.html', DESKTOP, undefined, browser);
+      expect(c.find((x) => x.type === 'broken-state' && x.selector === '#mirrored-back')?.metrics.mirrored_face).toBe(true);
+      expect(c.find((x) => x.type === 'broken-state' && x.selector === '#double')?.metrics.both_faces_visible).toBe(true);
+    }
+  });
+
+  it('does not flag a flip card whose back face is hidden', async () => {
+    for (const browser of [wk, cr]) {
+      const c = await at('/flip.html', DESKTOP, undefined, browser);
+      expect(has(c, 'broken-state', /ok-|Track one/)).toBe(false);
+      expect(has(c, 'broken-state', /mirror-card/)).toBe(false);
+    }
   });
 });

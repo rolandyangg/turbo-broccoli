@@ -537,6 +537,42 @@
   }
   const directTextDeep = (el) => (el.textContent || '').trim().length > 3;
 
+  /**
+   * Flip cards (transform-style: preserve-3d) read from computed styles, no screenshot: a face with text that is
+   * turned so it reads mirrored (negative determinant) without backface-visibility: hidden, or two faces with text
+   * both showing in the same spot (e.g. the card is mid-flip or the back was never rotated away).
+   */
+  function detectFlipCards(els) {
+    const out = [];
+    for (const card of els) {
+      if (out.length >= 10) break;
+      if (cs(card).transformStyle !== 'preserve-3d') continue;
+      const faces = [...card.children].filter((f) => directTextDeep(f) && isVisible(f));
+      const shown = [];
+      for (const f of faces) {
+        const s = cs(f);
+        const bv = s.backfaceVisibility || s.webkitBackfaceVisibility;
+        const m = cumulativeMatrix(f);
+        const det = m.a * m.d - m.b * m.c;
+        if (det < -0.05 && bv !== 'hidden') {
+          out.push(cand('broken-state', f, 0.75, `Flip-card face shows its text mirrored: it is turned away (transform ${s.transform}) but backface-visibility isn't hidden, so its back is painted (common in Safari: set -webkit-backface-visibility: hidden).`, { mirrored_face: true, determinant: Math.round(det * 100) / 100, backface_visibility: bv || 'visible' }, card));
+          continue;
+        }
+        shown.push(f);
+      }
+      for (let i = 0; i < shown.length; i++) {
+        for (let j = i + 1; j < shown.length; j++) {
+          const a = rectOf(shown[i]);
+          const b = rectOf(shown[j]);
+          const ix = intersect(a, b);
+          if (!ix || ix.width * ix.height < 0.5 * Math.min(a.width * a.height, b.width * b.height)) continue;
+          out.push(cand('broken-state', card, 0.7, `Both faces of this flip card are showing in the same spot, so their text is drawn on top of each other (the back face isn't turned away or hidden with backface-visibility: hidden).`, { both_faces_visible: true, faces: [selectorFor(shown[i]), selectorFor(shown[j])] }, shown[j]));
+        }
+      }
+    }
+    return out;
+  }
+
   // ---------- focus & keyboard ----------
   const FOCUS_TYPES = ['focus-invisible', 'focus-obscured', 'focus-escape'];
   const OPEN_OVERLAY = 'dialog[open], [role=dialog], [role=alertdialog], [aria-modal=true], [role=menu], [role=listbox], [popover]';
@@ -1031,6 +1067,7 @@
       ...run('broken-image', () => detectMisc(els)),
       ...run('layout-shift', () => detectLayoutShift()),
       ...run('overlap', () => detectOccludedText(els)),
+      ...run('broken-state', () => detectFlipCards(els)),
       ...(!o.only || o.only.some((t) => FOCUS_TYPES.includes(t)) ? detectFocus().filter((c) => !o.only || o.only.includes(c.type)) : []),
       ...(!o.only || o.only.some((t) => ['overlay-overflow', 'hidden-by-sticky', 'scroll-trap'].includes(t)) ? detectOverlays(els).filter((c) => !o.only || o.only.includes(c.type)) : []),
       ...(!o.only || o.only.some((t) => ['hover-only', 'overlap', 'scroll-trap'].includes(t)) ? detectTouch(els).filter((c) => !o.only || o.only.includes(c.type)) : []),
