@@ -247,6 +247,85 @@
     return out;
   }
 
+  /**
+   * Content of one section drawn over a sibling section's text: for each pair of sibling layout blocks, union the
+   * rects of one block's painted descendants (skipping decorative, fixed/sticky and overlay content; clipped
+   * subtrees count as their clip box) and test it against the other's text. Box-level, so it still catches
+   * 3D-transformed content that the point-sampling text checks miss.
+   */
+  const BLOCK_SEL = 'body > *, main > *, section, article, header, footer, [role=region]';
+  function contentUnion(block) {
+    let box = null;
+    const add = (r) => {
+      if (r.width < 1 || r.height < 1) return;
+      box = box ? union(box, r) : { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    };
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_ELEMENT, {
+      acceptNode(el) {
+        if (el.hasAttribute('data-bugbash-overlay') || el.getAttribute('aria-hidden') === 'true') return NodeFilter.FILTER_REJECT;
+        const s = cs(el);
+        if (s.display === 'none' || Number(s.opacity) === 0 || s.pointerEvents === 'none') return NodeFilter.FILTER_REJECT;
+        if (s.position === 'fixed' || s.position === 'sticky') return NodeFilter.FILTER_REJECT;
+        if (el.matches('dialog, [popover], [role=dialog], [role=alertdialog], [role=menu], [role=listbox], [role=tooltip]') || OVERLAY_RE.test(typeof el.className === 'string' ? el.className : '')) return NodeFilter.FILTER_REJECT;
+        if (s.backgroundImage !== 'none' && !el.textContent.trim() && !el.querySelector('img, svg, video, canvas')) return NodeFilter.FILTER_REJECT;
+        if (((s.backfaceVisibility || s.webkitBackfaceVisibility) === 'hidden') && hiddenFace(el)) return NodeFilter.FILTER_REJECT;
+        if (s.visibility === 'hidden') return NodeFilter.FILTER_SKIP;
+        // A clipping box hides whatever overflows it: count the box, not its children.
+        if (/(hidden|clip)/.test(s.overflowX) && /(hidden|clip)/.test(s.overflowY)) {
+          add(rectOf(el));
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let n;
+    let k = 0;
+    while ((n = walker.nextNode()) && k++ < 600) add(rectOf(n));
+    return box;
+  }
+  function detectSectionSpill(els) {
+    const out = [];
+    const groups = new Map();
+    for (const el of els) {
+      if (!el.matches(BLOCK_SEL) || !el.parentElement) continue;
+      const pos = cs(el).position;
+      if (pos === 'fixed' || pos === 'sticky' || !isVisible(el)) continue;
+      if (!groups.has(el.parentElement)) groups.set(el.parentElement, []);
+      groups.get(el.parentElement).push(el);
+    }
+    for (const blocks of groups.values()) {
+      if (blocks.length < 2 || blocks.length > 40) continue;
+      const info = blocks.map((b) => ({
+        b,
+        content: contentUnion(b),
+        texts: [...b.querySelectorAll('*')]
+          .filter((t) => directText(t).length >= 3 && isVisible(t) && !isFixedLike(t))
+          .slice(0, 200)
+          .map((t) => ({ t, r: textRect(t) }))
+          .filter((x) => x.r),
+      }));
+      for (const src of info) {
+        if (!src.content) continue;
+        for (const dst of info) {
+          if (dst === src) continue;
+          let best = null;
+          for (const { t, r } of dst.texts) {
+            const ix = intersect(src.content, r);
+            if (!ix || ix.width <= 24 || ix.height <= 24) continue;
+            if (!best || ix.width * ix.height > best.ix.width * best.ix.height) best = { t, ix };
+          }
+          if (!best) continue;
+          const { ix } = best;
+          const from = sectionLabel(src.b);
+          const over = sectionLabel(best.t);
+          out.push(cand('spill-out', src.b, Math.min(0.9, 0.6 + Math.min(ix.width, ix.height) / 200), `Content of this section spills into the neighbouring section and over its text by ${Math.round(ix.width)}×${Math.round(ix.height)}px${from && over && from !== over ? ` ("${from}" over "${over}")` : ''}.`, { section_spill: true, overlap_px: [Math.round(ix.width), Math.round(ix.height)], overlap_area: Math.round(ix.width * ix.height), spilled_into: selectorFor(dst.b), content_section: from, text_section: over }, best.t));
+          if (out.length >= 20) return out;
+        }
+      }
+    }
+    return out;
+  }
+
   function contentBoxes(els) {
     // Leaf-ish visible content: elements with direct text, media, form controls.
     const items = [];
@@ -520,6 +599,102 @@
     return out.slice(0, 30);
   }
 
+  /** Background that hides what is under it: an image, or a colour with alpha > 0.9. */
+  function solidBg(el) {
+    const s = cs(el);
+    if (s.backgroundImage && s.backgroundImage !== 'none') return true;
+    const m = s.backgroundColor.match(/rgba?\(([^)]+)\)/);
+    if (!m) return false;
+    const parts = m[1].split(',').map((x) => parseFloat(x));
+    return parts.length < 4 || parts[3] > 0.9;
+  }
+  /**
+   * What hides text at (x, y), or null: the topmost painted element when it is not the text's element (or an
+   * ancestor/descendant), is opaque (solid background, opacity > 0.9) and is not overlay chrome. Resolved to the
+   * nearest positioned or transformed ancestor; inside a 3D context (preserve-3d) to the closest flat ancestor,
+   * whose bounding rect must contain the point (3D faces' own rects / hit tests differ between engines).
+   */
+  function opaqueCoverAt(x, y, el) {
+    const top = document.elementsFromPoint(x, y).find((e) => !e.closest('[data-bugbash-overlay]') && !hiddenFace(e));
+    if (!top || el.contains(top) || top.contains(el)) return null;
+    if (isOverlayLike(top)) return null;
+    let opacity = 1;
+    let solid = false;
+    let owner = null;
+    let flat = null;
+    for (let p = top; p && p !== document.body && !p.contains(el); p = p.parentElement) {
+      const s = cs(p);
+      opacity *= Number(s.opacity);
+      solid = solid || solidBg(p);
+      if (!owner && (s.position !== 'static' || s.transform !== 'none')) owner = p;
+      if (s.transformStyle === 'preserve-3d') flat = p.parentElement;
+      else if (flat) break;
+    }
+    if (opacity <= 0.9 || !solid) return null;
+    if (flat && !flat.contains(el) && flat !== document.body) {
+      const r = rectOf(flat);
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) return null;
+      return flat;
+    }
+    return owner || top;
+  }
+
+  /**
+   * Text lines hidden under an opaque element: for each text block, sample points along each rendered line and
+   * count the line hidden when most samples are covered. Flags blocks with 30%+ of their in-view lines hidden.
+   * Complements detectOccludedText (which samples the whole block's box) with a line-by-line, opaque-only check.
+   */
+  function detectHiddenTextLines(els) {
+    const out = [];
+    const range = document.createRange();
+    const texts = els.filter((el) => directText(el).length >= 12).slice(0, 700);
+    for (const el of texts) {
+      if (out.length >= 30) break;
+      if (!isVisible(el)) continue;
+      const lines = [];
+      for (const n of el.childNodes) {
+        if (n.nodeType !== 3 || !n.textContent.trim()) continue;
+        range.selectNodeContents(n);
+        for (const r of range.getClientRects()) {
+          if (r.width < 4 || r.height < 4) continue;
+          const line = lines.find((l) => Math.abs(l.top - r.top) < r.height / 2);
+          if (line) Object.assign(line, { left: Math.min(line.left, r.left), right: Math.max(line.right, r.right) });
+          else lines.push({ top: r.top, bottom: r.bottom, left: r.left, right: r.right });
+        }
+      }
+      let inView = 0;
+      let hidden = 0;
+      let by = null;
+      for (const l of lines) {
+        const y = (l.top + l.bottom) / 2;
+        if (y < 0 || y >= innerHeight) continue;
+        const xs = [0.1, 0.3, 0.5, 0.7, 0.9].map((f) => l.left + (l.right - l.left) * f).filter((x) => x >= 0 && x < innerWidth);
+        if (xs.length < 3) continue;
+        inView++;
+        let hits = 0;
+        let lineBy = null;
+        for (const x of xs) {
+          const cover = opaqueCoverAt(x, y, el);
+          if (!cover) continue;
+          hits++;
+          lineBy = lineBy || cover;
+        }
+        if (hits * 2 > xs.length) {
+          hidden++;
+          by = by || lineBy;
+        }
+      }
+      if (!inView || !hidden || !by) continue;
+      const share = hidden / inView;
+      if (share < 0.3) continue;
+      const pct = Math.round(share * 100);
+      const from = sectionLabel(el);
+      const over = sectionLabel(by);
+      out.push(cand('overlap', el, Math.min(0.95, 0.7 + share * 0.25), `Text is hidden under an opaque ${by.tagName.toLowerCase()}${by.className && typeof by.className === 'string' ? '.' + by.className.split(/\s+/)[0] : ''}: ${pct}% of its lines (${hidden}/${inView}) are covered${from && over && from !== over ? ` (from "${over}", over "${from}")` : ''}.`, { hidden_line_share: Math.round(share * 100) / 100, hidden_lines: hidden, lines_in_view: inView, occluded_by: selectorFor(by), opaque_cover: true, text_section: from, covering_section: over }, by));
+    }
+    return out;
+  }
+
   /** Turned-away faces (backface-visibility: hidden) in view: candidates for the painted-back-face check. */
   function flipFaces() {
     const out = [];
@@ -536,6 +711,42 @@
     return out;
   }
   const directTextDeep = (el) => (el.textContent || '').trim().length > 3;
+
+  /**
+   * Flip cards (transform-style: preserve-3d) read from computed styles, no screenshot: a face with text that is
+   * turned so it reads mirrored (negative determinant) without backface-visibility: hidden, or two faces with text
+   * both showing in the same spot (e.g. the card is mid-flip or the back was never rotated away).
+   */
+  function detectFlipCards(els) {
+    const out = [];
+    for (const card of els) {
+      if (out.length >= 10) break;
+      if (cs(card).transformStyle !== 'preserve-3d') continue;
+      const faces = [...card.children].filter((f) => directTextDeep(f) && isVisible(f));
+      const shown = [];
+      for (const f of faces) {
+        const s = cs(f);
+        const bv = s.backfaceVisibility || s.webkitBackfaceVisibility;
+        const m = cumulativeMatrix(f);
+        const det = m.a * m.d - m.b * m.c;
+        if (det < -0.05 && bv !== 'hidden') {
+          out.push(cand('broken-state', f, 0.75, `Flip-card face shows its text mirrored: it is turned away (transform ${s.transform}) but backface-visibility isn't hidden, so its back is painted (common in Safari: set -webkit-backface-visibility: hidden).`, { mirrored_face: true, determinant: Math.round(det * 100) / 100, backface_visibility: bv || 'visible' }, card));
+          continue;
+        }
+        shown.push(f);
+      }
+      for (let i = 0; i < shown.length; i++) {
+        for (let j = i + 1; j < shown.length; j++) {
+          const a = rectOf(shown[i]);
+          const b = rectOf(shown[j]);
+          const ix = intersect(a, b);
+          if (!ix || ix.width * ix.height < 0.5 * Math.min(a.width * a.height, b.width * b.height)) continue;
+          out.push(cand('broken-state', card, 0.7, `Both faces of this flip card are showing in the same spot, so their text is drawn on top of each other (the back face isn't turned away or hidden with backface-visibility: hidden).`, { both_faces_visible: true, faces: [selectorFor(shown[i]), selectorFor(shown[j])] }, shown[j]));
+        }
+      }
+    }
+    return out;
+  }
 
   // ---------- focus & keyboard ----------
   const FOCUS_TYPES = ['focus-invisible', 'focus-obscured', 'focus-escape'];
@@ -608,10 +819,35 @@
 
   // ---------- overlays that don't fit ----------
   const scrollsY = (el) => /(auto|scroll)/.test(cs(el).overflowY) && el.scrollHeight > el.clientHeight + 1;
-  function detectOverlays() {
+  function detectOverlays(els) {
     const out = [];
     const overlays = [...document.querySelectorAll(OPEN_OVERLAY + ', [class*=modal i], [class*=dropdown i], [class*=popover i], [class*=menu i]')].filter((el) => isVisible(el) && cs(el).position !== 'static');
+    // Full-screen position:fixed menus (e.g. opened by a hamburger) whatever their role or class name.
+    const covers = (el) => {
+      const r = rectOf(el);
+      return Math.min(r.right, innerWidth) - Math.max(r.left, 0) >= innerWidth * 0.9 && Math.min(r.bottom, innerHeight) - Math.max(r.top, 0) >= innerHeight * 0.9;
+    };
+    const sheets = els.filter((el) => cs(el).position === 'fixed' && isVisible(el) && covers(el) && el.querySelector(INTERACTIVE));
+    const reported = new Set();
+    for (const el of sheets) {
+      if (sheets.some((o) => o !== el && o.contains(el))) continue;
+      const s = cs(el);
+      const canScroll = scrollsY(el) || [...el.querySelectorAll('*')].some((c) => scrollsY(c) && rectOf(c).height > 40);
+      const clipped = el.scrollHeight > el.clientHeight + 1 && !/(auto|scroll)/.test(s.overflowY);
+      const below = canScroll ? [] : [...el.querySelectorAll(INTERACTIVE)].filter((c) => isVisible(c) && rectOf(c).bottom > innerHeight + 2);
+      if (clipped || below.length) {
+        reported.add(el);
+        const why = clipped ? `its content is ${el.scrollHeight - el.clientHeight}px taller than the box and overflow-y is ${s.overflowY}` : `${below.length} item(s) end below the bottom of the screen and it doesn't scroll`;
+        out.push(cand('overlay-overflow', el, 0.85, `Full-screen menu/overlay doesn't fit the ${innerWidth}×${innerHeight} viewport: ${why}, so part of it can't be reached.`, { fixed: true, internal_scroll: canScroll, overflow_y: s.overflowY, scroll_height: el.scrollHeight, client_height: el.clientHeight, links_below: below.slice(0, 3).map(selectorFor), viewport: [innerWidth, innerHeight] }, below[0] || null));
+      }
+      // Body scroll not locked: swipes/wheel on the menu move the page behind it.
+      const page = document.scrollingElement || document.documentElement;
+      const locked = [document.documentElement, document.body].some((p) => /(hidden|clip)/.test(cs(p).overflowY)) || cs(document.body).position === 'fixed';
+      if (page.scrollHeight > innerHeight + 40 && !locked)
+        out.push(cand('scroll-trap', el, 0.6, `Page scrolling isn't locked while this full-screen menu/overlay is open: scrolling over it moves the page behind instead.`, { body_scroll_locked: false, page_height: page.scrollHeight, viewport: [innerWidth, innerHeight] }));
+    }
     for (const el of overlays) {
+      if (reported.has(el)) continue;
       if (overlays.some((o) => o !== el && o.contains(el))) continue; // report the outermost box
       const r = rectOf(el);
       if (r.width < 40 || r.height < 40) continue;
@@ -829,6 +1065,35 @@
     return out;
   }
 
+  // ---------- primary content landmarks ----------
+  // Not a detect() check: the viewport sweep compares these across widths (missingLandmarks in detect/index.ts).
+  const CTA = 'a.button, a[href*=apply]';
+  /** Why a landmark can't be seen (absent, zero-size, display:none, visibility:hidden, opacity 0, off-screen), or null. */
+  function landmarkHidden(el) {
+    if (!el) return 'absent';
+    for (let p = el; p && p !== document.documentElement; p = p.parentElement) {
+      const s = cs(p);
+      if (s.display === 'none') return 'display:none';
+      if (Number(s.opacity) === 0) return 'opacity 0';
+    }
+    if (cs(el).visibility === 'hidden' || cs(el).visibility === 'collapse') return 'visibility:hidden';
+    const r = rectOf(el);
+    if (r.width < 1 || r.height < 1) return 'zero size';
+    if (r.right <= 0 || r.left >= innerWidth || r.bottom + scrollY <= 0) return 'outside the viewport';
+    return null;
+  }
+  /** The first h1, the primary CTA and the hero form, each with the reason it is hidden (null when shown). */
+  function landmarks() {
+    const h1 = document.querySelector('h1');
+    const hero = document.querySelector('[class*=hero i]') || (h1 && h1.closest('section, header, main'));
+    const items = [
+      ['h1', 'Main heading (h1)', h1],
+      ['cta', 'Primary call-to-action', (hero && hero.querySelector(CTA)) || document.querySelector(CTA)],
+      ['form', 'Hero form', hero ? hero.querySelector('form') : null],
+    ];
+    return items.map(([key, label, el]) => ({ key, label, hidden: landmarkHidden(el), selector: el ? selectorFor(el) : null, text: el ? textOf(el) : '', bbox: el ? r2(rectOf(el)) : { x: 0, y: 0, width: 0, height: 0 }, signature: el ? signatureOf(el) : '' }));
+  }
+
   // ---------- layout shift tracking ----------
   // Chromium: PerformanceObserver layout-shift entries. Only pointer input discounts a shift (a Tab keypress
   // near a timer-driven shift must not hide it). WebKit/Firefox: sample element positions for the first seconds.
@@ -970,6 +1235,7 @@
     const all = [
       ...run('text-overflow', () => detectTextOverflow(els)),
       ...run('spill-out', () => detectSpillOut(els)),
+      ...run('spill-out', () => detectSectionSpill(els)),
       ...run('overlap', () => detectOverlap(els)),
       ...run('too-close', () => detectSpacing(els, o)),
       ...run('viewport-overflow', () => detectViewportOverflow(els)),
@@ -977,8 +1243,10 @@
       ...run('broken-image', () => detectMisc(els)),
       ...run('layout-shift', () => detectLayoutShift()),
       ...run('overlap', () => detectOccludedText(els)),
+      ...run('overlap', () => detectHiddenTextLines(els)),
+      ...run('broken-state', () => detectFlipCards(els)),
       ...(!o.only || o.only.some((t) => FOCUS_TYPES.includes(t)) ? detectFocus().filter((c) => !o.only || o.only.includes(c.type)) : []),
-      ...(!o.only || o.only.some((t) => ['overlay-overflow', 'hidden-by-sticky'].includes(t)) ? detectOverlays().filter((c) => !o.only || o.only.includes(c.type)) : []),
+      ...(!o.only || o.only.some((t) => ['overlay-overflow', 'hidden-by-sticky', 'scroll-trap'].includes(t)) ? detectOverlays(els).filter((c) => !o.only || o.only.includes(c.type)) : []),
       ...(!o.only || o.only.some((t) => ['hover-only', 'overlap', 'scroll-trap'].includes(t)) ? detectTouch(els).filter((c) => !o.only || o.only.includes(c.type)) : []),
       ...(!o.only || o.only.some((t) => ['low-contrast', 'distorted-image', 'misalignment'].includes(t)) ? detectPolish(els).filter((c) => !o.only || o.only.includes(c.type)) : []),
     ];
@@ -1021,5 +1289,5 @@
     return allElements().filter((e) => isVisible(e) && signatureOf(e) === signature).slice(0, 50).map((e) => ({ selector: selectorFor(e), text: textOf(e), bbox: r2(rectOf(e)) }));
   }
 
-  window.__bugbash = { version: 1, detect, detectFocus, flipFaces, selectorFor, signatureOf, interactives, domHash, elementInfo, findBySignature, drawBox, caption, ring, clearOverlay, shifts, resetShifts: () => (shifts.length = 0) };
+  window.__bugbash = { version: 1, detect, detectFocus, flipFaces, landmarks, selectorFor, signatureOf, interactives, domHash, elementInfo, findBySignature, drawBox, caption, ring, clearOverlay, shifts, resetShifts: () => (shifts.length = 0) };
 })();

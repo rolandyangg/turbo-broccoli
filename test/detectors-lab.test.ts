@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, webkit, devices, type Browser, type BrowserContextOptions, type Page } from 'playwright';
 import { resolveTarget, type ResolvedTarget } from '../src/target/resolve.js';
-import { installDetectors, runDetectors, settle, type Candidate } from '../src/detect/index.js';
+import { installDetectors, runDetectors, settle, landmarks, missingLandmarks, type Candidate, type Landmark } from '../src/detect/index.js';
 
 // Seeded fixture for the focus, overlay, touch and visual-polish detectors (fixtures/detector-lab).
 let target: ResolvedTarget;
@@ -89,6 +89,21 @@ describe('overlay detectors', () => {
     expect(has(c, 'overlay-overflow', /modal|Terms|agree/i)).toBe(true);
   });
 
+  it('LAB-M1: flags a full-screen hamburger menu that overflows and leaves page scroll unlocked (720px and phone landscape)', async () => {
+    const open = (p: Page) => p.click('#burger');
+    for (const viewport of [{ width: 1280, height: 720 }, { width: 734, height: 343 }]) {
+      const c = await at('/menu.html', { viewport }, open);
+      expect(has(c, 'overlay-overflow', /site-nav/)).toBe(true);
+      expect(has(c, 'scroll-trap', /site-nav/)).toBe(true);
+    }
+  });
+
+  it('does not flag a full-screen menu that scrolls internally and locks the page', async () => {
+    const c = await at('/menu.html#good', { viewport: { width: 1280, height: 720 } }, (p) => p.click('#burger'));
+    expect(has(c, 'overlay-overflow', /site-nav/)).toBe(false);
+    expect(has(c, 'scroll-trap', /site-nav/)).toBe(false);
+  });
+
   it('LAB-A1: flags an anchor target landing under a sticky header', async () => {
     expect(has(await at('/anchor.html#terms'), 'hidden-by-sticky', /terms/)).toBe(true);
     expect(has(await at('/anchor.html'), 'hidden-by-sticky', /terms/)).toBe(false);
@@ -130,6 +145,39 @@ describe('visual polish detectors', () => {
   });
 });
 
+describe('primary content across widths', () => {
+  // What sweep_viewports does: read the landmarks at each width, then compare neighbouring widths.
+  async function sweep(path: string, widths: number[]) {
+    const ctx = await cr.newContext(DESKTOP);
+    await installDetectors(ctx);
+    const page = await ctx.newPage();
+    await page.goto(target.baseUrl + path);
+    await settle(page, 50);
+    const rows: { width: number; marks: Landmark[] }[] = [];
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 800 });
+      rows.push({ width, marks: await landmarks(page) });
+    }
+    await ctx.close();
+    return missingLandmarks(rows);
+  }
+  const WIDTHS = [1024, 1100, 1180, 1280, 1440];
+
+  it('LAB-H1: flags the hero heading, CTA and form vanishing at a width where neighbours show them', async () => {
+    const found = await sweep('/hero.html', WIDTHS);
+    expect(found.map((f) => f.candidate.metrics.landmark).sort()).toEqual(['cta', 'form', 'h1']);
+    for (const f of found) {
+      expect(f.candidate.type).toBe('broken-state');
+      expect(f.widths).toEqual([1180]);
+      expect(f.candidate.message).toMatch(/1180px \(display:none\).*1100, 1280px/);
+    }
+  });
+
+  it('does not flag a hero that is shown at every width', async () => {
+    expect(await sweep('/hero.html#good', WIDTHS)).toEqual([]);
+  });
+});
+
 describe('section collisions and hidden faces', () => {
   it('LAB-S1: text covered by a card section is found even below the fold (whole-page scan)', async () => {
     const c = await at('/sections.html'); // loaded at the top; the collision is a screenful down
@@ -141,9 +189,62 @@ describe('section collisions and hidden faces', () => {
     expect(has(await at('/sections.html'), 'overlap', /under-menu/)).toBe(false);
   });
 
+  it('LAB-O1/O2: flags text lines hidden under an opaque element, incl. a 3D flip card (WebKit and Chromium)', async () => {
+    for (const browser of [wk, cr]) {
+      const c = await at('/occlusion.html', DESKTOP, undefined, browser);
+      const flip = c.find((x) => x.type === 'overlap' && x.selector === '#p-3d');
+      expect(flip?.metrics.opaque_cover).toBe(true);
+      expect(flip?.metrics.hidden_line_share).toBeGreaterThanOrEqual(0.3);
+      expect(flip?.related?.selector).toBe('#tracks-3d');
+      expect(c.find((x) => x.type === 'overlap' && x.selector === '#p-flat')?.metrics.opaque_cover).toBe(true);
+    }
+  });
+
+  it('LAB-X1: flags a section of 3D flip cards spilling over a sibling section\'s text (WebKit and Chromium)', async () => {
+    for (const browser of [wk, cr]) {
+      const c = await at('/spill.html', DESKTOP, undefined, browser);
+      const spill = c.find((x) => x.type === 'spill-out' && x.selector === '#tracks');
+      expect(spill?.metrics.section_spill).toBe(true);
+      expect(spill?.metrics.spilled_into).toBe('#about');
+      expect(spill?.related?.selector).toBe('#about-text');
+      expect((spill?.metrics.overlap_px as number[])[1]).toBeGreaterThan(24);
+    }
+  });
+
+  it('does not flag decorative shapes (aria-hidden, pointer-events: none, background image) reaching into a sibling section', async () => {
+    for (const browser of [wk, cr]) {
+      const c = await at('/spill.html', DESKTOP, undefined, browser);
+      expect(c.some((x) => x.type === 'spill-out' && x.metrics.section_spill && x.selector !== '#tracks')).toBe(false);
+    }
+  });
+
+  it('does not count see-through or faded panels as opaque covers', async () => {
+    for (const browser of [wk, cr]) {
+      const c = await at('/occlusion.html', DESKTOP, undefined, browser);
+      expect(c.some((x) => x.type === 'overlap' && /#p-glass|#p-faded/.test(x.selector ?? '') && x.metrics.opaque_cover)).toBe(false);
+    }
+  });
+
   it('LAB-S2: a correctly hidden back face is neither "clipped text" nor "mirrored text"', async () => {
     const c = await at('/sections.html');
     expect(has(c, 'text-overflow', /back/)).toBe(false);
     expect(c.some((x) => x.type === 'mirrored-text')).toBe(false);
+    expect(has(c, 'broken-state', /back|Front side/)).toBe(false);
+  });
+
+  it('LAB-B1/B2: flags a mirrored flip-card face and two faces showing at once, from computed styles (WebKit and Chromium)', async () => {
+    for (const browser of [wk, cr]) {
+      const c = await at('/flip.html', DESKTOP, undefined, browser);
+      expect(c.find((x) => x.type === 'broken-state' && x.selector === '#mirrored-back')?.metrics.mirrored_face).toBe(true);
+      expect(c.find((x) => x.type === 'broken-state' && x.selector === '#double')?.metrics.both_faces_visible).toBe(true);
+    }
+  });
+
+  it('does not flag a flip card whose back face is hidden', async () => {
+    for (const browser of [wk, cr]) {
+      const c = await at('/flip.html', DESKTOP, undefined, browser);
+      expect(has(c, 'broken-state', /ok-|Track one/)).toBe(false);
+      expect(has(c, 'broken-state', /mirror-card/)).toBe(false);
+    }
   });
 });

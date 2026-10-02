@@ -6,6 +6,12 @@ import { BrowserName } from './store/schema.js';
 export const DEFAULT_DENYLIST =
   'delete|remove|destroy|log ?out|sign ?out|pay\\b|payment|purchase|checkout|buy now|place order|unsubscribe|deactivate|reset|close account|cancel subscription';
 
+/** 1280×720 laptop and iPhone 15 landscape (devices.ts). */
+const MENU_VIEWPORTS = [
+  { width: 1280, height: 720 },
+  { width: 734, height: 343 },
+];
+
 export const Config = z.object({
   /** Paths to start exploring from (relative to baseUrl). */
   startPaths: z.array(z.string()).default(['/']),
@@ -43,8 +49,10 @@ export const Config = z.object({
       minGapPx: z.number().default(4),
       minTapTargetPx: z.number().default(24),
       edgePaddingPx: z.number().default(2),
+      /** After clicking an [aria-expanded=false] menu toggle, the overlay/scroll-trap checks also run at these sizes (short laptop, phone landscape). */
+      menuViewports: z.array(z.object({ width: z.number(), height: z.number() })).default(MENU_VIEWPORTS),
     })
-    .default(() => ({ minGapPx: 4, minTapTargetPx: 24, edgePaddingPx: 2 })),
+    .default(() => ({ minGapPx: 4, minTapTargetPx: 24, edgePaddingPx: 2, menuViewports: MENU_VIEWPORTS })),
   confidenceThreshold: z.number().default(0.5),
   provider: z.enum(['claude', 'codex']).nullable().default(null), // null = machine default
   model: z.string().trim().min(1).max(200).nullable().default(null),
