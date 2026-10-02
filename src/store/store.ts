@@ -40,7 +40,7 @@ export function keepPrivate(ws: string) {
   } catch {} // not a git repo: nothing to protect
 }
 
-export const REGISTRY = join(homedir(), '.bugbash', 'workspaces.json');
+export const REGISTRY = join(process.env.BUGBASH_HOME || join(homedir(), '.bugbash'), 'workspaces.json');
 
 /** Remembers every workspace so viewers (the web app) can find all runs on this machine. */
 export function registerWorkspace(ws: string) {
