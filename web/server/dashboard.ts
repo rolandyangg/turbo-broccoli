@@ -19,6 +19,8 @@ export interface Dashboard {
   attention: { id: string; ws: string; run: string; target: string; title: string; severity: string; status: string; type: string; page: string; confidence: number; thumb: string | null; widths: number[]; browsers: string[] }[];
   targets: { target: string; latest: RunSummary; runs: number; active: number; critical: number; major: number }[];
   jobs: ReturnType<typeof listJobs>;
+  activity_jobs: ReturnType<typeof listJobs>;
+  activity_runs: RunSummary[];
   /** null = all targets (latest triaged run of each); otherwise the single run the numbers come from. */
   scope: { ws: string; run: string; name: string | null; target: string; started_at: string; triaged: boolean } | null;
   /** Every run, for the run filter. */
@@ -92,6 +94,8 @@ export function dashboard(only: { ws: string; run: string } | null = null): Dash
       .map(({ f, r }) => ({ id: f.id, ws: r.ws, run: r.run, target: r.target, title: f.title, severity: f.severity, status: f.status, type: f.type, page: f.page, confidence: f.confidence, thumb: f.screenshots.crop ?? f.screenshots.annotated, widths: [...new Set(f.viewports.map((v) => v.width))].sort((a, b) => a - b), browsers: f.browsers })),
     targets: targets.sort((a, b) => b.latest.started_at.localeCompare(a.latest.started_at)),
     jobs: jobs.slice(0, 8),
+    activity_jobs: jobs,
+    activity_runs: runs.filter((r) => !scoped || (r.ws === scoped.ws && r.run === scoped.run)),
     scope: scoped ? { ws: scoped.ws, run: scoped.run, name: scoped.name, target: scoped.target, started_at: scoped.started_at, triaged: scoped.triaged } : null,
     runs: runs.map((r) => ({ ws: r.ws, run: r.run, name: r.name, target: r.target, target_key: r.target_key, started_at: r.started_at, triaged: r.triaged, active: r.counts.active })),
   };

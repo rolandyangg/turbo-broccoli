@@ -1,4 +1,5 @@
 import { ReproCapture } from '../components/ReproCapture.tsx';
+import { useReviewJobResults } from '../lib/jobReview.ts';
 import { ModelPicker } from '../components/ModelPicker.tsx';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
@@ -19,6 +20,7 @@ export function Job() {
 function JobDetails({ id, onFollowup }: { id: string; onFollowup: (job: JobView) => void }) {
   const { data: initial, error, reload } = useApi<JobView & { branch_exists?: boolean | null }>(`/jobs/${id}`);
   const { status, events, ended } = useJobStream(id);
+  useReviewJobResults(initial, id, error);
   const job = status ? { ...initial, ...status, branch_exists: initial?.branch_exists ?? null } : initial;
   useEffect(() => {
     if (ended) document.title = `Job ${job?.state ?? 'done'} · TurboBrocolli`;

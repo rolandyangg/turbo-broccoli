@@ -6,7 +6,7 @@ import { ago, pct, targetName } from '../lib/format.ts';
 import { Arrow, Chamfer, Chip, ErrorBox, Loading, SevChip, Stat, StatusChip, Tabs } from '../components/ui.tsx';
 import { AgentsView } from '../components/AgentsView.tsx';
 import { ChartCard, DataTable, HBars, StackedColumns, type StackSeries } from '../components/Charts.tsx';
-import { JobStateChip } from '../components/Jobs.tsx';
+import { ActivityBoard, JobStateChip } from '../components/Jobs.tsx';
 import { LauncherDialog } from '../components/Launcher.tsx';
 
 interface Dashboard {
@@ -20,6 +20,8 @@ interface Dashboard {
   attention: { id: string; ws: string; run: string; target: string; title: string; severity: string; status: string; type: string; page: string; confidence: number; thumb: string | null; widths: number[]; browsers: string[] }[];
   targets: { target: string; latest: RunSummary; runs: number; active: number; critical: number; major: number }[];
   jobs: JobView[];
+  activity_jobs: JobView[];
+  activity_runs: RunSummary[];
   scope: { ws: string; run: string; target: string; started_at: string; triaged: boolean; name?: string | null } | null;
   runs: { ws: string; run: string; target: string; target_key: string; started_at: string; triaged: boolean; active: number; name?: string | null }[];
 }
@@ -110,7 +112,7 @@ const PIPELINE_LABEL: Record<string, string> = { new: 'New', confirmed: 'Confirm
 /** The dashboard body, scoped to all targets or one run. Used by the Dashboard page and the Run page's Overview tab. */
 export function DashboardView({ scope, header }: { scope: DashScope; header?: (data: Dashboard) => ReactNode }) {
   const q = scope ? `/dashboard?ws=${scope.ws}&run=${encodeURIComponent(scope.run)}` : '/dashboard';
-  const { data, error } = useApi<Dashboard>(q, { pollMs: 8000 });
+  const { data, error } = useApi<Dashboard>(q, { pollMs: 4000 });
   const [launch, setLaunch] = useState(false);
   const [params, setParams] = useSearchParams();
   const view: 'bugs' | 'agents' = params.get('view') === 'agents' ? 'agents' : 'bugs';
@@ -120,7 +122,7 @@ export function DashboardView({ scope, header }: { scope: DashScope; header?: (d
   const runHref = (d: { ws: string; run: string }) => `/runs/${d.ws}/${encodeURIComponent(d.run)}`;
   const selectedId = scope ? `${scope.ws}/${scope.run}` : null;
 
-  if (!k.runs)
+  if (!k.runs && !data.activity_jobs.length)
     return (
       <div className="empty" style={{ marginTop: 40 }}>
         <h1 className="page-title">No runs yet</h1>
@@ -135,6 +137,7 @@ export function DashboardView({ scope, header }: { scope: DashScope; header?: (d
   return (
     <>
       {header?.(data)}
+      <ActivityBoard jobs={data.activity_jobs} runs={data.activity_runs} />
       <div style={{ marginTop: 16 }}>
         <Tabs<'bugs' | 'agents'>
           tabs={[

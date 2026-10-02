@@ -1,8 +1,9 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
+import { dismissJobs, jobsAwaitingReview, useJobReviews } from '../lib/jobReview.ts';
 import { api, useApi } from '../lib/api.ts';
-import type { BranchInfo, JobEvent, JobView } from '../lib/types.ts';
-import { ago, duration, dateTime } from '../lib/format.ts';
+import type { BranchInfo, JobEvent, JobView, RunSummary } from '../lib/types.ts';
+import { ago, duration, dateTime, targetName } from '../lib/format.ts';
 import { Box, Chamfer, Chip, Check, Cross, CopyButton, Dialog, useToast } from './ui.tsx';
 import { FixRunDialog } from './Actions.tsx';
 
@@ -420,4 +421,54 @@ export function DiffView({ patch, truncated }: { patch: string; truncated?: bool
       {truncated && <p className="muted small">Diff truncated.</p>}
     </div>
   );
+}
+
+
+/** Clickable live-work cards on the dashboard. */
+export function ActivityBoard({ jobs, runs = [] }: { jobs: JobView[]; runs?: RunSummary[] }) {
+  const reviewed = useJobReviews();
+  const awaitingReview = jobsAwaitingReview(jobs, reviewed);
+  const activeJobs = jobs.filter((j) => j.state === 'running' && j.alive);
+  const activeRuns = runs.filter((r) => r.live);
+  const visibleJobs = [...activeJobs, ...awaitingReview];
+  return (
+    <div className="activity-board">
+      <section aria-label="Active runs and jobs" className="box">
+        <div className="box-head"><h2 className="h3">Active runs &amp; jobs</h2><Chip tone={activeJobs.length || activeRuns.length ? 'green live' : 'outline'}>{activeJobs.length + activeRuns.length} live</Chip>{awaitingReview.length > 0 && <>
+          <Chip tone="outline">{awaitingReview.length} need review</Chip>
+          <button type="button" className="btn-ghost" onClick={() => dismissJobs(awaitingReview)}>Dismiss all</button>
+        </>}</div>
+        <div className="box-body">
+          <p className="small muted">Follow progress live. Finished jobs stay here until you view their results or dismiss them.</p>
+          {visibleJobs.length || activeRuns.length ? <div className="activity-cards">
+            {activeRuns.map((r) => <Link className="activity-card" key={`${r.ws}/${r.run}`} to={`/runs/${r.ws}/${encodeURIComponent(r.run)}`}>
+              <span className="spread"><Chip tone="green live">Run · live</Chip><span aria-hidden>↗</span></span>
+              <strong>{r.name || targetName(r.target)}</strong>
+              <span className="small muted">{r.sessions} sessions · {r.raw_findings} findings</span>
+              <span className="mono small muted">Started {ago(r.started_at)}</span>
+            </Link>)}
+            {visibleJobs.map((j) => <div className="activity-card-wrap" key={j.id}>
+            <Link className={`activity-card${j.state !== 'running' ? ' activity-card-review' : ''}`} to={`/jobs/${encodeURIComponent(j.id)}`}>
+              <span className="spread"><Chip tone="outline">{j.kind}</Chip>{j.state === 'running' ? <JobStateChip job={j} /> : <Chip tone="outline">{completionLabel(j)} · Needs review</Chip>}</span>
+              <strong>{jobScope(j)}</strong>
+              <span className="small activity-summary">{j.state === 'running' ? stageLabel(j.stage) : j.error || j.summary || stageLabel(j.stage)}</span>
+              <span className="mono small muted">{j.state === 'running' ? `Started ${ago(j.started_at)} · View live →` : `Finished ${ago(j.ended_at ?? j.updated_at)} · Review results →`}</span>
+            </Link>
+            {j.state !== 'running' && <button type="button" className="activity-dismiss" aria-label={`Dismiss ${j.kind} job ${j.id}`} title="Dismiss from review" onClick={() => dismissJobs([j])}>×</button>}
+            </div>)}
+          </div> : <p className="small muted">No active work or jobs awaiting review.</p>}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function jobScope(job: JobView) {
+  return job.finding_ids.join(', ') || job.scope || targetName(String(job.options?.target ?? '')) || job.run?.run || job.id;
+}
+
+function completionLabel(job: JobView) {
+  if (job.state === 'succeeded') return 'Finished';
+  if (job.state === 'failed') return 'Failed';
+  return 'Cancelled';
 }

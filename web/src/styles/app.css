@@ -1756,6 +1756,25 @@
   padding: 8px 10px;
   border: 1px dashed var(--line-soft);
 }
+
+/* Dashboard live-work cards. */
+.activity-board { display: grid; gap: 16px; margin: 20px 0; }
+.activity-cards { max-height: 520px; overflow-y: auto; padding: 3px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 12px; }
+.activity-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--line); background: var(--white); color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+.activity-card:hover { border-color: var(--green-ink); background: var(--panel); }
+.activity-card:focus-visible { outline: 2px solid var(--green-ink); outline-offset: 3px; }
+.activity-card .spread { flex-wrap: wrap; gap: 8px; }
+
+.activity-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+
+.activity-board .box-head { flex-wrap: wrap; gap: 10px; }
+.activity-card-wrap { position: relative; min-width: 0; display: flex; }
+.activity-card-wrap .activity-card { width: 100%; }
+.activity-card-review { padding-right: 44px; }
+.activity-dismiss { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; border: 0; background: transparent; color: var(--muted); font-size: 24px; cursor: pointer; }
+.activity-dismiss:hover { background: var(--bar-hover); color: var(--ink); }
+.activity-dismiss:focus-visible { outline: 2px solid var(--green-ink); outline-offset: 2px; }
+
 .repro-capture-confirm { margin: auto; padding: 0; width: min(560px, calc(100vw - 32px)); color: var(--ink); }
 .repro-capture-confirm:not([open]) { display: none; }
 .repro-capture-confirm::backdrop { background: var(--overlay); }
