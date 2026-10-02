@@ -84,15 +84,35 @@ export async function triageRun(o: TriageOptions) {
   let done = 0;
 
   const stats: TriageFindingStat[] = [];
+  const nearby: RawFinding[] = [];
   const findings = await Promise.all(
     clusters.map((c) =>
       limit(async () => {
-        const f = await triageCluster(c, ids.get(c.fingerprint)!, { ...o, config, pool, sources, calibration, memory, stats });
+        const f = await triageCluster(c, ids.get(c.fingerprint)!, { ...o, config, pool, sources, calibration, memory, stats, nearby });
         o.log(`  [${++done}/${clusters.length}] ${f.id} ${f.status} conf=${f.confidence} ${f.reproduction.rate ?? 'n/a'} ${f.evidence_kind}${f.video ? ' +video' : ''} — ${f.title.slice(0, 70)}`);
         return f;
       }),
     ),
   );
+  // Defects the reviewers saw next to the reported ones: replay them as new candidates (one pass, no further nearby collection).
+  const seen = new Set(clusters.map((c) => c.fingerprint));
+  const extra = clusterFindings(nearby).filter((c) => !seen.has(c.fingerprint));
+  if (extra.length) {
+    o.log(`Triage: reviewers saw ${extra.length} other defect(s) nearby; replaying them as new candidates`);
+    const extraIds = assignIds(extra, memory, [...ids.values()]);
+    let extraDone = 0;
+    findings.push(
+      ...(await Promise.all(
+        extra.map((c) =>
+          limit(async () => {
+            const f = await triageCluster(c, extraIds.get(c.fingerprint)!, { ...o, config, pool, sources, calibration, memory, stats });
+            o.log(`  [nearby ${++extraDone}/${extra.length}] ${f.id} ${f.status} conf=${f.confidence} ${f.reproduction.rate ?? 'n/a'} — ${f.title.slice(0, 70)}`);
+            return f;
+          }),
+        ),
+      )),
+    );
+  }
   await pool.close();
 
   // Root-cause grouping (advisory): every finding stays an individual record.
@@ -149,9 +169,9 @@ function carryOver(runDir: string, findings: Finding[], log: (m: string) => void
   if (n) log(`Kept ${n} status/label/fix record(s) from the previous triage`);
 }
 
-function assignIds(clusters: Cluster[], memory: Memory): Map<string, string> {
+function assignIds(clusters: Cluster[], memory: Memory, taken: string[] = []): Map<string, string> {
   const known = memory.knownBugs();
-  let max = known.reduce((m, b) => Math.max(m, parseInt(b.last_id.replace(/\D/g, ''), 10) || 0), 0);
+  let max = [...known.map((b) => b.last_id), ...taken].reduce((m, id) => Math.max(m, parseInt(id.replace(/\D/g, ''), 10) || 0), 0);
   const out = new Map<string, string>();
   for (const c of clusters) {
     const k = known.find((b) => b.fingerprint === c.fingerprint);
@@ -163,7 +183,7 @@ function assignIds(clusters: Cluster[], memory: Memory): Map<string, string> {
 async function triageCluster(
   c: Cluster,
   id: string,
-  o: TriageOptions & { config: Config; pool: BrowserPool; sources: SourceIndex | null; calibration: ReturnType<typeof loadCalibration>; memory: Memory; stats: TriageFindingStat[] },
+  o: TriageOptions & { config: Config; pool: BrowserPool; sources: SourceIndex | null; calibration: ReturnType<typeof loadCalibration>; memory: Memory; stats: TriageFindingStat[]; nearby?: RawFinding[] },
 ): Promise<Finding> {
   const startedAt = Date.now();
   let replays = 0;
@@ -297,7 +317,7 @@ async function triageCluster(
   // 4. Independent review.
   let verdict: ReviewVerdict | null = null;
   if (o.review !== false) {
-    verdict = await reviewFinding(f, { runDir: o.runDir, model: o.config.model, transcriptPath: join(tdir, `review-${id}.jsonl`), images: [shots.annotated, shots.crop, ...(rep.screenshot ? [rep.screenshot] : [])], replayNote: presence === 'present' ? `detector re-confirmed the defect in ${rate} fresh replays` : presence === 'absent' ? 'the recorded steps did NOT reproduce it in a fresh browser' : 'not automatically verifiable; judge from the images' }).catch(() => null);
+    verdict = await reviewFinding(f, { runDir: o.runDir, model: o.config.model, transcriptPath: join(tdir, `review-${id}.jsonl`), images: [shots.crop, ...(rep.screenshot ? [rep.screenshot] : [])], viewport: shots.annotated, replayNote: presence === 'present' ? `detector re-confirmed the defect in ${rate} fresh replays` : presence === 'absent' ? 'the recorded steps did NOT reproduce it in a fresh browser' : 'not automatically verifiable; judge from the images' }).catch(() => null);
     if (verdict) {
       f.confidence_breakdown.reviewer = verdict.is_defect ? verdict.confidence : Math.min(verdict.confidence, 1 - verdict.confidence);
       f.severity = verdict.severity as Finding['severity'];
@@ -307,6 +327,29 @@ async function triageCluster(
       f.fix_hint = verdict.fix_hint;
       if (!f.description || f.description.length < 30) f.description = verdict.description;
       f.confidence_breakdown.notes.push(`reviewer: ${verdict.is_defect ? 'defect' : 'NOT a defect'} — ${verdict.reasoning.slice(0, 300)}`);
+      // Other defects the reviewer saw on screen become new candidates (replayed from this finding's steps); they never affect this finding.
+      for (const n of o.nearby ? (verdict.nearby_defects ?? []) : []) {
+        const parsed = RawFinding.safeParse({
+          session: `reviewer:${id}`,
+          persona: null,
+          type: n.type,
+          title: n.title,
+          description: n.description,
+          severity: n.severity,
+          confidence: n.confidence,
+          hypothesis: `seen by the triage reviewer in the viewport screenshot of ${id}`,
+          strategy: null,
+          page: rep.page,
+          url: rep.url,
+          environment: { browser: rep.environment.browser, viewport: env.viewport, variant: { ...rep.environment.variant, ...env.variant } },
+          element: { selector: n.selector || null, text: null, bbox: null, signature: null },
+          detector: null,
+          trace: minimal,
+          screenshot: shots.annotated,
+          at: new Date().toISOString(),
+        });
+        if (parsed.success) o.nearby?.push(parsed.data);
+      }
     } else f.confidence_breakdown.notes.push('reviewer unavailable');
   }
   if (!f.reproduction.expected) f.reproduction.expected = 'The element renders fully inside its container without overlapping or crowding other content.';

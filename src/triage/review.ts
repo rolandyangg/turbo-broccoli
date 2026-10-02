@@ -15,6 +15,17 @@ export interface ReviewVerdict {
   fix_hint: string;
   needs_video: boolean;
   reasoning: string;
+  /** Other defects the reviewer noticed in the wider screenshot; triaged as new candidates, never used to judge this one. */
+  nearby_defects?: NearbyDefect[];
+}
+
+export interface NearbyDefect {
+  type: string;
+  severity: string;
+  confidence: number;
+  title: string;
+  description: string;
+  selector: string | null;
 }
 
 const REVIEW_SCHEMA = {
@@ -32,8 +43,23 @@ const REVIEW_SCHEMA = {
     fix_hint: { type: 'string' },
     needs_video: { type: 'boolean' },
     reasoning: { type: 'string' },
+    nearby_defects: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: FindingType.options },
+          severity: { type: 'string', enum: Severity.options },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          selector: { type: ['string', 'null'] },
+        },
+        required: ['type', 'severity', 'confidence', 'title', 'description', 'selector'],
+      },
+    },
   },
-  required: ['is_defect', 'type', 'severity', 'confidence', 'title', 'description', 'expected', 'actual', 'likely_cause', 'fix_hint', 'needs_video', 'reasoning'],
+  required: ['is_defect', 'type', 'severity', 'confidence', 'title', 'description', 'expected', 'actual', 'likely_cause', 'fix_hint', 'needs_video', 'reasoning', 'nearby_defects'],
 };
 
 const REVIEWER_SYSTEM = `You are an independent UI QA reviewer. Another agent reported a possible UI defect. You did not see its reasoning.
@@ -41,9 +67,10 @@ Judge ONLY from the evidence: the annotated screenshots (red box = reported elem
 Be skeptical: intentional ellipsis truncation with a tooltip/title, decorative overlaps, off-canvas menus, and content scrolled inside its own container are usually NOT defects. A real defect is something a user would notice as broken or that makes content unreadable/unreachable.
 Severity: critical (blocks a task or makes key content unreadable/unreachable), major (clearly broken, most users notice), minor (noticeable polish issue), cosmetic (tiny).
 needs_video: true if the defect is about change over time (flicker, layout shift, a transition, hover/timing/race behaviour) so a still image can't show it.
-Write expected/actual as one sentence each. fix_hint: the most likely CSS/markup change. Output JSON only.`;
+Write expected/actual as one sentence each. fix_hint: the most likely CSS/markup change.
+nearby_defects: after judging the reported defect, look over the whole viewport screenshot and list any OTHER clear defects you see (e.g. the same card covering the next section, clipped or overlapping text elsewhere). Give a CSS selector if you can infer one from the reproduction steps/metrics, else null. Use [] if there are none. These are reported separately and must not change your verdict on the reported defect. Output JSON only.`;
 
-export async function reviewFinding(f: Finding, o: { runDir: string; model?: string | null; images: string[]; replayNote: string; transcriptPath?: string }): Promise<ReviewVerdict | null> {
+export async function reviewFinding(f: Finding, o: { runDir: string; model?: string | null; images: string[]; viewport?: string; replayNote: string; transcriptPath?: string }): Promise<ReviewVerdict | null> {
   const prompt = [
     `Reported defect ${f.id}`,
     `type: ${f.type}  severity (reporter): ${f.severity}  reporter confidence: ${f.confidence_breakdown.explorer}`,
@@ -55,11 +82,12 @@ export async function reviewFinding(f: Finding, o: { runDir: string; model?: str
     `reproduction steps:\n${f.reproduction.steps_human.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}`,
     `replay: ${o.replayNote}`,
     `\nView these images with the Read tool before deciding:\n${o.images.map((i) => `- ${i}`).join('\n')}`,
+    ...(o.viewport ? [`- ${o.viewport} (viewport screenshot: the whole visible screen around the defect; check it for nearby_defects)`] : []),
   ].join('\n');
   const r = await runClaude({ prompt, systemPrompt: REVIEWER_SYSTEM, tools: ['Read'], allowedTools: ['Read'], addDirs: [o.runDir], cwd: o.runDir, jsonSchema: REVIEW_SCHEMA, model: o.model, timeoutMs: 5 * 60_000, transcriptPath: o.transcriptPath });
   const v = (r.structured ?? tryParseJson(r.text)) as ReviewVerdict | null;
   if (!v || typeof v.is_defect !== 'boolean') return null;
-  return { ...v, confidence: clamp(v.confidence) };
+  return { ...v, confidence: clamp(v.confidence), nearby_defects: Array.isArray(v.nearby_defects) ? v.nearby_defects : [] };
 }
 
 export async function reviewVideo(o: { runDir: string; title: string; filmstrip: string | null; bugFrame: string | null; model?: string | null; transcriptPath?: string }): Promise<{ visible: boolean; paceMs?: number; holdMs?: number; settleMs?: number; note: string } | null> {
