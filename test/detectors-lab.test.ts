@@ -189,6 +189,24 @@ describe('section collisions and hidden faces', () => {
     expect(has(await at('/sections.html'), 'overlap', /under-menu/)).toBe(false);
   });
 
+  it('LAB-O1/O2: flags text lines hidden under an opaque element, incl. a 3D flip card (WebKit and Chromium)', async () => {
+    for (const browser of [wk, cr]) {
+      const c = await at('/occlusion.html', DESKTOP, undefined, browser);
+      const flip = c.find((x) => x.type === 'overlap' && x.selector === '#p-3d');
+      expect(flip?.metrics.opaque_cover).toBe(true);
+      expect(flip?.metrics.hidden_line_share).toBeGreaterThanOrEqual(0.3);
+      expect(flip?.related?.selector).toBe('#tracks-3d');
+      expect(c.find((x) => x.type === 'overlap' && x.selector === '#p-flat')?.metrics.opaque_cover).toBe(true);
+    }
+  });
+
+  it('does not count see-through or faded panels as opaque covers', async () => {
+    for (const browser of [wk, cr]) {
+      const c = await at('/occlusion.html', DESKTOP, undefined, browser);
+      expect(c.some((x) => x.type === 'overlap' && /#p-glass|#p-faded/.test(x.selector ?? '') && x.metrics.opaque_cover)).toBe(false);
+    }
+  });
+
   it('LAB-S2: a correctly hidden back face is neither "clipped text" nor "mirrored text"', async () => {
     const c = await at('/sections.html');
     expect(has(c, 'text-overflow', /back/)).toBe(false);

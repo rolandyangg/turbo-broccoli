@@ -520,6 +520,102 @@
     return out.slice(0, 30);
   }
 
+  /** Background that hides what is under it: an image, or a colour with alpha > 0.9. */
+  function solidBg(el) {
+    const s = cs(el);
+    if (s.backgroundImage && s.backgroundImage !== 'none') return true;
+    const m = s.backgroundColor.match(/rgba?\(([^)]+)\)/);
+    if (!m) return false;
+    const parts = m[1].split(',').map((x) => parseFloat(x));
+    return parts.length < 4 || parts[3] > 0.9;
+  }
+  /**
+   * What hides text at (x, y), or null: the topmost painted element when it is not the text's element (or an
+   * ancestor/descendant), is opaque (solid background, opacity > 0.9) and is not overlay chrome. Resolved to the
+   * nearest positioned or transformed ancestor; inside a 3D context (preserve-3d) to the closest flat ancestor,
+   * whose bounding rect must contain the point (3D faces' own rects / hit tests differ between engines).
+   */
+  function opaqueCoverAt(x, y, el) {
+    const top = document.elementsFromPoint(x, y).find((e) => !e.closest('[data-bugbash-overlay]') && !hiddenFace(e));
+    if (!top || el.contains(top) || top.contains(el)) return null;
+    if (isOverlayLike(top)) return null;
+    let opacity = 1;
+    let solid = false;
+    let owner = null;
+    let flat = null;
+    for (let p = top; p && p !== document.body && !p.contains(el); p = p.parentElement) {
+      const s = cs(p);
+      opacity *= Number(s.opacity);
+      solid = solid || solidBg(p);
+      if (!owner && (s.position !== 'static' || s.transform !== 'none')) owner = p;
+      if (s.transformStyle === 'preserve-3d') flat = p.parentElement;
+      else if (flat) break;
+    }
+    if (opacity <= 0.9 || !solid) return null;
+    if (flat && !flat.contains(el) && flat !== document.body) {
+      const r = rectOf(flat);
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) return null;
+      return flat;
+    }
+    return owner || top;
+  }
+
+  /**
+   * Text lines hidden under an opaque element: for each text block, sample points along each rendered line and
+   * count the line hidden when most samples are covered. Flags blocks with 30%+ of their in-view lines hidden.
+   * Complements detectOccludedText (which samples the whole block's box) with a line-by-line, opaque-only check.
+   */
+  function detectHiddenTextLines(els) {
+    const out = [];
+    const range = document.createRange();
+    const texts = els.filter((el) => directText(el).length >= 12).slice(0, 700);
+    for (const el of texts) {
+      if (out.length >= 30) break;
+      if (!isVisible(el)) continue;
+      const lines = [];
+      for (const n of el.childNodes) {
+        if (n.nodeType !== 3 || !n.textContent.trim()) continue;
+        range.selectNodeContents(n);
+        for (const r of range.getClientRects()) {
+          if (r.width < 4 || r.height < 4) continue;
+          const line = lines.find((l) => Math.abs(l.top - r.top) < r.height / 2);
+          if (line) Object.assign(line, { left: Math.min(line.left, r.left), right: Math.max(line.right, r.right) });
+          else lines.push({ top: r.top, bottom: r.bottom, left: r.left, right: r.right });
+        }
+      }
+      let inView = 0;
+      let hidden = 0;
+      let by = null;
+      for (const l of lines) {
+        const y = (l.top + l.bottom) / 2;
+        if (y < 0 || y >= innerHeight) continue;
+        const xs = [0.1, 0.3, 0.5, 0.7, 0.9].map((f) => l.left + (l.right - l.left) * f).filter((x) => x >= 0 && x < innerWidth);
+        if (xs.length < 3) continue;
+        inView++;
+        let hits = 0;
+        let lineBy = null;
+        for (const x of xs) {
+          const cover = opaqueCoverAt(x, y, el);
+          if (!cover) continue;
+          hits++;
+          lineBy = lineBy || cover;
+        }
+        if (hits * 2 > xs.length) {
+          hidden++;
+          by = by || lineBy;
+        }
+      }
+      if (!inView || !hidden || !by) continue;
+      const share = hidden / inView;
+      if (share < 0.3) continue;
+      const pct = Math.round(share * 100);
+      const from = sectionLabel(el);
+      const over = sectionLabel(by);
+      out.push(cand('overlap', el, Math.min(0.95, 0.7 + share * 0.25), `Text is hidden under an opaque ${by.tagName.toLowerCase()}${by.className && typeof by.className === 'string' ? '.' + by.className.split(/\s+/)[0] : ''}: ${pct}% of its lines (${hidden}/${inView}) are covered${from && over && from !== over ? ` (from "${over}", over "${from}")` : ''}.`, { hidden_line_share: Math.round(share * 100) / 100, hidden_lines: hidden, lines_in_view: inView, occluded_by: selectorFor(by), opaque_cover: true, text_section: from, covering_section: over }, by));
+    }
+    return out;
+  }
+
   /** Turned-away faces (backface-visibility: hidden) in view: candidates for the painted-back-face check. */
   function flipFaces() {
     const out = [];
@@ -1067,6 +1163,7 @@
       ...run('broken-image', () => detectMisc(els)),
       ...run('layout-shift', () => detectLayoutShift()),
       ...run('overlap', () => detectOccludedText(els)),
+      ...run('overlap', () => detectHiddenTextLines(els)),
       ...run('broken-state', () => detectFlipCards(els)),
       ...(!o.only || o.only.some((t) => FOCUS_TYPES.includes(t)) ? detectFocus().filter((c) => !o.only || o.only.includes(c.type)) : []),
       ...(!o.only || o.only.some((t) => ['overlay-overflow', 'hidden-by-sticky', 'scroll-trap'].includes(t)) ? detectOverlays(els).filter((c) => !o.only || o.only.includes(c.type)) : []),
