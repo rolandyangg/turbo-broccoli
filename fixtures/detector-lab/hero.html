@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hero lab</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 0; color: #222; background: #fff; }
+  .hero { padding: 48px 24px; background: #eef; }
+  .button { display: inline-block; padding: 12px 20px; background: #224; color: #fff; text-decoration: none; }
+  /* LAB-H1: a breakpoint mistake hides the hero heading, CTA and email form between 1101 and 1279px.
+     With #good the hero is shown at every width. */
+  @media (min-width: 1101px) and (max-width: 1279px) { html.bug .hero-content { display: none; } }
+</style>
+<script>if (location.hash !== '#good') document.documentElement.classList.add('bug');</script>
+</head>
+<body>
+<section class="hero">
+  <div class="hero-content">
+    <h1>Launch your career</h1>
+    <a class="button" href="/apply">Apply now</a>
+    <form><input type="email" placeholder="Email" aria-label="Email" /><button>Notify me</button></form>
+  </div>
+</section>
+<main style="padding: 24px"><p>More content.</p></main>
+</body>
+</html>

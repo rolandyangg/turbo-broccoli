@@ -19,22 +19,26 @@ async function bboxOf(page: Page, selector: string | null): Promise<BBox | null>
  */
 export async function annotateDefect(
   page: Page,
-  o: { selector: string | null; relatedSelector?: string | null; fallbackBBox?: BBox | null; label: string; files: { annotated: string; crop: string; full: string } },
+  o: { selector: string | null; relatedSelector?: string | null; fallbackBBox?: BBox | null; label: string; files: { annotated: string; crop: string; full: string }; color?: string },
 ) {
-  const box = (await bboxOf(page, o.selector)) ?? o.fallbackBBox ?? null;
+  const live = await bboxOf(page, o.selector);
+  const box = live ?? o.fallbackBBox ?? null;
+  // When the element isn't there any more (e.g. after a fix), say so instead of implying it was found.
+  const color = live ? (o.color ?? '#ff1744') : '#2979ff';
+  const label = live || !box ? o.label : `${o.label.split(':')[0]}: element not found; old position`;
   const rel = await bboxOf(page, o.relatedSelector ?? null);
   if (box) {
     await page.evaluate(([y, h]) => window.scrollTo({ top: Math.max(0, y - (innerHeight - Math.min(h, innerHeight)) / 2), behavior: 'instant' as ScrollBehavior }), [box.y, box.height]);
     await page.waitForTimeout(100);
   }
   await page.evaluate(
-    ([b, r, label]) => {
+    ([b, r, label, color]) => {
       const bb = (window as any).__bugbash;
       bb.clearOverlay();
       if (r) bb.drawBox(r, 'related', '#ff9100');
-      if (b) bb.drawBox(b, label, '#ff1744');
+      if (b) bb.drawBox(b, label, color);
     },
-    [box, rel, o.label.slice(0, 70)] as const,
+    [box, rel, label.slice(0, 70), color] as const,
   );
   await page.screenshot({ path: o.files.annotated });
   await page.screenshot({ path: o.files.full, fullPage: true }).catch(() => page.screenshot({ path: o.files.full }));
@@ -48,7 +52,7 @@ export async function annotateDefect(
     await page.screenshot({ path: o.files.crop, clip, fullPage: true }).catch(() => page.screenshot({ path: o.files.crop }));
   } else await page.screenshot({ path: o.files.crop });
   await page.evaluate('window.__bugbash && window.__bugbash.clearOverlay()').catch(() => {});
-  return { found: !!box };
+  return { found: !!live };
 }
 
 function unionBox(a: BBox, b: BBox): BBox {

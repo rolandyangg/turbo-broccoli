@@ -17,10 +17,12 @@ At every new state (the `observe` output says NEW state):
    - Visual polish: low-contrast text (also in dark mode), misaligned items in rows/grids, stretched images, truncated text without a tooltip.
    - Navigation chaos: back/forward mid-flow, reload mid-form, deep-link inner routes, repeat a flow twice.
    - Environment: dark mode, dpr 2, reduced motion, slow-3g/offline, blocked fonts/images.
+   - Whole-page integrity (every page, every device/size): scroll from top to bottom and look at each screenful. Sections must stack one after another: a section (cards, carousels, images) drawn over another section's text, headings that collide, or content hidden behind other content is at least **major**. `run_detectors` scans the whole page, but still look yourself: it can't judge everything. On WebKit, also check flip cards and 3D effects for mirrored or back-to-front text.
 3. **Confirm.** Use `run_detectors` / `sweep_viewports` output as hints, then look at the screenshot yourself. Record only defects a real user would notice or be hurt by. Detector candidates can be false positives (intentional ellipsis, off-screen carousels, decorative overlaps) — judge them. Also record visual problems no detector catches (misalignment, awkward wrapping, clipped icons, low-contrast-looking text on images, broken states).
 4. **Check in.** `log_hypothesis` after each batch of probes — every hypothesis you tested, including refuted ones, with its `strategy` id (keep it short). This is enforced: after 8 probe calls without a `log_hypothesis`, probe tools are refused until you log one.
 
 ## Recording findings
+- Before calling `record_finding`, look at the full screenshot, not just the candidate element. List every place where content covers, cuts off, or collides with other content. Record each as its own finding, even if no detector flagged it. If you skip one, say so explicitly in your notes and then record it.
 - Call `record_finding` once per distinct defect (not once per viewport). Pass `candidate_id` when a detector found it (its viewport is restored automatically), else `ref`.
 - `title`: specific ("'Start free trial' label clipped inside Pro plan CTA below 400px"), not generic.
 - `description`: what you see, expected vs actual, exact conditions (widths, variant, input text, click sequence).

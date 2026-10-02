@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Driver } from '../replay/driver.js';
-import { ensureDetectors, runDetectors, settle, temporalSignals, type Candidate } from '../detect/index.js';
+import { ensureDetectors, runDetectors, settle, temporalSignals, landmarks, missingLandmarks, type Candidate, type Landmark } from '../detect/index.js';
 import { Coverage, mergeAll, pageKey, summarize } from '../explore/coverage.js';
 import { STRATEGIES, STRATEGY_IDS } from '../explore/strategies.js';
 import { DEVICE_PROFILES, deviceById, deviceContextOptions } from '../explore/devices.js';
@@ -264,13 +264,33 @@ export class BrowserSession {
     const blocked = await this.guardCheck(selector);
     if (blocked) return `BLOCKED by guardrails: ${blocked}. Choose a different element.`;
     const before = this.driver.path();
+    const toggle = (await this.page.locator(selector).first().getAttribute('aria-expanded', { timeout: 1000 }).catch(() => null)) === 'false';
     const step: Step = { action: 'click', selector, count: count > 1 ? count : undefined, text: await this.textOf(selector) };
     await this.driver.apply(step);
     this.record(step);
     if (count > 1) this.tagStrategy('chaos.rapid-click');
     await this.afterAction(selector);
     const after = this.driver.path();
-    return `Clicked ${ref}${count > 1 ? ` ×${count}` : ''} (${selector})${after !== before ? ` → navigated to ${after}` : ''}`;
+    const menu = toggle && after === before ? await this.checkOpenedMenu() : '';
+    return `Clicked ${ref}${count > 1 ? ` ×${count}` : ''} (${selector})${after !== before ? ` → navigated to ${after}` : ''}${menu}`;
+  }
+
+  /** After a menu toggle opened something: does it fit and lock page scroll, here and at the short sizes in config? */
+  private async checkOpenedMenu() {
+    const orig = { ...this.driver.viewport };
+    const sizes = [orig, ...this.opts.config.detectors.menuViewports.filter((v) => v.width !== orig.width || v.height !== orig.height)];
+    const lines: string[] = [];
+    try {
+      await settle(this.page, 100);
+      for (const v of sizes) {
+        if (v !== orig) await this.driver.resize(v.width, v.height);
+        const cands = await runDetectors(this.page, this.detectOpts(['overlay-overflow', 'scroll-trap'])).catch(() => [] as Candidate[]);
+        for (const { id, c } of this.storeCandidates(cands)) lines.push(`  ${id} ${c.type} conf=${c.confidence} at ${v.width}x${v.height} ${c.selector} "${c.text.slice(0, 40)}" — ${c.message}`);
+      }
+    } finally {
+      if (sizes.length > 1) await this.driver.resize(orig.width, orig.height);
+    }
+    return lines.length ? `\nOpened menu checks (verify on a screenshot at that size, then record_finding with candidate_id):\n${lines.join('\n')}` : '';
   }
 
   async hover(ref: string) {
@@ -478,6 +498,7 @@ export class BrowserSession {
     const height = opts.height ?? this.driver.viewport.height;
     const orig = { ...this.driver.viewport };
     const agg = new Map<string, { ids: string[]; widths: number[]; c: Candidate }>();
+    const marks: { width: number; marks: Landmark[] }[] = [];
     for (const w of widths) {
       await this.driver.resize(w, height);
       this.coverage.width(this.driver.path(), w, height);
@@ -490,6 +511,18 @@ export class BrowserSession {
         if (c.confidence > a.c.confidence) a.c = c;
         agg.set(key, a);
       }
+      const m = await landmarks(this.page).catch(() => null);
+      if (m) marks.push({ width: w, marks: m });
+    }
+    // Hero heading / CTA / form shown at one width but gone at a neighbouring one.
+    for (const { candidate: c, widths: ws } of missingLandmarks(marks)) {
+      if (c.confidence < (opts.minConfidence ?? 0.4)) continue;
+      const ids = ws.map((w) => {
+        const id = `c${++this.candCounter}`;
+        this.candidates.set(id, { id, candidate: c, viewport: { width: w, height }, variant: { ...this.driver.variant }, path: this.driver.path(), traceLength: this.trace.length });
+        return id;
+      });
+      agg.set(`${c.type}|${c.selector}|${c.metrics.landmark}`, { ids, widths: ws, c });
     }
     await this.driver.resize(orig.width, orig.height);
     this.tagStrategy('size.sweep');

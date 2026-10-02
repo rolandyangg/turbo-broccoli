@@ -103,6 +103,7 @@ exploreOpts(program.command('explore').description('Agentically bug-bash a site 
   .option('--name <name>', 'Display name for the run')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
   .option('--schedule <id>', 'Set by scheduled runs (launchd): records the result for the Schedules page')
+  .option('--instructions <text>', 'Your instructions for the lead and explorers (e.g. what to focus on)')
   .action(async (targetArg: string, o) => {
     const sched = o.schedule ? await import('./schedule/schedule.js') : null;
     const started = new Date().toISOString();
@@ -129,6 +130,7 @@ exploreOpts(program.command('explore').description('Agentically bug-bash a site 
         noLead: o.lead === false ? true : undefined,
         codeIntel: o.codeIntel === false ? false : undefined,
         name: o.name,
+        instructions: o.instructions ?? null,
         log: logf,
         onRun: (runDir) => {
           rep.update({ run_dir: runDir });
@@ -201,12 +203,15 @@ program
   .option('--keep-worktree', 'Keep the git worktree after finishing')
   .option('--retry', 'Start over on a fresh branch (name-2, -3, … if the old one is still there)')
   .option('--continue [branch]', 'Pick up an existing fix branch where it stopped: re-verify, more attempts only if needed, then commit/publish')
+  .option('--verify [branch]', 'Only re-verify an existing fix branch (checks, visual review, after evidence); no agent, commit or push')
+  .option('--instructions <text>', 'Your instructions for the fix agent (with --continue: re-steer it on the branch)')
+  .option('--publish-unverified', 'With --pr: publish even if the fix is not fully verified (otherwise publishing is blocked)')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
   .action(async (ids: string[], o) => {
     const runDir = findRunDir(o);
     const { fixFindings } = await import('./fix/fixGroup.js');
-    if (o.retry && o.continue) throw new Error('Pick --retry or --continue');
-    await fixFindings({ mode: o.continue ? 'continue' : o.retry ? 'retry' : 'new', branch: typeof o.continue === 'string' ? o.continue : null, runDir, ids: ids.map((x) => x.toUpperCase()), pr: !!o.pr, draft: !!o.draft, base: o.base, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
+    if ([o.retry, o.continue, o.verify].filter(Boolean).length > 1) throw new Error('Pick one of --retry, --continue, --verify');
+    await fixFindings({ mode: o.verify ? 'verify' : o.continue ? 'continue' : o.retry ? 'retry' : 'new', branch: typeof o.continue === 'string' ? o.continue : typeof o.verify === 'string' ? o.verify : null, instructions: o.instructions ?? null, publishUnverified: !!o.publishUnverified, runDir, ids: ids.map((x) => x.toUpperCase()), pr: !!o.pr, draft: !!o.draft, base: o.base, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
   });
 
 program
@@ -219,11 +224,12 @@ program
   .option('--slow', 'Slow motion')
   .option('--browser <name>', 'Override the browser engine (chromium, webkit, firefox)')
   .option('--no-guardrails', 'Let the page make real requests and navigate anywhere (manual testing)')
+  .option('--branch <branch>', 'Reproduce on the fixed version: serve the app from this fix branch')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
   .action(async (id: string, o) => {
     const runDir = findRunDir(o);
     const { reproduce } = await import('./repro/reproduce.js');
-    await reproduce({ runDir, id: id.toUpperCase(), mode: o.mode === 'start' ? 'start' : 'full', slow: !!o.slow, browser: o.browser ? BrowserName.parse(o.browser) : null, guardrails: o.guardrails !== false, jobId: o.job, log });
+    await reproduce({ runDir, id: id.toUpperCase(), mode: o.mode === 'start' ? 'start' : 'full', slow: !!o.slow, browser: o.browser ? BrowserName.parse(o.browser) : null, guardrails: o.guardrails !== false, branch: o.branch ?? null, jobId: o.job, log });
   });
 
 program
@@ -378,6 +384,27 @@ program
   });
 
 program
+  .command('report-problem')
+  .description('Report a problem with a finding; an agent investigates which stage went wrong and proposes improvements (for your approval)')
+  .argument('<id>', 'BB-xxxx')
+  .requiredOption('--category <c>', 'not-a-bug | missed | evidence | classification | fix | other')
+  .option('--text <text>', 'What is wrong', '')
+  .option('--run <id|path>')
+  .option('--out <dir>')
+  .option('--model <model>')
+  .option('--report-id <id>', 'Investigate an existing report (used by the web app)')
+  .option('--job <id>', 'Job id for progress events (used by the web app)')
+  .action(async (id: string, o) => {
+    const runDir = findRunDir(o);
+    const info = readRun(runDir);
+    const I = await import('./learn/investigate.js');
+    if (!(o.category in I.REPORT_CATEGORIES)) throw new Error(`category must be one of ${Object.keys(I.REPORT_CATEGORIES).join(', ')}`);
+    const reportId = o.reportId ?? I.addReport(info.workspace, { run: info.run_id, bug: id.toUpperCase(), category: o.category, text: o.text ?? '' }).id;
+    const r = await I.investigateReport({ ws: info.workspace, reportId, runDir, model: o.model, jobId: o.job, log });
+    console.log(`${r.diagnosis.stage}: ${r.diagnosis.summary}\nRecommended: ${r.diagnosis.recommended_action}\n${r.proposals.length} proposal(s) on the Improvements page.`);
+  });
+
+program
   .command('regroup')
   .description('Move a finding to another root-cause group (or "new" to split it into its own group)')
   .argument('<id>', 'BB-xxxx')
@@ -477,65 +504,25 @@ program
 
 program
   .command('improve')
-  .description('Implement an approved backlog item (detector suggestion or prompt/config tweak) on a new branch of this repo, verified by typecheck and tests')
-  .argument('<id>', 'Backlog id (B-…)')
+  .description('Implement approved backlog items (detector suggestions, prompt/config tweaks) on ONE new branch of this repo: one commit per item, each verified by typecheck and tests')
+  .argument('[ids...]', 'Backlog ids (B-…), implemented in order')
+  .option('--all', 'Every open or failed backlog item')
   .option('--out <dir>', 'Workspace directory the backlog lives in')
   .option('--repo <path>', 'Repo whose workspace to use')
   .option('--pr', 'Push the branch and open a PR (gh)')
-  .option('--max-attempts <n>', 'Implement/verify attempts', int, 2)
+  .option('--max-attempts <n>', 'Implement/verify attempts per item', int, 2)
+  .option('--instructions <text>', 'Your instructions for the implementing agent')
   .option('--keep-worktree', 'Keep the git worktree after finishing')
   .option('--job <id>', 'Job id for progress events (used by the web app)')
-  .action(async (id: string, o) => {
+  .action(async (ids: string[], o) => {
     const ws = workspaceFor(o.repo ?? null, o.out);
-    const { implementBacklogItem } = await import('./learn/implement.js');
-    const r = await implementBacklogItem({ ws, id, pr: !!o.pr, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
-    console.log(r.verified ? `Implemented on ${r.branch} (typecheck + tests pass)` : `Committed on ${r.branch}, but verification failed`);
+    const { implementBacklogItems } = await import('./learn/implement.js');
+    const { backlog } = await import('./learn/proposals.js');
+    const list = o.all ? backlog(ws).filter((b) => b.status === 'open' || b.status === 'failed').map((b) => b.id) : ids.map((x) => x.toUpperCase());
+    if (!list.length) throw new Error(o.all ? 'Nothing open on the backlog' : 'Pass backlog ids or --all');
+    const r = await implementBacklogItems({ ws, ids: list, instructions: o.instructions ?? null, pr: !!o.pr, maxAttempts: o.maxAttempts, keepWorktree: !!o.keepWorktree, log, jobId: o.job });
+    console.log(`${r.done.length}/${list.length} implemented${r.done.length ? ` on ${r.branch}` : ''}${r.failed.length ? `; not implemented: ${r.failed.map((f) => `${f.item.id} (${f.error})`).join(', ')}` : ''}${r.prUrl ? `\nPR: ${r.prUrl}` : ''}`);
   });
-
-const schedule = program.command('schedule').description('Scheduled bug bashes via macOS launchd (run only while the Mac is awake and you are logged in)');
-schedule
-  .command('add')
-  .description('Add a schedule (installs a LaunchAgent)')
-  .requiredOption('--target <target>', 'URL, local static folder, or local repo')
-  .requiredOption('--cron <expr>', 'minute hour day month weekday, e.g. "0 2 * * 1-5" (numbers, lists and ranges; no */n)')
-  .option('--preset <id>', 'Run preset', 'standard')
-  .option('--name <name>', 'Display name')
-  .option('--repo <path>', 'Source repo (white-box + fixes)')
-  .option('--disabled', 'Save without installing')
-  .action(async (o) => {
-    const S = await import('./schedule/schedule.js');
-    const s = await S.addSchedule({ target: o.target, cron: o.cron, preset: o.preset, name: o.name, repo: o.repo, enabled: !o.disabled });
-    console.log(`Added ${s.id}: ${s.name} — ${S.describeCron(s.cron)}${s.enabled ? `, next ${S.nextRun(s.cron)?.toLocaleString()}` : ' (disabled)'}\n${s.enabled ? `LaunchAgent: ${S.plistPath(s.id)}` : ''}`);
-  });
-schedule
-  .command('list')
-  .description('List schedules')
-  .action(async () => {
-    const S = await import('./schedule/schedule.js');
-    const all = S.listSchedules();
-    if (!all.length) console.log('No schedules.');
-    for (const s of all) {
-      const last = S.lastResult(s.id);
-      console.log(`${s.id}  ${s.enabled ? (await S.isLoaded(s.id)) ? 'on ' : 'on (not loaded!)' : 'off'}  ${s.name} — ${S.describeCron(s.cron)} · ${s.preset} · ${s.target}${s.enabled ? ` · next ${S.nextRun(s.cron)?.toLocaleString()}` : ''}${last ? ` · last: ${last.state} ${last.at}` : ''}`);
-    }
-  });
-for (const [cmd, desc] of [
-  ['enable', 'Install the LaunchAgent'],
-  ['disable', 'Uninstall the LaunchAgent (keeps the schedule)'],
-  ['remove', 'Uninstall and delete the schedule'],
-  ['run-now', 'Run it now (detached, same command and log as launchd)'],
-] as const)
-  schedule
-    .command(cmd)
-    .description(desc)
-    .argument('<id>')
-    .action(async (id: string) => {
-      const S = await import('./schedule/schedule.js');
-      if (cmd === 'enable' || cmd === 'disable') await S.setEnabled(id, cmd === 'enable');
-      else if (cmd === 'remove') await S.removeSchedule(id);
-      else console.log(`Started (pid ${S.runNow(id).pid}); log: ${S.logPath(id)}`);
-      if (cmd !== 'run-now') console.log(`${cmd}d ${id}`);
-    });
 
 program
   .command('bench')

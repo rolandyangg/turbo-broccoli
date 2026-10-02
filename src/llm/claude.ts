@@ -1,6 +1,7 @@
 import { execa } from 'execa';
 import { writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
+import { inboxSettings } from '../jobs/inbox.js';
 
 /**
  * Runs headless Claude Code (`claude -p`) under the user's existing login (subscription auth).
@@ -25,6 +26,8 @@ export interface ClaudeRunOptions {
   transcriptPath?: string;
   onEvent?: (e: StreamEvent) => void;
   signal?: AbortSignal;
+  /** Name this agent goes by for messages from the person watching the job (default: from transcriptPath). */
+  agentName?: string;
 }
 
 export interface StreamEvent {
@@ -66,6 +69,10 @@ export async function runClaude(o: ClaudeRunOptions): Promise<ClaudeRunResult> {
   if (o.model) args.push('--model', o.model);
   if (o.jsonSchema) args.push('--json-schema', JSON.stringify(o.jsonSchema));
   for (const d of o.addDirs ?? []) args.push('--add-dir', d);
+  // Messages from the person watching the job reach the agent at its next tool call (see jobs/inbox.ts).
+  const inbox = process.env.BUGBASH_INBOX;
+  const agentName = o.agentName ?? (o.transcriptPath ? basename(o.transcriptPath).replace(/\.jsonl$/, '').replace(/-attempt-\d+$/, '') : 'agent');
+  if (inbox) args.push('--settings', inboxSettings(dirname(inbox)));
 
   if (o.transcriptPath) {
     mkdirSync(dirname(o.transcriptPath), { recursive: true });
@@ -80,7 +87,7 @@ export async function runClaude(o: ClaudeRunOptions): Promise<ClaudeRunResult> {
     cancelSignal: o.signal,
     forceKillAfterDelay: 5000,
     buffer: { stdout: false, stderr: true },
-    env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_AUTOUPDATER: '1' },
+    env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_AUTOUPDATER: '1', ...(inbox ? { BUGBASH_INBOX: inbox, BUGBASH_AGENT: agentName } : {}) },
   });
 
   let final: StreamEvent | null = null;

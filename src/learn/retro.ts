@@ -94,7 +94,7 @@ export function retroInput(runDir: string) {
   };
 }
 
-const PROPOSAL_ITEM = {
+export const PROPOSAL_ITEM = {
   type: 'object',
   properties: {
     kind: { type: 'string', enum: ['lesson', 'prior', 'detector', 'tweak'] },

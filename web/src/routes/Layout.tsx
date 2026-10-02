@@ -30,6 +30,7 @@ export function Layout() {
             </NavLink>
             <NavLink to="/runs">Runs</NavLink>
             <NavLink to="/jobs">Jobs</NavLink>
+            <NavLink to="/prs">PRs</NavLink>
             <NavLink to="/improvements" aria-label={imp?.pending ? `Improvements, ${imp.pending} waiting for review` : undefined}>
               Improvements
               {imp?.pending ? <span className="nav-count">{imp.pending}</span> : null}

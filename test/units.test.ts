@@ -130,7 +130,13 @@ describe('job reporter', () => {
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const root = mkdtempSync(join(tmpdir(), 'bb-jobs-'));
+    // Run in isolation even when the test process itself was started by a job (it would set these).
+    const saved = { dir: process.env.BUGBASH_JOB_DIR, inbox: process.env.BUGBASH_INBOX };
+    delete process.env.BUGBASH_JOB_DIR;
     const r = new JobReporter(root, 'fix-1', 'fix', { finding_ids: ['BB-0001'] });
+    if (saved.dir !== undefined) process.env.BUGBASH_JOB_DIR = saved.dir;
+    if (saved.inbox !== undefined) process.env.BUGBASH_INBOX = saved.inbox;
+    else delete process.env.BUGBASH_INBOX;
     r.event('worktree', 'Created branch', 'success', { branch: 'bugbash/x' });
     r.update({ branch: 'bugbash/x' });
     r.event('attempt:1', 'Edit …/src/a.css', 'agent');
@@ -312,5 +318,132 @@ describe('private workspace', () => {
     execFileSync('git', ['add', '-A'], { cwd: repo });
     const staged = execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: repo, encoding: 'utf8' }).trim().split('\n');
     expect(staged).toEqual(['app.css']);
+  });
+});
+
+describe('PR technical changes section', () => {
+  it('lists root cause and per-file what/why with line counts, and never hides a changed file', async () => {
+    const { technicalSection } = await import('../src/fix/describe.js');
+    const stats = [
+      { file: 'app/a.module.css', added: 7, removed: 5 },
+      { file: 'app/b.tsx', added: 1, removed: 0 },
+    ];
+    const t = technicalSection({ commit_subject: 'fix(carousel): let arrows shrink', summary: 'Arrows fit again.', root_cause: 'Fixed width on .arrow.', changes: [
+          { file: 'app/a.module.css', what: 'width → min-width', why: 'lets the button shrink' },
+          { file: 'a.module.css', what: 'breakpoint 1024 → 1025', why: 'narrow layout at 1024' },
+        ], notes: ['Check RTL'] }, stats, 'agent text');
+    expect(t.technical.match(/`app\/a\.module\.css`/g)).toHaveLength(1); // two parts, one file entry
+    expect(t.technical).toContain('breakpoint 1024 → 1025');
+    expect(t.summary).toBe('Arrows fit again.');
+    expect(t.technical).toContain('**Root cause.** Fixed width on .arrow.');
+    expect(t.technical).toContain('- `app/a.module.css` (+7 −5)\n  - **What:** width → min-width\n    **Why:** lets the button shrink');
+    expect(t.technical).toContain('- `app/b.tsx` (+1 −0)'); // not explained, still listed
+    expect(t.technical).toContain('**Notes for review**\n- Check RTL');
+  });
+
+  it('writes commit messages about the change, with the bug only as a reference', async () => {
+    const { commitMessage } = await import('../src/fix/describe.js');
+    const msg = commitMessage(
+      { commit_subject: 'fix(sponsor-us): start desktop carousel layout at 1025px', summary: 's', root_cause: 'The 1024px media query applied the fixed 900px carousel width at exactly 1024px, pushing the arrows past the viewport edges.', changes: [{ file: 'app/sponsor-us/a.module.css', what: 'Moved the desktop breakpoint to 1025px.', why: 'At 1024px the narrower layout now applies.' }], notes: [] },
+      [{ file: 'app/sponsor-us/a.module.css', added: 7, removed: 5 }],
+      { fallbackTitle: 'Sponsor Highlights carousel arrows stretched', refs: ['BB-0051', 'BB-0051'], runId: 'r1', verified: true },
+    );
+    const [subject, blank, ...rest] = msg.split('\n');
+    expect(subject).toBe('fix(sponsor-us): start desktop carousel layout at 1025px');
+    expect(blank).toBe('');
+    expect(msg).not.toMatch(/Sponsor Highlights carousel arrows stretched/); // not the bug title
+    expect(rest.join('\n')).toMatch(/^The 1024px media query/);
+    expect(msg).toContain('- a.module.css: Moved the desktop breakpoint to 1025px.');
+    expect(msg).toContain('Refs: BB-0051 (bugbash run r1)');
+    expect(Math.max(...msg.split('\n').filter((l) => !l.startsWith('Co-Authored-By')).map((l) => l.length))).toBeLessThanOrEqual(72);
+    // Without an explanation: still about the change (files), never empty.
+    expect(commitMessage(null, [{ file: 'x/y.css', added: 1, removed: 1 }], { fallbackTitle: 'Nav overlaps logo', refs: ['BB-1'], runId: 'r', verified: false }).split('\n')[0]).toBe('fix(ui): adjust y.css for nav overlaps logo');
+    // A non-conventional subject gets a type.
+    expect(commitMessage({ commit_subject: 'Keep arrows in view', summary: '', root_cause: '', changes: [], notes: [] }, [], { fallbackTitle: 't', refs: [], runId: 'r', verified: true }).split('\n')[0]).toBe('fix(ui): Keep arrows in view');
+  });
+
+  it('falls back to the changed files and the fix agent summary', async () => {
+    const { technicalSection } = await import('../src/fix/describe.js');
+    const t = technicalSection(null, [{ file: 'x.css', added: 2, removed: 1 }], 'Agent says: changed x.css');
+    expect(t.summary).toBe('Agent says: changed x.css');
+    expect(t.technical).toBe('- `x.css` (+2 −1)');
+  });
+});
+
+describe('messages to running agents', () => {
+  it('delivers each new message once per agent at its next tool call, and records who got it', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execFileSync } = await import('node:child_process');
+    const { postMessage, readMessages, inboxFile } = await import('../src/jobs/inbox.js');
+    const dir = mkdtempSync(join(tmpdir(), 'bb-inbox-'));
+    const hook = (agent: string) => execFileSync(process.execPath, [join(process.cwd(), 'src/jobs/inboxHook.mjs')], { input: '{}', env: { ...process.env, BUGBASH_INBOX: inboxFile(dir), BUGBASH_AGENT: agent }, encoding: 'utf8' });
+    expect(hook('s-001')).toBe(''); // nothing yet
+    postMessage(dir, 'Focus on the pricing page');
+    const first = JSON.parse(hook('s-001'));
+    expect(first.hookSpecificOutput.hookEventName).toBe('PostToolUse');
+    expect(first.hookSpecificOutput.additionalContext).toContain('- Focus on the pricing page');
+    expect(hook('s-001')).toBe(''); // already delivered to this agent
+    expect(JSON.parse(hook('lead')).hookSpecificOutput.additionalContext).toContain('pricing page'); // other agents get it too
+    postMessage(dir, 'Also try phones');
+    expect(JSON.parse(hook('s-001')).hookSpecificOutput.additionalContext).not.toContain('pricing page'); // only the new one
+    expect(readMessages(dir).deliveries.map((d) => d.agent)).toEqual(['s-001', 'lead', 's-001']);
+  });
+});
+
+describe('fix verification flags', () => {
+  const finding = (id: string, extra: Record<string, unknown> = {}) => ({ id, type: 'overlap', evidence_kind: 'static', video: null, ...extra }) as never;
+  it('flags inconclusive, still-present, visual-only, partial checks, missing evidence and regressions', async () => {
+    const { verificationFlags } = await import('../src/fix/fixGroup.js');
+    const after = [
+      { id: 'BB-1', present: null, method: 'none', checks: [], review: null, after: null, verifiable: false },
+      { id: 'BB-2', present: false, method: 'visual-review', checks: [], review: { fixed: true, confidence: 0.7, reasoning: '' }, after: null, verifiable: false },
+      { id: 'BB-3', present: false, method: 'detector', checks: [{ browser: 'webkit', width: 1280, height: 800, present: null, error: 'replay broke' }, { browser: 'chromium', width: 1280, height: 800, present: false, error: null }], review: null, after: null, verifiable: true },
+      { id: 'BB-4', present: true, method: 'detector', checks: [], review: null, after: null, verifiable: true },
+    ];
+    const ev = new Map<string, never>([
+      ['BB-2', { after: { annotated: 'a.png', element_found: false }, after_video: null } as never],
+      ['BB-3', { after: { annotated: 'a.png', element_found: true }, after_video: null } as never],
+      ['BB-4', { after: { annotated: 'a.png', element_found: true }, after_video: null } as never],
+    ]);
+    const flags = verificationFlags([finding('BB-1'), finding('BB-2'), finding('BB-3', { type: 'layout-shift' }), finding('BB-4')], after as never, ev, ['/ @320px: new overlap']);
+    expect(flags).toEqual([
+      "BB-1: couldn't confirm the fix automatically",
+      'BB-1: no after-fix screenshot',
+      'BB-2: verified only by a visual review (70% confident), not by a detector',
+      "BB-2: the after-fix screenshot couldn't find the element, so it shows its old position",
+      'BB-3: some checks were inconclusive (webkit 1280px: replay broke)',
+      'BB-3: behaviour bug without an after-fix video',
+      'BB-4: the bug is still present',
+      '1 new layout problem(s) on the pages it touched',
+    ]);
+  });
+});
+
+describe('bug reports', () => {
+  it('stores reports per workspace', async () => {
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { addReport, readReports } = await import('../src/learn/investigate.js');
+    const ws = mkdtempSync(join(tmpdir(), 'bb-report-'));
+    const r = addReport(ws, { run: 'r1', bug: 'BB-0050', category: 'missed', text: ' Cards cover the What we do text ' });
+    expect(r).toMatchObject({ status: 'investigating', text: 'Cards cover the What we do text', proposals: [] });
+    expect(readReports(ws).map((x) => x.id)).toEqual([r.id]);
+  });
+});
+
+describe('improvement checks', () => {
+  it('run without the job’s own BUGBASH_* settings', async () => {
+    const { cleanEnv } = await import('../src/learn/implement.js');
+    process.env.BUGBASH_JOB_DIR = '/tmp/should-not-leak';
+    try {
+      const env = cleanEnv();
+      expect(Object.keys(env).some((k) => k.startsWith('BUGBASH_'))).toBe(false);
+      expect(env.PATH).toBe(process.env.PATH);
+    } finally {
+      delete process.env.BUGBASH_JOB_DIR;
+    }
   });
 });

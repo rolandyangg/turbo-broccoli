@@ -8,9 +8,9 @@ import { notifyDetached } from '../notify/notify.js';
  *   <runDir>/jobs/<jobId>/status.json   current state (rewritten on every change)
  *   <runDir>/jobs/<jobId>/events.jsonl  append-only event stream
  */
-export type JobKind = 'fix' | 'explore' | 'triage' | 'reproduce' | 'retro' | 'improve' | 'connect';
+export type JobKind = 'fix' | 'explore' | 'triage' | 'reproduce' | 'retro' | 'improve' | 'connect' | 'investigate';
 export type JobState = 'running' | 'succeeded' | 'failed' | 'cancelled';
-const KIND_LABEL: Record<JobKind, string> = { fix: 'Fix', explore: 'Bug bash', triage: 'Triage', reproduce: 'Reproduction', retro: 'Retrospective', improve: 'Improvement', connect: 'GitHub sign-in' };
+const KIND_LABEL: Record<JobKind, string> = { fix: 'Fix', explore: 'Bug bash', triage: 'Triage', reproduce: 'Reproduction', retro: 'Retrospective', improve: 'Improvement', connect: 'GitHub sign-in', investigate: 'Investigation' };
 
 export interface JobEvent {
   t: string;
@@ -55,6 +55,8 @@ export class JobReporter {
     // A launcher (e.g. the web app) can pin where job files go, so it can find them without knowing the workspace.
     this.dir = join(process.env.BUGBASH_JOB_DIR || jobsRoot, id);
     mkdirSync(this.dir, { recursive: true });
+    // Agents started from this process can receive messages sent to this job (see jobs/inbox.ts).
+    process.env.BUGBASH_INBOX = join(this.dir, 'messages.jsonl');
     const now = new Date().toISOString();
     this.status = {
       id,

@@ -2,16 +2,17 @@ import { existsSync, mkdirSync, copyFileSync, symlinkSync, writeFileSync, readFi
 import { join, basename, dirname, relative } from 'node:path';
 import { execa } from 'execa';
 import { Config } from '../config.js';
-import type { Finding, RootCauseGroup } from '../store/schema.js';
+import type { Finding, FixVerification, RootCauseGroup } from '../store/schema.js';
 import { readRun, readFindings, writeFindings, findById, allFindings } from '../store/store.js';
 import { resolveTarget } from '../target/resolve.js';
 import { runClaude } from '../llm/claude.js';
 import { BrowserPool } from '../triage/replay.js';
-import { verifyFinding, captureAfter, pageSnapshot, type VerifyResult } from './verify.js';
+import { verifyFinding, captureAfter, recordAfterVideo, needsVideo, pageSnapshot, type VerifyResult } from './verify.js';
 import { Memory } from '../memory/siteMemory.js';
 import { writeReport } from '../store/report.js';
 import { JobReporter, newJobId, describeAgentEvent, type JobEvent } from '../jobs/events.js';
 import { notifyFixDone } from '../notify/events.js';
+import { commitMessage, explainChanges, technicalSection, type FileStat } from './describe.js';
 
 export interface FixOptions {
   runDir: string;
@@ -28,12 +29,16 @@ export interface FixOptions {
    * continue: pick up an existing branch where it stopped: re-verify it, run more attempts only if the bug is still
    * there, commit what's uncommitted, then publish.
    */
-  mode?: 'new' | 'retry' | 'continue';
+  mode?: 'new' | 'retry' | 'continue' | 'verify';
   /** Branch to continue (default: the branch this scope would get). */
   branch?: string | null;
+  /** The person's instructions for the fix agent (e.g. sent to a finished job to re-steer it). */
+  instructions?: string | null;
+  /** Publish even though the fix isn't fully verified (an explicit, separately confirmed override). */
+  publishUnverified?: boolean;
 }
 
-const git = (cwd: string, args: string[]) => execa('git', args, { cwd, reject: false });
+const git = (cwd: string, args: string[], input?: string) => execa('git', args, { cwd, reject: false, ...(input !== undefined ? { input } : {}) });
 
 /** Shortens at a word boundary. */
 const clip = (s: string, n: number) => (s.length <= n ? s : s.slice(0, s.lastIndexOf(' ', n - 1) > n * 0.6 ? s.lastIndexOf(' ', n - 1) : n - 1).trimEnd() + '…');
@@ -50,7 +55,7 @@ export async function fixFindings(o: FixOptions) {
     run_dir: o.runDir,
     finding_ids: o.ids,
     scope: o.ids.join(','),
-    options: { pr: o.pr, draft: o.draft, base: o.base ?? null, maxAttempts: o.maxAttempts, mode: o.mode ?? 'new', branch: o.branch ?? null },
+    options: { pr: o.pr, draft: o.draft, base: o.base ?? null, maxAttempts: o.maxAttempts, mode: o.mode ?? 'new', branch: o.branch ?? null, instructions: o.instructions ?? null },
   });
   const say = (stage: string, msg: string, level: JobEvent['level'] = 'info', data?: Record<string, unknown>) => {
     if (level !== 'agent') o.log(msg);
@@ -62,7 +67,7 @@ export async function fixFindings(o: FixOptions) {
   });
   try {
     const r = await fixInner(o, rep, say);
-    rep.finish('succeeded', { verified: r.verified, pr_url: r.prUrl, also_fixed: r.alsoFixed, error: r.publishError ? `Not published: ${r.publishError}` : null, summary: `${r.verified ? 'Fixed and verified' : 'Committed, but not fully verified'}${r.publishError ? ' — committed locally, but the push/PR failed (see the retry command)' : ''}` });
+    rep.finish('succeeded', { verified: r.verified, pr_url: r.prUrl, also_fixed: r.alsoFixed, options: { ...rep.status.options, flags: r.flags }, error: r.publishError ? `Not published: ${r.publishError}` : null, summary: `${r.verified ? 'Fixed and verified' : 'Committed, but not fully verified'}${r.publishError ? ' — committed locally, but the push/PR failed (see the retry command)' : ''}` });
     notifyFixDone(o.runDir, { ids: o.ids, branch: r.branch, verified: r.verified, prUrl: r.prUrl });
     return r;
   } catch (e) {
@@ -116,7 +121,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   const branchExists = async (b: string) => (await git(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${b}`])).exitCode === 0;
   const defaultBranch = `bugbash/${scopeLabel.toLowerCase()}-${slug(scopeIsGroup ? groups.get(o.ids[0])!.summary : selected[0].title)}`;
   let branch = defaultBranch;
-  if (mode === 'continue') {
+  if (mode === 'continue' || mode === 'verify') {
     branch = o.branch ?? defaultBranch;
     if (!(await branchExists(branch))) throw new Error(`Branch ${branch} doesn't exist any more, so there's nothing to continue. Use Retry to start over.`);
   } else if (mode === 'retry') for (let n = 2; await branchExists(branch); n++) branch = `${defaultBranch}-${n}`;
@@ -126,7 +131,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   rep.update({ finding_ids: selected.map((f) => f.id), scope: scopeLabel, branch, base: baseBranch, worktree });
   say('worktree', `Fixing ${selected.map((f) => f.id).join(', ')} (${scopeIsGroup ? 'whole group' : 'selected findings'}) on branch ${branch} from ${baseBranch}`, 'info', { branch, base: baseBranch, worktree, findings: selected.map((f) => f.id), group_scope: scopeIsGroup });
   let createdWorktree = false;
-  if (mode === 'continue') {
+  if (mode === 'continue' || mode === 'verify') {
     if (existsSync(worktree)) say('worktree', `Continuing in the existing worktree for ${branch}`, 'info', { branch, worktree });
     else {
       const wt = await git(gitRoot, ['worktree', 'add', worktree, branch]);
@@ -144,7 +149,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   }
   // Everything is measured against where the branch left the base (committed + uncommitted work).
   const baseSha = (await git(gitRoot, ['merge-base', baseBranch, branch])).stdout.trim() || baseBranch;
-  markFixing(o.runDir, selected.map((f) => f.id), { branch, base: baseBranch, job_id: rep.status.id, scope: scopeLabel });
+  if (mode !== 'verify') markFixing(o.runDir, selected.map((f) => f.id), { branch, base: baseBranch, job_id: rep.status.id, scope: scopeLabel });
   let target: Awaited<ReturnType<typeof resolveTarget>>;
   try {
     // Give the worktree its own node_modules so the dev server can start there.
@@ -153,9 +158,9 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   } catch (e) {
     // Setup failed before any work: remove what this job created so a retry starts clean (a continued branch is kept).
     if (createdWorktree) await git(gitRoot, ['worktree', 'remove', '--force', worktree]);
-    if (mode !== 'continue') await git(gitRoot, ['branch', '-D', branch]);
+    if (mode !== 'continue' && mode !== 'verify') await git(gitRoot, ['branch', '-D', branch]);
     rep.update({ worktree: createdWorktree ? null : worktree });
-    say('cleanup', mode === 'continue' ? `Setup failed; ${branch} is kept` : `Setup failed; removed the worktree and branch ${branch}`, 'warn');
+    say('cleanup', mode === 'continue' || mode === 'verify' ? `Setup failed; ${branch} is kept` : `Setup failed; removed the worktree and branch ${branch}`, 'warn');
     throw e;
   }
   const pool = new BrowserPool();
@@ -166,12 +171,15 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
   const assetsDir = join(o.runDir, 'fixes', branch.replace(/\//g, '__'));
   mkdirSync(assetsDir, { recursive: true });
 
+  // After-fix checks: detectors where they can decide, a visual before/after review where they can't.
+  const reviewed = (attempt: number | string) => ({ ...vo, review: { runDir: o.runDir, outDir: join(assetsDir, `check-${attempt}`), model: config.model, transcriptDir: assetsDir } });
+  const label = (a: VerifyResult) => (a.present === null ? 'inconclusive' : a.present ? 'STILL PRESENT' : a.method === 'visual-review' ? 'fixed (visual review)' : 'fixed');
   try {
     // ---- baseline: confirm the bug is present in the worktree ----
     const before: VerifyResult[] = [];
     for (const f of selected) before.push(await verifyFinding(f, vo));
     // In continue mode the "baseline" is the branch as it stands (used to spot regressions from further attempts).
-    if (mode !== 'continue') for (const b of before) say('baseline', `Baseline ${b.id}: ${b.present === null ? 'not auto-verifiable (visual)' : b.present ? 'present ✓' : 'NOT present (already fixed or not reproducible here)'}`, b.present === false ? 'warn' : 'info', { result: b });
+    if (mode !== 'continue' && mode !== 'verify') for (const b of before) say('baseline', `Baseline ${b.id}: ${b.present === null ? 'not auto-checkable (visual review after the fix)' : b.present ? 'present ✓' : 'NOT present (already fixed or not reproducible here)'}`, b.present === false ? 'warn' : 'info', { result: b });
     const baselineSnap = new Map<string, Awaited<ReturnType<typeof pageSnapshot>>>();
     for (const p of touchedPages) baselineSnap.set(p, await pageSnapshot(p, vo));
 
@@ -183,23 +191,30 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     let attempt = 0;
     // Continue: check the branch as it stands first; only bring the agent back if the bug is still there.
     let skipAgent = false;
-    if (mode === 'continue') {
-      for (const f of selected) after.push(await verifyFinding(f, vo));
+    if (mode === 'continue' || mode === 'verify') {
+      for (const f of selected) after.push(await verifyFinding(f, reviewed('branch')));
       const changed = (await git(worktree, ['diff', '--stat', baseSha])).stdout.trim();
       const still = after.filter((a) => a.present);
-      say('verify:continue', `Branch as it stands: ${after.map((a) => `${a.id}=${a.present === null ? 'visual' : a.present ? 'STILL PRESENT' : 'fixed'}`).join(' ')}${changed ? '' : '; no changes yet'}`, still.length || !changed ? 'info' : 'success', { after });
-      if (changed && !still.length) {
+      say('verify:continue', `Branch as it stands: ${after.map((a) => `${a.id}=${label(a)}`).join(' ')}${changed ? '' : '; no changes yet'}`, still.length || !changed ? 'info' : 'success', { after });
+      if (mode === 'verify') {
         skipAgent = true;
         agentSummary = (await git(worktree, ['log', '-1', '--format=%B', branch])).stdout.trim();
-      } else if (changed) feedback = `This continues earlier work on the branch. Still present:\n${still.map((x) => `- ${x.id}: ${x.checks.filter((c) => c.present).map((c) => `${c.browser} ${c.width}x${c.height}`).join(', ')}`).join('\n')}\n\nCurrent diff from the base:\n${(await git(worktree, ['diff', baseSha])).stdout.slice(0, 6000)}`;
+      } else if (changed && !still.length && !o.instructions) {
+        skipAgent = true;
+        agentSummary = (await git(worktree, ['log', '-1', '--format=%B', branch])).stdout.trim();
+      } else if (changed && !still.length) feedback = '';
+      else if (changed) feedback = `This continues earlier work on the branch. Still present:\n${still.map((x) => `- ${x.id}: ${x.checks.filter((c) => c.present).map((c) => `${c.browser} ${c.width}x${c.height}`).join(', ')}`).join('\n')}\n\nCurrent diff from the base:\n${(await git(worktree, ['diff', baseSha])).stdout.slice(0, 6000)}`;
     }
+    // The person's instructions go first, and always bring the agent back (they asked for a change).
+    const steer = o.instructions?.trim() ? `# Instructions from the person reviewing this fix (follow them within your rules)\n${o.instructions.trim()}\n\nCurrent diff from the base:\n${(await git(worktree, ['diff', baseSha])).stdout.slice(0, 6000) || '(no changes yet)'}` : '';
+    if (steer && mode !== 'verify') skipAgent = false;
     for (attempt = 1; !skipAgent && attempt <= o.maxAttempts; attempt++) {
       say(`attempt:${attempt}`, `Attempt ${attempt}/${o.maxAttempts}: fix agent is working…`, 'info', { attempt, feedback: feedback ? feedback.slice(0, 2000) : null });
       const r = await runClaude({
         onEvent: (e) => {
           for (const d of describeAgentEvent(e)) say(`attempt:${attempt}`, d.msg, 'agent', d.data);
         },
-        prompt: fixPrompt(selected, [...groups.values()], groupMembers, scopeIsGroup, o.runDir, feedback),
+        prompt: fixPrompt(selected, [...groups.values()], groupMembers, scopeIsGroup, o.runDir, [steer, feedback].filter(Boolean).join('\n\n')),
         systemPrompt: FIX_SYSTEM,
         tools: ['Read', 'Grep', 'Glob', 'Edit', 'Write'],
         allowedTools: ['Read', 'Grep', 'Glob', 'Edit', 'Write'],
@@ -208,13 +223,14 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         model: config.model,
         timeoutMs: 20 * 60_000,
         transcriptPath: join(assetsDir, `agent-attempt-${attempt}.jsonl`),
+        agentName: 'fix agent',
       });
       agentSummary = r.text;
       if (!r.ok) say(`attempt:${attempt}`, `Fix agent error: ${r.error}`, 'warn');
       else say(`attempt:${attempt}`, 'Fix agent finished', 'info', { summary: r.text.slice(0, 3000), tool_calls: r.toolCalls, duration_ms: r.durationMs });
       await new Promise((res) => setTimeout(res, 1500)); // let dev servers hot-reload
       after = [];
-      for (const f of selected) after.push(await verifyFinding(f, vo));
+      for (const f of selected) after.push(await verifyFinding(f, reviewed(attempt)));
       regressions = [];
       for (const p of touchedPages) {
         const snap = await pageSnapshot(p, vo);
@@ -223,7 +239,8 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       const still = after.filter((a) => a.present);
       const diff = (await git(worktree, ['diff', '--stat', baseSha])).stdout.trim();
       const ok = !!diff && !still.length && !regressions.length;
-      say(`verify:${attempt}`, `Verify: ${after.map((a) => `${a.id}=${a.present === null ? 'visual' : a.present ? 'STILL PRESENT' : 'fixed'}`).join(' ')}; regressions: ${regressions.length}; diff: ${diff.split('\n').pop() || 'none'}`, ok ? 'success' : 'warn', { after, regressions, diff_stat: diff });
+      say(`verify:${attempt}`, `Verify: ${after.map((a) => `${a.id}=${label(a)}`).join(' ')}; regressions: ${regressions.length}; diff: ${diff.split('\n').pop() || 'none'}`, ok && after.every((a) => a.present === false) ? 'success' : 'warn', { after, regressions, diff_stat: diff });
+      for (const a of after) if (a.review) say(`verify:${attempt}`, `Visual review of ${a.id}: ${a.review.fixed ? 'looks fixed' : 'still looks broken'} (${Math.round(a.review.confidence * 100)}%): ${a.review.reasoning}`, a.review.fixed ? 'info' : 'warn');
       if (!diff) feedback = 'No files were changed. Make the fix.';
       else if (still.length || regressions.length)
         feedback = [
@@ -233,7 +250,10 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         ].filter(Boolean).join('\n\n');
       else break;
     }
-    const verified = after.length > 0 && after.every((a) => a.present !== true) && regressions.length === 0;
+    // Verified means every check shows the bug gone; "couldn't tell" never counts as fixed.
+    const verified = after.length > 0 && after.every((a) => a.present === false) && regressions.length === 0;
+    const inconclusive = after.filter((a) => a.present === null).map((a) => a.id);
+    if (inconclusive.length) say('verify', `Couldn't confirm ${inconclusive.join(', ')} automatically: compare the before/after on the bug page, or reproduce it on the fixed version`, 'warn');
     const diff = (await git(worktree, ['diff', '--stat', baseSha])).stdout.trim();
     if (!diff) throw new Error('Fix agent made no changes; nothing to commit.');
 
@@ -245,20 +265,74 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     }
     if (groupMembers.length) say('also-fixed', alsoFixed.length ? `Also resolves ${alsoFixed.join(', ')}` : 'No other findings in the group were resolved', 'info', { also_fixed: alsoFixed });
 
-    // ---- evidence ----
-    for (const f of selected) await captureAfter(f, join(assetsDir, `${f.id}-after.png`), vo).catch(() => {});
-    say('evidence', 'Captured after-fix screenshots', 'info', { after_shots: selected.map((f) => relative(o.runDir, join(assetsDir, `${f.id}-after.png`))) });
+    // ---- evidence: after stills of the same spot, plus a video for behaviour bugs ----
+    const evidence = new Map<string, FixVerification>();
+    for (const f of selected) {
+      const a = after.find((x) => x.id === f.id)!;
+      const shotFile = join(assetsDir, `${f.id}-after.png`);
+      const shot = await captureAfter(f, shotFile, vo).catch(() => null);
+      let video: FixVerification['after_video'] = null;
+      if (needsVideo(f)) {
+        say('evidence', `Recording an after-fix video of ${f.id} (it's a behaviour bug)`);
+        const v = await recordAfterVideo(f, assetsDir, vo).catch(() => null);
+        if (v) video = { mp4: v.mp4 && relative(o.runDir, v.mp4), gif: v.gif && relative(o.runDir, v.gif), filmstrip: v.filmstrip && relative(o.runDir, v.filmstrip) };
+      }
+      const rel = (p: string) => (existsSync(p) ? relative(o.runDir, p) : null);
+      evidence.set(f.id, {
+        result: a.present === false ? 'fixed' : a.present ? 'present' : 'inconclusive',
+        method: a.method,
+        checks: a.checks,
+        review: a.review,
+        after: shot ? { annotated: rel(shotFile), crop: rel(shotFile.replace(/\.png$/, '-crop.png')), full: rel(shotFile.replace(/\.png$/, '-full.png')), element_found: shot.found } : null,
+        after_video: video,
+        at: new Date().toISOString(),
+      });
+    }
+    say('evidence', `Captured after-fix evidence${[...evidence.values()].some((e) => e.after_video) ? ' (stills and video)' : ''}`, 'info', { after: Object.fromEntries(evidence) });
 
-    // ---- commit ----
-    const title = scopeIsGroup ? groups.get(o.ids[0])!.summary : selected.length === 1 ? selected[0].title : `${selected.length} UI fixes: ${selected.map((f) => f.id).join(', ')}`;
-    const commitMsg = `fix(ui): ${clip(title, 64)}\n\nFixes ${selected.map((f) => f.id).join(', ')}${alsoFixed.length ? ` (also resolves ${alsoFixed.join(', ')})` : ''} found by bugbash run ${info.run_id}.\n${verified ? 'Verified: repro checks pass at all affected viewports/browsers; no new layout defects on touched pages.' : 'NOT fully verified — see PR description.'}\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`;
+    // Anything that keeps this fix from being fully trusted, in words a reviewer can act on.
+    const flags = verificationFlags(selected, after, evidence, regressions);
+    if (flags.length) say('verify', `Flags:\n${flags.map((x) => `- ${x}`).join('\n')}`, 'warn', { flags });
+
+    if (mode === 'verify') {
+      // Re-verification only: update the record, change nothing on the branch.
+      const fresh = readFindings(o.runDir)!;
+      for (const f of allFindings(fresh)) {
+        const ev = evidence.get(f.id);
+        if (!ev) continue;
+        const own = flags.filter((x) => x.startsWith(`${f.id}:`) || !/^BB-\d+:/.test(x));
+        if (f.fix) {
+          f.fix.verification = ev;
+          f.fix.verified = ev.result === 'fixed' && regressions.length === 0;
+          f.fix.flags = own;
+          if (f.fix.verified) f.fix.blocked = false;
+        } else f.fix = { branch, base: baseBranch, pr_url: null, verified: ev.result === 'fixed', fixed_by: scopeLabel, job_id: rep.status.id, at: new Date().toISOString(), verification: ev, flags: own, blocked: false };
+      }
+      writeFindings(o.runDir, { run_id: fresh.run_id, target: fresh.target, generated_at: fresh.generated_at, groups: fresh.groups });
+      say('record', `Re-verified: ${verified ? 'fixed ✓' : inconclusive.length ? `couldn't confirm ${inconclusive.join(', ')}` : 'NOT fixed ✗'}`, verified ? 'success' : 'warn');
+      return { branch, prUrl: null, verified, alsoFixed, worktree, publishError: null, flags };
+    }
+
+    // ---- stage, explain the change (from the real diff), then commit with a message about the change ----
     await git(worktree, ['add', '-A', '--', '.', ':(exclude)node_modules', ':(exclude).bugbash', ':(exclude)**/.bugbash']);
     // Never commit a bugbash workspace into the target repo, whatever its .gitignore says.
     const staged = (await git(worktree, ['diff', '--cached', '--name-only'])).stdout.split('\n').filter((p) => /(^|\/)\.bugbash\//.test(p));
     if (staged.length) await git(worktree, ['reset', '-q', '--', ...staged]);
+    // Base → index covers what's already committed on a continued branch plus what's about to be.
+    const stats: FileStat[] = (await git(worktree, ['diff', '--cached', '--numstat', baseSha])).stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => l.split('\t'))
+      .map(([a, r, file]) => ({ file, added: Number(a) || 0, removed: Number(r) || 0 }));
+    say('commit', 'Writing a description of the change');
+    const explanation = await explainChanges({ diff: (await git(worktree, ['diff', '--cached', baseSha])).stdout, stats, findings: selected, groups: [...groups.values()], agentSummary, model: config.model, transcriptPath: join(assetsDir, 'explain.jsonl') });
+    if (!explanation) say('commit', "Couldn't write a description of the change; using the changed files and the fix agent's notes", 'warn');
+    const technical = technicalSection(explanation, stats, agentSummary);
+    const title = scopeIsGroup ? groups.get(o.ids[0])!.summary : selected.length === 1 ? selected[0].title : `${selected.length} UI fixes: ${selected.map((f) => f.id).join(', ')}`;
+    const commitMsg = commitMessage(explanation, stats, { fallbackTitle: title, refs: [...selected.map((f) => f.id), ...alsoFixed], runId: info.run_id, verified });
     // A continued branch may already have everything committed.
     if ((await git(worktree, ['diff', '--cached', '--quiet'])).exitCode !== 0) {
-      const c = await git(worktree, ['commit', '-m', commitMsg]);
+      const c = await git(worktree, ['commit', '-F', '-'], commitMsg);
       if (c.exitCode !== 0) throw new Error(`git commit failed: ${c.stderr || c.stdout}`);
     }
     const sha = (await git(worktree, ['rev-parse', 'HEAD'])).stdout.trim();
@@ -270,12 +344,19 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     // ---- PR ----
     let prUrl: string | null = null;
     let publishError: string | null = null;
-    if (o.pr) {
+    // Gate: never publish a fix that isn't fully verified, unless the person explicitly overrides it.
+    const blocked = !!o.pr && !verified && !o.publishUnverified;
+    if (blocked) {
+      publishError = `Blocked: not fully verified, so it was not pushed and no PR was opened. ${flags.length ? `Flags: ${flags.join('; ')}` : ''}`.trim();
+      say('pr', `Publishing blocked: the fix isn't fully verified. Nothing was pushed. Review the before/after, then send the agent more instructions, retry verification, or publish anyway.`, 'error', { flags });
+      o.keepWorktree = true;
+    }
+    if (o.pr && !blocked) {
       // Screenshots are never committed to the target repo (the .bugbash workspace stays private); they're hosted by
       // GitHub itself once the branch is pushed (see attachImages below).
       let images: Map<string, string> | null = null;
       const bodyFile = join(assetsDir, 'pr-body.md');
-      const writeBody = () => writeFileSync(bodyFile, prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, images, attempts: attempt }));
+      const writeBody = () => writeFileSync(bodyFile, prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images, attempts: attempt, flags }));
       writeBody();
       const prArgs = ['pr', 'create', '--base', baseBranch, '--head', branch, '--title', `fix(ui): ${clip(title, 90)}`, '--body-file', bodyFile, ...(o.draft ? ['--draft'] : [])];
       // Publishing can fail for reasons unrelated to the fix (network, auth, GitHub limits). The verified commit is
@@ -309,7 +390,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         o.keepWorktree = true;
       }
     } else {
-      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, agentSummary, runId: info.run_id, images: null, attempts: attempt }));
+      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images: null, attempts: attempt, flags }));
       say('commit', `Not pushed (no PR requested). PR description draft saved.`, 'info', { pr_body: relative(o.runDir, join(assetsDir, 'pr-body.md')) });
     }
 
@@ -321,15 +402,15 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       const isAlso = alsoFixed.includes(f.id);
       if (!isSel && !isAlso) continue;
       f.status = 'fixing';
-      f.fix = { branch, base: baseBranch, pr_url: prUrl, verified: isSel ? verified : true, fixed_by: isSel ? scopeLabel : `${scopeLabel} (side effect)`, job_id: rep.status.id, at: now };
+      f.fix = { branch, base: baseBranch, pr_url: prUrl, verified: isSel ? verified : true, fixed_by: isSel ? scopeLabel : `${scopeLabel} (side effect)`, job_id: rep.status.id, at: now, verification: evidence.get(f.id) ?? null, flags: isSel ? flags.filter((x) => x.startsWith(`${f.id}:`) || !/^BB-\d+:/.test(x)) : [], blocked: isSel && blocked };
       memory.setBugStatus(f.fingerprint, 'fixing', info.run_id, f.id);
     }
     writeFindings(o.runDir, { run_id: fresh.run_id, target: fresh.target, generated_at: fresh.generated_at, groups: fresh.groups });
     writeReport(o.runDir);
     say('record', `Done: ${verified ? 'verified ✓' : 'NOT fully verified ✗'}${alsoFixed.length ? `; also fixed ${alsoFixed.join(', ')}` : ''}`, verified ? 'success' : 'warn');
-    return { branch, prUrl, verified, alsoFixed, worktree, publishError };
+    return { branch, prUrl, verified, alsoFixed, worktree, publishError, flags };
   } catch (e) {
-    restoreStatus(o.runDir, selected, rep.status.id);
+    if (mode !== 'verify') restoreStatus(o.runDir, selected, rep.status.id);
     throw e;
   } finally {
     await pool.close();
@@ -349,7 +430,7 @@ function markFixing(runDir: string, ids: string[], fix: { branch: string; base: 
   for (const f of allFindings(ff)) {
     if (!ids.includes(f.id)) continue;
     f.status = 'fixing';
-    f.fix = { branch: fix.branch, base: fix.base, pr_url: null, verified: false, fixed_by: fix.scope, job_id: fix.job_id, at: new Date().toISOString() };
+    f.fix = { branch: fix.branch, base: fix.base, pr_url: null, verified: false, fixed_by: fix.scope, job_id: fix.job_id, at: new Date().toISOString(), verification: f.fix?.verification ?? null, flags: f.fix?.flags ?? [], blocked: false };
   }
   writeFindings(runDir, { run_id: ff.run_id, target: ff.target, generated_at: ff.generated_at, groups: ff.groups });
 }
@@ -406,15 +487,20 @@ function fixPrompt(selected: Finding[], groups: RootCauseGroup[], others: Findin
     .join('\n\n');
 }
 
-function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: string[]; before: VerifyResult[]; after: VerifyResult[]; regressions: string[]; verified: boolean; agentSummary: string; runId: string; images: Map<string, string> | null; attempts: number }) {
+function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: string[]; before: VerifyResult[]; after: VerifyResult[]; regressions: string[]; verified: boolean; technical: { summary: string; technical: string }; runId: string; images: Map<string, string> | null; attempts: number; flags: string[] }) {
   const lines: string[] = [];
-  lines.push(`## Summary`, '', d.agentSummary.trim().slice(0, 3000) || '(no summary)', '');
+  if (!d.verified)
+    lines.push('> [!WARNING]', '> **Not fully verified.** This was published by explicit override; review the before/after carefully.', ...d.flags.map((x) => `> - ${x}`), '');
+  lines.push(`## Summary`, '', d.technical.summary, '');
+  lines.push(`## Changes`, '', d.technical.technical, '');
   lines.push(`## Findings fixed`, '');
   for (const f of d.selected) {
     const b = d.before.find((x) => x.id === f.id);
     const a = d.after.find((x) => x.id === f.id);
     lines.push(`### ${f.id} — ${f.title}`, `- ${f.type}, ${f.severity}, on \`${f.page}\` (${f.browsers.join(', ')}; ${f.viewports.map((v) => v.width).join(', ')}px)`, `- Expected: ${f.reproduction.expected}`, `- Actual (before): ${f.reproduction.actual}`);
-    lines.push(`- Verification: before ${b?.present === null ? 'visual-only' : b?.present ? 'present' : 'absent'} → after ${a?.present === null ? 'visual-only (please check screenshots)' : a?.present ? '**still present**' : 'fixed'}${a?.checks.length ? ` (${a.checks.map((c) => `${c.browser} ${c.width}px ${c.present ? '✗' : '✓'}`).join(', ')})` : ''}`);
+    const afterText = a?.present === null || !a ? "**couldn't confirm automatically** (please compare the pictures)" : a.present ? '**still present**' : a.method === 'visual-review' ? `fixed (visual review, ${Math.round((a.review?.confidence ?? 0) * 100)}% confident)` : 'fixed (detector checks)';
+    lines.push(`- Verification: before ${b?.present === null ? 'visual-only' : b?.present ? 'present' : 'absent'} → after ${afterText}${a?.checks.length ? ` (${a.checks.map((c) => `${c.browser} ${c.width}px ${c.present === null ? '?' : c.present ? '✗' : '✓'}`).join(', ')})` : ''}`);
+    if (a?.review) lines.push(`- Visual review: ${a.review.reasoning}`);
     lines.push('', '<details><summary>Reproduction steps</summary>', '', ...f.reproduction.steps_human.map((s, i) => `${i + 1}. ${s}`), '', '</details>', '');
     const img = (name: string) => d.images?.get(name);
     const beforeImg = img(`${f.id}-before.gif`) ?? img(`${f.id}-before.png`);
@@ -424,7 +510,7 @@ function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoFixed: s
   if (d.alsoFixed.length) lines.push(`## Also resolved (same root cause)`, '', d.alsoFixed.map((x) => `- ${x}`).join('\n'), '');
   const g = d.groups.map((x) => `- ${x.id}: ${x.summary}${x.fix_plan ? ` — plan: ${x.fix_plan}` : ''}`).join('\n');
   lines.push(`## Root-cause group`, '', g, '');
-  lines.push(`## Verification`, '', d.verified ? `✅ Repro checks pass at every affected viewport/browser and the touched pages have no new layout defects (${d.attempts} attempt${d.attempts > 1 ? 's' : ''}).` : `⚠️ Not fully verified.${d.regressions.length ? `\nNew layout candidates on touched pages:\n${d.regressions.map((r) => `- ${r}`).join('\n')}` : ''}`, '');
+  lines.push(`## Verification`, '', d.verified ? `✅ Every bug checked out as fixed (detector replays at each affected size and browser, or a visual before/after review where noted), and the touched pages have no new layout defects (${d.attempts} attempt${d.attempts > 1 ? 's' : ''}).` : `⚠️ Not fully verified: see each bug above.${d.regressions.length ? `\nNew layout candidates on touched pages:\n${d.regressions.map((r) => `- ${r}`).join('\n')}` : ''}`, '');
   lines.push(`Found and fixed by bugbash (run \`${d.runId}\`).`, '', '🤖 Generated with [Claude Code](https://claude.com/claude-code)');
   return lines.join('\n');
 }
@@ -496,4 +582,23 @@ async function attachImages(nwo: string, pageUrl: string, selected: Finding[], r
     say('pr', `No pictures in the PR: ${(e as Error).message}`, 'warn');
     return null;
   }
+}
+
+/** Reasons a fix can't be fully trusted yet, one line each (prefixed with the bug id when it's about one bug). */
+export function verificationFlags(selected: Finding[], after: VerifyResult[], evidence: Map<string, FixVerification>, regressions: string[]): string[] {
+  const out: string[] = [];
+  for (const f of selected) {
+    const a = after.find((x) => x.id === f.id);
+    const ev = evidence.get(f.id);
+    if (!a || a.present === null) out.push(`${f.id}: couldn't confirm the fix automatically`);
+    else if (a.present) out.push(`${f.id}: the bug is still present`);
+    else if (a.method === 'visual-review') out.push(`${f.id}: verified only by a visual review (${Math.round((a.review?.confidence ?? 0) * 100)}% confident), not by a detector`);
+    const unsure = (a?.checks ?? []).filter((c) => c.present === null);
+    if (a && a.present !== null && unsure.length) out.push(`${f.id}: some checks were inconclusive (${unsure.map((c) => `${c.browser} ${c.width}px${c.error ? `: ${c.error}` : ''}`).join(', ')})`);
+    if (!ev?.after?.annotated) out.push(`${f.id}: no after-fix screenshot`);
+    else if (!ev.after.element_found) out.push(`${f.id}: the after-fix screenshot couldn't find the element, so it shows its old position`);
+    if (needsVideo(f) && !ev?.after_video?.mp4) out.push(`${f.id}: behaviour bug without an after-fix video`);
+  }
+  if (regressions.length) out.push(`${regressions.length} new layout problem(s) on the pages it touched`);
+  return out;
 }

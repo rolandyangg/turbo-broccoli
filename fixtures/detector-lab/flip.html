@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Flip card lab</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 24px; color: #eee; background: #1d1f2b; }
+  .flip { perspective: 900px; display: inline-block; margin: 24px; }
+  .flip .inner { position: relative; width: 180px; height: 120px; transform-style: preserve-3d; }
+  .flip .face { position: absolute; inset: 0; padding: 8px; background: #333; }
+  .flip .back { transform: rotateY(180deg); }
+  /* Control: faces hidden from behind, as it should be. */
+  #ok-card .face { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+  /* LAB-B1: backface-visibility is only set on the front, so the turned-away back face reads mirrored. */
+  #mirror-card .front { backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+  /* LAB-B2: the back face was never rotated away, so both faces sit on top of each other. */
+  #double .back { transform: none; }
+</style>
+</head>
+<body>
+<h1>Flip cards</h1>
+<div class="flip"><div class="inner" id="ok-card"><div class="face front">Track one front</div><div class="face back" id="ok-back">Track one details</div></div></div>
+<div class="flip"><div class="inner" id="mirror-card"><div class="face front">Track two front</div><div class="face back" id="mirrored-back">Track two details</div></div></div>
+<div class="flip"><div class="inner" id="double"><div class="face front">Track three front</div><div class="face back">Track three details</div></div></div>
+</body>
+</html>

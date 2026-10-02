@@ -54,5 +54,8 @@ To show the user a bug live: `./bin/bugbash.js reproduce BB-0007` opens a real b
 - Notification channels and events are set on the web app's Settings page; don't change them unless asked.
 - `schedule add|list|enable|disable|run-now|remove` manages macOS launchd schedules. Only add or enable one when the user asks for scheduled runs, and say it only runs while the Mac is awake and they're logged in.
 
+## Talking to a running job
+The user can message the agents of a running job from its page in the web app (Talk to the agent). Messages reach each agent (explorers, lead, fix agent, improvement agent) at its next tool call. If you're watching a job for them and they want to steer it, point them there.
+
 ## Web app
 For browsing results, pointing the user to the UI is often better than pasting results. `npm run web` serves http://127.0.0.1:4317, where they can view every bug with its screenshots, annotated video and repro steps, start fixes and watch them live. Start it in the background if they ask to see results visually.

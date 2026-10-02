@@ -6,6 +6,7 @@ import { ago, dateTime, duration, targetName } from '../lib/format.ts';
 import { Box, Chamfer, Chip, Dialog, ErrorBox, JsonView, Loading, Arrow, useToast } from '../components/ui.tsx';
 import { BranchPanel, CancelButton, JobStateChip, JobTimeline, JobsTable } from '../components/Jobs.tsx';
 import { FixRunDialog, type FixRunDefaults } from '../components/Actions.tsx';
+import { AgentChat } from '../components/AgentChat.tsx';
 
 export function Job() {
   const { id = '' } = useParams();
@@ -36,7 +37,7 @@ export function Job() {
           )}
         </div>
         <h1 className="display" style={{ fontSize: 'clamp(28px, 4vw, 54px)', marginTop: 12 }}>
-          {job.kind === 'fix' ? `Fixing ${job.finding_ids.join(', ')}` : job.kind === 'explore' ? `Bug bash: ${targetName(target ?? '')}` : job.kind === 'reproduce' ? `Reproducing ${job.finding_ids.join(', ')}` : job.kind === 'retro' ? 'Retrospective' : job.kind === 'improve' ? `Implementing ${job.scope ?? 'improvement'}` : job.kind === 'connect' ? 'Connecting GitHub' : 'Triage'}
+          {job.kind === 'fix' ? `Fixing ${job.finding_ids.join(', ')}` : job.kind === 'explore' ? `Bug bash: ${targetName(target ?? '')}` : job.kind === 'reproduce' ? `Reproducing ${job.finding_ids.join(', ')}` : job.kind === 'retro' ? 'Retrospective' : job.kind === 'improve' ? `Implementing ${job.scope ?? 'improvement'}` : job.kind === 'connect' ? 'Connecting GitHub' : job.kind === 'investigate' ? `Investigating ${job.scope ?? 'a report'}` : 'Triage'}
         </h1>
         <p className="mono small muted" style={{ margin: '8px 0 0' }}>
           started {dateTime(job.started_at)} ({ago(job.started_at)}) · {duration(job.started_at, job.ended_at)}
@@ -59,6 +60,7 @@ export function Job() {
             )}
             <JobTimeline events={events} status={job} />
           </Box>
+          <AgentChat job={job} events={events} />
           {job.kind === 'explore' && job.run && <LiveSessions ws={job.run.ws} run={job.run.run} live={job.state === 'running'} />}
           {job.log_tail && (
             <details className="box">
@@ -230,9 +232,11 @@ export function Jobs() {
  * stopped (re-verifies, more attempts only if needed, then commits and publishes); Retry starts over on a new branch.
  */
 function FixOutcome({ job }: { job: JobView & { branch_exists?: boolean | null } }) {
-  const [mode, setMode] = useState<'continue' | 'retry' | null>(null);
+  const [mode, setMode] = useState<'continue' | 'retry' | 'verify' | 'publish-anyway' | null>(null);
   const running = job.state === 'running' && job.alive;
   const notPublished = !!job.error && /Not published/.test(job.error);
+  const blocked = !!job.error && /Blocked: not fully verified/.test(job.error);
+  const flags = ((job.options as { flags?: string[] } | undefined)?.flags ?? []).filter(Boolean);
   if (running) return null;
   const canContinue = !!job.branch && job.branch_exists === true && job.run;
   const showNext = job.run && (job.state !== 'succeeded' || notPublished || job.verified === false || !job.pr_url);
@@ -245,11 +249,36 @@ function FixOutcome({ job }: { job: JobView & { branch_exists?: boolean | null }
           <span className="small">Open on GitHub ↗</span>
         </a>
       )}
+      {(blocked || flags.length > 0) && (
+        <div className="fix-flags" role="status">
+          <b className="small">{blocked ? "Publishing was blocked: the fix isn't fully verified, so nothing was pushed." : 'Verification flags:'}</b>
+          {flags.length > 0 && (
+            <ul>
+              {flags.map((x, i) => (
+                <li key={i} className="small">
+                  {x}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="small muted" style={{ margin: '6px 0 0' }}>Compare the before/after on the bug page, then send the agent instructions, retry verification, or publish anyway.</p>
+        </div>
+      )}
       {showNext && (
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
           {canContinue && (
             <Chamfer small tone="green" onClick={() => setMode('continue')}>
-              {notPublished ? 'Continue: push and open the PR' : 'Continue on this branch'}
+              {notPublished && !blocked ? 'Continue: push and open the PR' : 'Continue on this branch'}
+            </Chamfer>
+          )}
+          {canContinue && (blocked || job.verified === false) && (
+            <button className="btn-ghost" onClick={() => setMode('verify')}>
+              Retry verification
+            </button>
+          )}
+          {canContinue && blocked && (
+            <Chamfer small tone="danger" onClick={() => setMode('publish-anyway')}>
+              Publish anyway…
             </Chamfer>
           )}
           <button className="btn-ghost" onClick={() => setMode('retry')}>

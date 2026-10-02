@@ -10,7 +10,7 @@ type Kind = 'lesson' | 'prior' | 'detector' | 'tweak';
 interface Proposal {
   id: string;
   run: string;
-  source: 'retro' | 'lead';
+  source: 'retro' | 'lead' | 'report';
   kind: Kind;
   scope: 'site' | 'general';
   title: string;
@@ -115,7 +115,7 @@ export function Improvements() {
       </div>
       <div style={{ marginTop: 20 }}>
         {tab === 'pending' && <Pending runs={data.runs} reload={reload} />}
-        {tab === 'backlog' && <Backlog items={data.backlog} reload={reload} />}
+        {tab === 'backlog' && <Backlog items={data.backlog} runs={data.runs} reload={reload} />}
         {tab === 'knowledge' && <Knowledge data={data} />}
         {tab === 'bench' && <Bench data={data} />}
         {tab === 'history' && <History rows={all.filter(({ p }) => p.status !== 'pending')} />}
@@ -147,8 +147,16 @@ function Pending({ runs, reload }: { runs: RunGroup[]; reload: () => void }) {
             </div>
             <Chip>{g.pending.length} pending</Chip>
           </div>
-          {g.retro?.summary && <p className="muted" style={{ margin: 0, maxWidth: 900 }}>{g.retro.summary}</p>}
-          {g.retro && !g.retro.ok && <div className="empty" style={{ color: 'var(--err)' }}>Retrospective failed: {g.retro.error}</div>}
+          {g.retro?.summary && (
+            <p className="muted" style={{ margin: 0, maxWidth: 900 }}>
+              {g.retro.summary}
+            </p>
+          )}
+          {g.retro && !g.retro.ok && (
+            <div className="empty" style={{ color: 'var(--err)' }}>
+              Retrospective failed: {g.retro.error}
+            </div>
+          )}
           {g.pending.map((p) => (
             <ProposalCard key={p.id} p={p} ws={g.ws} reload={reload} />
           ))}
@@ -184,7 +192,7 @@ function ProposalCard({ p, ws, reload }: { p: Proposal; ws: string; reload: () =
           <span className="mono small">{p.id}</span>
           <Chip tone="ink">{KIND_LABEL[p.kind]}</Chip>
           {p.scope === 'general' && <Chip tone="outline">general</Chip>}
-          <Chip tone="outline">{p.source === 'lead' ? 'from the lead' : 'retrospective'}</Chip>
+          <Chip tone="outline">{p.source === 'lead' ? 'from the lead' : p.source === 'report' ? 'from your report' : 'retrospective'}</Chip>
         </div>
       </div>
       <div className="box-body stack" style={{ ['--gap' as string]: '10px' }}>
@@ -334,73 +342,135 @@ function Evidence({ p, ws }: { p: Proposal; ws: string }) {
 
 const STATUS_TONE: Record<BacklogItem['status'], string> = { open: 'outline', implementing: 'green live', implemented: 'mint', failed: 'sev-critical dot', closed: 'outline' };
 
-function Backlog({ items, reload }: { items: BacklogItem[]; reload: () => void }) {
-  const [impl, setImpl] = useState<BacklogItem | null>(null);
+function Backlog({ items, runs, reload }: { items: BacklogItem[]; runs: RunGroup[]; reload: () => void }) {
+  const [impl, setImpl] = useState<{ ws: string; ids: string[]; all: boolean } | null>(null);
+  const [sel, setSel] = useState<string[]>([]); // "ws/id"
   if (!items.length) return <div className="empty">The backlog is empty. Approved detector suggestions and prompt/config tweaks land here.</div>;
+  const open = items.filter((b) => b.status === 'open' || b.status === 'failed');
+  const openByWs = new Map<string, BacklogItem[]>();
+  for (const b of open) openByWs.set(b.ws, [...(openByWs.get(b.ws) ?? []), b]);
+  const selected = sel.map((k) => items.find((b) => `${b.ws}/${b.id}` === k)).filter(Boolean) as BacklogItem[];
+  const selWs = [...new Set(selected.map((b) => b.ws))];
+  const toggle = (b: BacklogItem, on: boolean) => setSel((cur) => (on ? [...cur, `${b.ws}/${b.id}`] : cur.filter((k) => k !== `${b.ws}/${b.id}`)));
   return (
     <>
-      <div className="stack" style={{ ['--gap' as string]: '14px' }}>
-        {[...items].reverse().map((b) => (
-          <article key={`${b.ws}/${b.id}`} className="box">
-            <div className="box-head">
-              <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                <span className="mono small">{b.id}</span>
-                <Chip tone="ink">{KIND_LABEL[b.kind]}</Chip>
-                <Chip tone={STATUS_TONE[b.status]}>{b.status}</Chip>
-              </div>
-              <span className="small muted">from {b.proposal_id}</span>
-            </div>
-            <div className="box-body stack" style={{ ['--gap' as string]: '8px' }}>
-              <h3 className="proposal-title">{b.title}</h3>
-              <p style={{ margin: 0 }}>{b.body}</p>
-              {(b.detector || b.tweak) && <p className="small muted" style={{ margin: 0 }}>{b.detector ? `${b.detector.finding_type}: ${b.detector.sketch}` : `${b.tweak!.target}: ${b.tweak!.change}`}</p>}
-              {b.branch && (
-                <div className="small">
-                  Branch <span className="mono">{b.branch}</span>
-                  {b.pr_url && (
-                    <>
-                      {' · '}
-                      <a href={b.pr_url} target="_blank" rel="noreferrer">
-                        pull request
-                      </a>
-                    </>
-                  )}
-                  {b.job_id && (
-                    <>
-                      {' · '}
-                      <Link to={`/jobs/${b.job_id}`}>job</Link>
-                    </>
-                  )}
-                </div>
-              )}
-              {b.error && <div className="small" style={{ color: 'var(--err)' }}>{b.error}</div>}
-              {(b.status === 'open' || b.status === 'failed') && (
-                <div>
-                  <Chamfer small onClick={() => setImpl(b)}>
-                    {b.status === 'failed' ? 'Try again on a new branch' : 'Implement on a branch'}
-                  </Chamfer>
-                </div>
-              )}
-            </div>
-          </article>
-        ))}
-      </div>
-      {impl && <ImplementDialog item={impl} onClose={() => setImpl(null)} onStarted={reload} />}
+      {open.length > 0 && (
+        <div className="backlog-bar">
+          <span className="small muted">Implement several approved items on one branch: one commit each, every item checked by typecheck and tests. Items that fail are rolled back and the rest carry on.</span>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <Chamfer small tone="green" disabled={!selected.length || selWs.length > 1} onClick={() => setImpl({ ws: selWs[0], ids: selected.map((b) => b.id), all: false })}>
+              Implement selected ({selected.length}) on one branch
+            </Chamfer>
+            {[...openByWs.entries()].map(([ws, list]) => (
+              <button key={ws} className="btn-ghost" onClick={() => setImpl({ ws, ids: list.map((b) => b.id), all: true })}>
+                Implement all open ({list.length}){openByWs.size > 1 ? ` · ${targetName(runs.find((r) => r.ws === ws)?.target ?? ws)}` : ''}
+              </button>
+            ))}
+          </div>
+          {selWs.length > 1 && (
+            <span className="small" style={{ color: 'var(--warn)' }}>
+              Selected items belong to different projects; one branch can only hold items from one project.
+            </span>
+          )}
+        </div>
+      )}
+      {[...new Set(items.map((b) => b.ws))].map((ws) => {
+        const wsItems = items.filter((b) => b.ws === ws);
+        const label = targetName(runs.find((r) => r.ws === ws)?.target ?? ws);
+        return (
+          <section key={ws} className="stack" style={{ ['--gap' as string]: '14px', marginBottom: 24 }}>
+            {new Set(items.map((b) => b.ws)).size > 1 && (
+              <h2 className="display h3" style={{ margin: 0 }}>
+                {label}
+              </h2>
+            )}
+            {[...wsItems].reverse().map((b) => {
+              const pickable = b.status === 'open' || b.status === 'failed';
+              return (
+                <article key={`${b.ws}/${b.id}`} className={`box ${sel.includes(`${b.ws}/${b.id}`) ? 'selected' : ''}`}>
+                  <div className="box-head">
+                    <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                      {pickable && <input type="checkbox" checked={sel.includes(`${b.ws}/${b.id}`)} onChange={(e) => toggle(b, e.target.checked)} aria-label={`Select ${b.id}`} style={{ accentColor: 'var(--ink)' }} />}
+                      <span className="mono small">{b.id}</span>
+                      <Chip tone="ink">{KIND_LABEL[b.kind]}</Chip>
+                      <Chip tone={STATUS_TONE[b.status]}>{b.status}</Chip>
+                    </div>
+                    <span className="small muted">from {b.proposal_id}</span>
+                  </div>
+                  <div className="box-body stack" style={{ ['--gap' as string]: '8px' }}>
+                    <h3 className="proposal-title">{b.title}</h3>
+                    <p style={{ margin: 0 }}>{b.body}</p>
+                    {(b.detector || b.tweak) && (
+                      <p className="small muted" style={{ margin: 0 }}>
+                        {b.detector ? `${b.detector.finding_type}: ${b.detector.sketch}` : `${b.tweak!.target}: ${b.tweak!.change}`}
+                      </p>
+                    )}
+                    {b.branch && (
+                      <div className="small">
+                        Branch <span className="mono">{b.branch}</span>
+                        {b.pr_url && (
+                          <>
+                            {' · '}
+                            <a href={b.pr_url} target="_blank" rel="noreferrer">
+                              pull request
+                            </a>
+                          </>
+                        )}
+                        {b.job_id && (
+                          <>
+                            {' · '}
+                            <Link to={`/jobs/${b.job_id}`}>job</Link>
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {b.error && (
+                      <div className="small" style={{ color: 'var(--err)' }}>
+                        {b.error}
+                      </div>
+                    )}
+                    {pickable && (
+                      <div>
+                        <Chamfer small onClick={() => setImpl({ ws: b.ws, ids: [b.id], all: false })}>
+                          {b.status === 'failed' ? 'Try again on a new branch' : 'Implement on a branch'}
+                        </Chamfer>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </section>
+        );
+      })}
+      {impl && (
+        <ImplementDialog
+          ws={impl.ws}
+          items={items.filter((b) => b.ws === impl.ws && impl.ids.includes(b.id))}
+          all={impl.all}
+          onClose={() => setImpl(null)}
+          onStarted={() => {
+            setSel([]);
+            reload();
+          }}
+        />
+      )}
     </>
   );
 }
 
-function ImplementDialog({ item, onClose, onStarted }: { item: BacklogItem; onClose: () => void; onStarted: () => void }) {
+function ImplementDialog({ ws, items, all, onClose, onStarted }: { ws: string; items: BacklogItem[]; all: boolean; onClose: () => void; onStarted: () => void }) {
   const [pr, setPr] = useState(false);
   const [confirmPush, setConfirmPush] = useState(false);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
   const nav = useNavigate();
+  const many = items.length > 1;
   const start = async () => {
     setBusy(true);
     try {
-      const job = await api<JobView>(`/backlog/${item.ws}/${item.id}/implement`, { json: { pr, confirmPush: pr ? confirmPush : undefined } });
-      toast('Implementation started');
+      const job = await api<JobView>(`/backlog/${ws}/implement`, { json: { ...(all ? { all: true } : { ids: items.map((b) => b.id) }), pr, confirmPush: pr ? confirmPush : undefined } });
+      toast(many ? `Implementing ${items.length} items` : 'Implementation started');
       onStarted();
       nav(`/jobs/${job.id}`);
     } catch (e) {
@@ -412,30 +482,37 @@ function ImplementDialog({ item, onClose, onStarted }: { item: BacklogItem; onCl
     <Dialog
       open
       onClose={onClose}
-      title={`Implement ${item.id}`}
+      title={many ? `Implement ${items.length} items on one branch` : `Implement ${items[0]?.id ?? ''}`}
       footer={
         <>
           <button className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <Chamfer tone="green" onClick={start} disabled={busy || (pr && !confirmPush)}>
-            {busy ? 'Starting…' : pr ? 'Implement + open PR' : 'Implement on a branch'}
+          <Chamfer tone="green" onClick={start} disabled={busy || (pr && !confirmPush) || !items.length}>
+            {busy ? 'Starting…' : pr ? 'Implement + open PR' : many ? `Implement ${items.length} on one branch` : 'Implement on a branch'}
           </Chamfer>
         </>
       }
     >
-      <p style={{ margin: 0 }}>
-        <strong>{item.title}</strong>
-      </p>
+      <ol className="small" style={{ margin: 0, paddingLeft: 20 }}>
+        {items.map((b) => (
+          <li key={b.id}>
+            <span className="mono">{b.id}</span> {b.title}
+          </li>
+        ))}
+      </ol>
       <p className="small muted" style={{ margin: 0 }}>
-        An agent makes the change in a separate git worktree on a new <span className="mono">improve/…</span> branch of the bugbash repo, then the typecheck and the unit and detector tests run (failures go back to the agent once). It commits on that branch; your checkout and the running agents stay unchanged until you merge.
+        {many
+          ? 'In this order, on one new improve/… branch of the bugbash repo (a separate worktree): an agent implements each item, then typecheck and tests run (failures go back to the agent once). Each passing item becomes its own commit; one that still fails is rolled back and the rest carry on.'
+          : 'An agent makes the change in a separate git worktree on a new improve/… branch of the bugbash repo, then the typecheck and the unit and detector tests run (failures go back to the agent once). It commits on that branch.'}{' '}
+        Your checkout and the running agents stay unchanged until you merge.
       </p>
       <label className="check">
-        <input type="checkbox" checked={pr} onChange={(e) => setPr(e.target.checked)} /> Push the branch and open a GitHub pull request
+        <input type="checkbox" checked={pr} onChange={(e) => setPr(e.target.checked)} /> <span>Push the branch and open {many ? 'one' : 'a'} GitHub pull request</span>
       </label>
       {pr && (
         <label className="check" style={{ color: 'var(--sev-major)', paddingLeft: 24 }}>
-          <input type="checkbox" checked={confirmPush} onChange={(e) => setConfirmPush(e.target.checked)} /> I understand this pushes to GitHub
+          <input type="checkbox" checked={confirmPush} onChange={(e) => setConfirmPush(e.target.checked)} /> <span>I understand this pushes to GitHub</span>
         </label>
       )}
     </Dialog>
@@ -482,7 +559,8 @@ function Bench({ data }: { data: Overview }) {
   return (
     <div className="stack" style={{ ['--gap' as string]: '14px' }}>
       <p className="muted" style={{ margin: 0, maxWidth: 820 }}>
-        <span className="mono">bugbash bench</span> runs the agents on the seeded fixture (11 known bugs) and records which version of the agent code (<span className="mono">src/</span>) ran. A version whose best recall drops by at least one seeded bug against the previous version is flagged. Run the bench on an improvement branch before merging it.
+        <span className="mono">bugbash bench</span> runs the agents on the seeded fixture (11 known bugs) and records which version of the agent code (<span className="mono">src/</span>) ran. A version whose best recall drops by at least one seeded
+        bug against the previous version is flagged. Run the bench on an improvement branch before merging it.
       </p>
       {data.bench.length ? (
         <div className="box">
@@ -495,7 +573,13 @@ function Bench({ data }: { data: Overview }) {
               pct(v.best_recall),
               pct(v.mean_recall),
               pct(v.runs[v.runs.length - 1]?.precision),
-              v.regression ? <Chip tone="sev-critical dot">recall −{Math.round(v.regression.drop * 100)} pts vs {v.regression.from}</Chip> : <Chip tone="outline">ok</Chip>,
+              v.regression ? (
+                <Chip tone="sev-critical dot">
+                  recall −{Math.round(v.regression.drop * 100)} pts vs {v.regression.from}
+                </Chip>
+              ) : (
+                <Chip tone="outline">ok</Chip>
+              ),
             ])}
           />
         </div>
@@ -551,4 +635,3 @@ export function RetroButton({ ws, run, triaged }: { ws: string; run: string; tri
     </button>
   );
 }
-

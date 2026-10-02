@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { api, useApi } from '../lib/api.ts';
 import type { CampaignJob, Finding, JobView, RunDetail } from '../lib/types.ts';
-import { ACTIVE, SEV_ORDER, categoryOf, dateTime, duration, targetName } from '../lib/format.ts';
+import { ACTIVE, SEV_ORDER, ago, categoryOf, dateTime, duration, targetName } from '../lib/format.ts';
 import { Chamfer, Chip, ErrorBox, Loading, Section, Stat, Tabs, useToast } from '../components/ui.tsx';
 import { BugCard } from '../components/BugCard.tsx';
 import { FixDialog } from '../components/Actions.tsx';
@@ -10,11 +10,12 @@ import { JobsTable } from '../components/Jobs.tsx';
 import { DashboardView } from './Dashboard.tsx';
 import { RunName } from '../components/RunName.tsx';
 import { RetroButton } from './Improvements.tsx';
+import { PrList } from '../components/PrList.tsx';
 import { WF_LABEL, isArchived, updateWorkflow, wfStateOf, type WfState } from '../components/Workflow.tsx';
 
 const DISMISSED = ['false_positive', 'suppressed'];
 
-type Tab = 'overview' | 'bugs' | 'archived' | 'campaign' | 'coverage' | 'hypotheses' | 'intel' | 'jobs';
+type Tab = 'overview' | 'bugs' | 'fixed' | 'prs' | 'archived' | 'campaign' | 'coverage' | 'hypotheses' | 'intel' | 'jobs';
 
 export function Run() {
   const { ws = '', run = '' } = useParams();
@@ -50,6 +51,8 @@ export function Run() {
   const active = all.filter((x) => ACTIVE.includes(x.status) && categoryOf(x) === 'layout' && !isArchived(x));
   const functional = all.filter((x) => ACTIVE.includes(x.status) && categoryOf(x) === 'ux-functional' && !isArchived(x)).length;
   const archivedCount = all.filter(isArchived).length;
+  const fixedCount = all.filter(isFixedOrFixing).length;
+  const prCount = new Set(all.map((x) => x.fix?.pr_url).filter(Boolean)).size;
   const wfCount = (st: WfState) => all.filter((x) => base(x) && sortable(x) && wfStateOf(x) === st).length;
   const bulk = async (patch: Parameters<typeof updateWorkflow>[3], msg: string) => {
     try {
@@ -131,6 +134,8 @@ export function Run() {
           tabs={[
             { id: 'overview', label: 'Overview' },
             { id: 'bugs', label: `Bugs (${all.length - archivedCount})` },
+            { id: 'fixed', label: `Fixed (${fixedCount})` },
+            { id: 'prs', label: `PRs${prCount ? ` (${prCount})` : ''}` },
             { id: 'archived', label: `Archived (${archivedCount})` },
             { id: 'campaign', label: 'Campaign' },
             { id: 'coverage', label: 'Coverage' },
@@ -269,6 +274,8 @@ export function Run() {
       )}
 
       {tab === 'overview' && <DashboardView scope={{ ws, run }} />}
+      {tab === 'fixed' && <FixedTab all={all} ws={ws} run={run} />}
+      {tab === 'prs' && <PrList scope={{ ws, run }} />}
       {tab === 'campaign' && <CampaignTab data={data} />}
       {tab === 'coverage' && <CoverageTab data={data} />}
       {tab === 'hypotheses' && <HypothesesTab data={data} />}
@@ -354,6 +361,83 @@ function RawFindings({ rows }: { rows: RunDetail['raw_findings'] }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** Bugs with a fix: committed on a branch (with or without a PR) or done. Archived bugs stay in the archive. */
+const isFixedOrFixing = (x: Finding) => !isArchived(x) && (x.status === 'fixed' || (x.status === 'fixing' && !!x.fix));
+
+function FixedTab({ all, ws, run }: { all: Finding[]; ws: string; run: string }) {
+  const fixed = all.filter(isFixedOrFixing);
+  const sections: { id: string; title: string; help: string; rows: Finding[] }[] = [
+    { id: 'pr', title: 'PR open', help: 'The fix is on a branch with a pull request.', rows: fixed.filter((x) => x.status === 'fixing' && x.fix?.pr_url) },
+    { id: 'branch', title: 'Fixed on a branch', help: 'Committed on a fix branch, no pull request yet. Open the bug to review the diff and open a PR.', rows: fixed.filter((x) => x.status === 'fixing' && !x.fix?.pr_url) },
+    { id: 'done', title: 'Fixed', help: 'Done: marked fixed by you or by a finished fix.', rows: fixed.filter((x) => x.status === 'fixed') },
+  ];
+  if (!fixed.length)
+    return (
+      <div className="empty" style={{ marginTop: 20 }}>
+        Nothing fixed in this run yet. Fix a bug from its page (or select several on the Bugs tab), or mark one Done.
+      </div>
+    );
+  const sev = (x: Finding) => SEV_ORDER[x.severity];
+  return (
+    <div className="stack" style={{ ['--gap' as string]: '22px', marginTop: 20 }}>
+      {sections
+        .filter((sec) => sec.rows.length)
+        .map((sec) => (
+          <section key={sec.id} className="box" aria-labelledby={`fx-${sec.id}`}>
+            <div className="box-head">
+              <div className="path" id={`fx-${sec.id}`}>
+                {sec.title} ({sec.rows.length})
+              </div>
+            </div>
+            <p className="small muted fixed-help">{sec.help}</p>
+            <ul className="fixed-list">
+              {[...sec.rows]
+                .sort((a, b) => sev(a) - sev(b) || String(b.fix?.at ?? b.workflow?.updated_at ?? '').localeCompare(String(a.fix?.at ?? a.workflow?.updated_at ?? '')))
+                .map((x) => (
+                  <li key={x.id}>
+                    <div className="fixed-main">
+                      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                        <Link to={`/runs/${ws}/${encodeURIComponent(run)}/bugs/${x.id}`} className="mono small">
+                          {x.id}
+                        </Link>
+                        <Chip tone={`dot sev-${x.severity}`}>{x.severity}</Chip>
+                        {x.fix ? x.fix.blocked ? <Chip tone="sev-critical dot">blocked: not published</Chip> : x.fix.verified && x.fix.verification && !x.fix.flags?.length ? <Chip tone="mint">verified</Chip> : <Chip tone="sev-major dot">not fully verified</Chip> : <Chip tone="outline">marked done</Chip>}
+                        {x.fix?.fixed_by && /side effect/.test(x.fix.fixed_by) && <Chip tone="outline">fixed by {x.fix.fixed_by.replace(/ \(side effect\)/, '')}</Chip>}
+                      </div>
+                      <Link to={`/runs/${ws}/${encodeURIComponent(run)}/bugs/${x.id}`} className="fixed-title">
+                        {x.title}
+                      </Link>
+                      {x.fix?.flags?.length ? <div className="small" style={{ color: 'var(--warn)' }}>⚠ {x.fix.flags[0].replace(/^BB-\d+: /, '')}{x.fix.flags.length > 1 ? ` (+${x.fix.flags.length - 1} more)` : ''}</div> : x.fix && !x.fix.verification ? <div className="small" style={{ color: 'var(--warn)' }}>⚠ Checked before the stricter verification: retry verification on the bug page</div> : null}
+                      <div className="small muted">
+                        {x.type} · {x.page}
+                        {x.fix?.branch && (
+                          <>
+                            {' · '}
+                            <span className="mono">{x.fix.branch}</span>
+                          </>
+                        )}
+                        {(x.fix?.at ?? x.workflow?.updated_at) && ` · ${ago(x.fix?.at ?? x.workflow?.updated_at)}`}
+                      </div>
+                    </div>
+                    <div className="row" style={{ gap: 8 }}>
+                      {x.fix?.pr_url && (
+                        <a className="btn-ghost" href={x.fix.pr_url} target="_blank" rel="noreferrer">
+                          PR ↗
+                        </a>
+                      )}
+                      <Link className="btn-ghost" to={`/runs/${ws}/${encodeURIComponent(run)}/bugs/${x.id}`}>
+                        {sec.id === 'branch' ? 'Review & open PR' : 'View'}
+                      </Link>
+                    </div>
+                  </li>
+                ))}
+            </ul>
+          </section>
+        ))}
     </div>
   );
 }

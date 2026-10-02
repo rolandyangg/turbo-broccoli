@@ -142,6 +142,40 @@ describe('bugbash web API', () => {
     expect((await (await json('DELETE', '/presets/night-shift')).json()).deleted).toBe(true);
   });
 
+  it('lists pull requests per run and overall (none yet in this workspace)', async () => {
+    const one = await (await get(`/prs?ws=${wsId}&run=${RUN}`)).json();
+    expect(one).toEqual({ prs: [], counts: { total: 0, draft: 0, open: 0, merged: 0, closed: 0, unknown: 0 } });
+    expect((await get('/prs')).status).toBe(200);
+  });
+
+  it('passes messages to agents of running jobs only', async () => {
+    const mk = (id: string, state: string) => {
+      const d = join(jobsDir, id);
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'status.json'), JSON.stringify({ id, kind: 'fix', state, stage: 'x', pid: process.pid, run_dir: null, finding_ids: [], scope: null, branch: null, base: null, worktree: null, pr_url: null, verified: null, also_fixed: [], options: {}, started_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', ended_at: state === 'running' ? null : '2026-01-01T00:01:00Z', error: null, summary: null }));
+    };
+    mk('fix-20260101000000-aaaaaa', 'running');
+    mk('fix-20260101000000-bbbbbb', 'succeeded');
+    const send = (id: string, body: unknown) => app.request(`/api/jobs/${id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await send('fix-20260101000000-aaaaaa', { text: 'Fix it in the card, not the header' })).status).toBe(201);
+    expect((await send('fix-20260101000000-aaaaaa', { text: '   ' })).status).toBe(400);
+    expect((await send('fix-20260101000000-bbbbbb', { text: 'hello' })).status).toBe(409);
+    const got = await (await get('/jobs/fix-20260101000000-aaaaaa/messages')).json();
+    expect(got.messages.map((m: { text: string }) => m.text)).toEqual(['Fix it in the card, not the header']);
+    expect(got.deliveries).toEqual([]);
+  });
+
+  it('guards reports, unverified publishing and reproducing a fix branch', async () => {
+    const post = (p: string, body: unknown) => app.request(`/api${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await post(`/runs/${wsId}/${RUN}/bugs/BB-0001/report`, { category: 'nonsense' })).status).toBe(400);
+    expect((await post(`/runs/${wsId}/${RUN}/bugs/BB-9999/report`, { category: 'missed' })).status).toBe(404);
+    expect((await post(`/runs/${wsId}/${RUN}/fix`, { ids: ['BB-0001'], mode: 'continue', branch: 'bugbash/x', pr: true, confirmPush: true, publishUnverified: true })).status).toBe(400); // needs confirmUnverified
+    expect((await post(`/runs/${wsId}/${RUN}/fix`, { ids: ['BB-0001'], mode: 'verify', branch: 'main' })).status).toBe(400);
+    expect((await post(`/runs/${wsId}/${RUN}/bugs/BB-0001/reproduce`, { branch: 'main' })).status).toBe(400); // only bugbash/* branches
+    const bug = await (await get(`/runs/${wsId}/${RUN}/bugs/BB-0001`)).json();
+    expect(bug.reports).toEqual([]);
+  });
+
   it('validates fix retry / continue requests', async () => {
     const fix = (body: unknown) => app.request(`/api/runs/${wsId}/${RUN}/fix`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     expect((await fix({ ids: ['BB-0001'], mode: 'resume' })).status).toBe(400);
@@ -218,6 +252,11 @@ describe('bugbash web API', () => {
     expect((await post('P-nope-99', { action: 'approve' })).status).toBe(404);
     expect((await post(added[0].id, { action: 'delete' })).status).toBe(400);
 
+    const batch = (body: unknown) => app.request(`/api/backlog/${wsId}/implement`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await batch({ ids: ['B-1'], pr: true })).status).toBe(400); // pushing needs confirmation
+    expect((await batch({ ids: [] })).status).toBe(400);
+    expect((await batch({ ids: ['B-1', 'B-99'] })).status).toBe(404);
+    expect((await batch({ ids: ['../x'] })).status).toBe(400);
     const impl = (id: string, body: unknown) => app.request(`/api/backlog/${wsId}/${id}/implement`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     expect((await impl('B-1', { pr: true })).status).toBe(400); // pushing needs explicit confirmation
     expect((await impl('B-99', {})).status).toBe(404);

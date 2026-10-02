@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Menu lab</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 0; color: #222; background: #fff; }
+  header { padding: 12px 24px; }
+  main { padding: 24px; height: 3000px; }
+  /* LAB-M1: a full-screen fixed hamburger menu with more links than a short screen holds, no internal scroll
+     and no body scroll lock. With #good the menu scrolls internally and the page is locked. */
+  #site-nav { position: fixed; inset: 0; background: #fff; display: none; padding: 16px 24px; }
+  #site-nav a { display: block; padding: 16px 0; font-size: 20px; }
+  body.open #site-nav { display: block; }
+  body.good #site-nav { overflow-y: auto; }
+  html.lock, html.lock body { overflow: hidden; }
+</style>
+</head>
+<body>
+<header><button id="burger" aria-expanded="false" aria-controls="site-nav">Menu</button></header>
+<nav id="site-nav">
+  <a href="#">Home</a><a href="#">Products</a><a href="#">Pricing</a><a href="#">Docs</a><a href="#">Blog</a><a href="#">Careers</a>
+  <a href="#">About</a><a href="#">Support</a><a href="#">Status</a><a href="#">Contact</a><a href="#">Partners</a><a href="#" id="last-link">Legal</a>
+</nav>
+<main><h1>Menu lab</h1></main>
+<script>
+  // A hash, not ?good: the static server's clean-URL redirect (/menu.html -> /menu) drops the query string.
+  const good = location.hash === '#good';
+  if (good) document.body.classList.add('good');
+  document.getElementById('burger').addEventListener('click', (e) => {
+    const open = document.body.classList.toggle('open');
+    e.currentTarget.setAttribute('aria-expanded', String(open));
+    if (good) document.documentElement.classList.toggle('lock', open);
+  });
+</script>
+</body>
+</html>

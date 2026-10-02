@@ -19,7 +19,7 @@ export type ProposalKind = z.infer<typeof ProposalKind>;
 export const Proposal = z.object({
   id: z.string(), // P-<run short>-<n>
   run: z.string(),
-  source: z.enum(['retro', 'lead']),
+  source: z.enum(['retro', 'lead', 'report']),
   kind: ProposalKind,
   scope: z.enum(['site', 'general']).default('site'),
   title: z.string(),

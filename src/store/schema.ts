@@ -24,6 +24,7 @@ export const FindingType = z.enum([
   'low-contrast',
   'distorted-image',
   'truncated-no-tooltip',
+  'mirrored-text',
   'other',
 ]);
 export type FindingType = z.infer<typeof FindingType>;
@@ -206,11 +207,30 @@ export const Finding = z.object({
       fixed_by: z.string().nullable().default(null), // finding/group id whose fix resolved this
       job_id: z.string().nullable().default(null),
       at: z.string(),
+      /** Why the fix isn't fully trustworthy yet (empty when fully verified). */
+      flags: z.array(z.string()).default([]),
+      /** Publishing was held back because the fix isn't fully verified. */
+      blocked: z.boolean().default(false),
+      /** How the fix was checked, and the after-fix evidence (paths relative to the run dir). */
+      verification: z
+        .object({
+          /** fixed = every check shows the bug gone; present = still there; inconclusive = couldn't tell. */
+          result: z.enum(['fixed', 'present', 'inconclusive']),
+          method: z.enum(['detector', 'visual-review', 'none']),
+          checks: z.array(z.object({ browser: z.string(), width: z.number(), height: z.number(), present: z.boolean().nullable(), error: z.string().nullable() })).default([]),
+          review: z.object({ fixed: z.boolean(), confidence: z.number(), reasoning: z.string() }).nullable().default(null),
+          after: z.object({ annotated: z.string().nullable(), crop: z.string().nullable(), full: z.string().nullable(), element_found: z.boolean() }).nullable().default(null),
+          after_video: z.object({ mp4: z.string().nullable(), gif: z.string().nullable(), filmstrip: z.string().nullable() }).nullable().default(null),
+          at: z.string(),
+        })
+        .nullable()
+        .default(null),
     })
     .nullable()
     .default(null),
 });
 export type Finding = z.infer<typeof Finding>;
+export type FixVerification = NonNullable<NonNullable<Finding['fix']>['verification']>;
 export type WorkflowState = 'unsorted' | 'todo' | 'in_progress' | 'done';
 
 /** Where a finding sits on the person's board: their own choice, else derived from fix progress. */
