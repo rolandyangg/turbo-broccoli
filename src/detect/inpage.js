@@ -214,7 +214,7 @@
       const px = Math.max(ox, oy);
       if (ellipsis) {
         // Truncation by design is fine when the full text is still available (title / aria-label / tooltip).
-        const full = el.closest('[title], [aria-label], [data-tooltip], [data-tip]') || el.querySelector('[title]');
+        const full = el.closest('[title], [aria-label], [aria-describedby], [data-tooltip], [data-tip]') || el.querySelector('[title]');
         if (full) out.push(cand('text-overflow', el, 0.3, `Text truncated with ellipsis/line-clamp (${px}px hidden). May be intentional.`, { overflow_px: px, truncated_by_design: true, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
         else out.push(cand('truncated-no-tooltip', el, 0.35, `Text is cut off with an ellipsis (${px}px hidden) and there is no title or tooltip to read the rest. Truncation looks intentional; a problem when the hidden part matters.`, { overflow_px: px, truncated_by_design: true, no_tooltip: true, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
       } else {

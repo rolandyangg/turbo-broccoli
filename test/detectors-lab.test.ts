@@ -134,6 +134,7 @@ describe('visual polish detectors', () => {
     expect(has(c, 'misalignment', /low-card/)).toBe(true);
     expect(has(c, 'truncated-no-tooltip', /#cut\b|cut"?$/)).toBe(true);
     expect(has(c, 'truncated-no-tooltip', /cut-ok/)).toBe(false);
+    expect(has(c, 'truncated-no-tooltip', /cut-described/)).toBe(false);
   });
 
   it('LAB-P1 low contrast is caught in dark mode pages too (computed colours, not the light default)', async () => {
