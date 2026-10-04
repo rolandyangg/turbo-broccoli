@@ -43,7 +43,7 @@ function rootCauseKey(f: RawFinding): string | null {
   const sels = [normalizeSelector(f.element.selector), normalizeSelector(related)].filter(Boolean).sort();
   const family = TYPE_FAMILY[f.type] ?? f.type;
   if (sels.length) return `${family}|${f.type === 'overlap' ? sels.join('<>') : sels[0]}`;
-  const text = f.title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 60);
+  const text = (f.element.text || f.title).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 60);
   return text ? `${family}|text:${text}` : null;
 }
 
