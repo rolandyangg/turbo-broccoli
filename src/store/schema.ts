@@ -187,6 +187,8 @@ export const Finding = z.object({
     .array(z.object({ file: z.string(), line: z.number().nullable().default(null), reason: z.string() }))
     .default([]),
   siblings: z.array(z.string()).default([]),
+  /** Same defect seen on other pages/sessions/viewports; merged into this finding instead of counted separately. */
+  also_seen: z.array(z.object({ page: z.string(), sessions: z.array(z.string()), viewports: z.array(z.string()) })).default([]),
   fix_hint: z.string().default(''),
   likely_cause: z.string().default(''),
   label_note: z.string().nullable().default(null),

@@ -9,6 +9,8 @@ export interface Cluster {
   viewports: Viewport[];
   browsers: BrowserName[];
   relatedSelector: string | null;
+  /** The same defect on other pages (second-pass merge); never counted as a new unique finding. */
+  alsoSeen: { page: string; sessions: string[]; viewports: string[] }[];
 }
 
 /** Strip positional noise so the same element across runs/sessions gets the same key. */
@@ -32,16 +34,39 @@ export function fingerprintOf(f: RawFinding): string {
   return `${family}|${f.type === 'overlap' ? sels.join('<>') : sels[0]}|${f.page}`;
 }
 
+const SEVERITY_RANK: Record<string, number> = { critical: 0, major: 1, minor: 2, cosmetic: 3 };
+
+/** Root-cause key for the second pass: same type family + same component (or text signature), regardless of page. */
+function rootCauseKey(f: RawFinding): string | null {
+  if (f.type === 'layout-shift') return null;
+  const related = (f.detector?.metrics?.related as { selector?: string } | null)?.selector ?? null;
+  const sels = [normalizeSelector(f.element.selector), normalizeSelector(related)].filter(Boolean).sort();
+  const family = TYPE_FAMILY[f.type] ?? f.type;
+  if (sels.length) return `${family}|${f.type === 'overlap' ? sels.join('<>') : sels[0]}`;
+  const text = f.title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 60);
+  return text ? `${family}|text:${text}` : null;
+}
+
 export function clusterFindings(raw: RawFinding[]): Cluster[] {
   const map = new Map<string, RawFinding[]>();
   for (const f of raw) {
     const fp = fingerprintOf(f);
     map.set(fp, [...(map.get(fp) ?? []), f]);
   }
-  const clusters: Cluster[] = [];
+  // Second pass: the same defect seen on other pages/sessions/viewports is one finding, not a new one.
+  const merged = new Map<string, { members: RawFinding[]; pages: Map<string, RawFinding[]> }>();
   for (const [fp, members] of map) {
-    // Representative: prefer detector evidence, then confidence, then shorter trace.
-    const rep = [...members].sort((a, b) => Number(!!b.detector) - Number(!!a.detector) || b.confidence - a.confidence || a.trace.length - b.trace.length)[0];
+    const key = rootCauseKey(members[0]) ?? fp;
+    const g = merged.get(key) ?? { members: [], pages: new Map<string, RawFinding[]>() };
+    g.members.push(...members);
+    g.pages.set(members[0].page, [...(g.pages.get(members[0].page) ?? []), ...members]);
+    merged.set(key, g);
+  }
+  const clusters: Cluster[] = [];
+  for (const { members, pages } of merged.values()) {
+    // Representative: highest severity, then detector evidence, then confidence, then shorter trace.
+    const rep = [...members].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || Number(!!b.detector) - Number(!!a.detector) || b.confidence - a.confidence || a.trace.length - b.trace.length)[0];
+    const alsoSeen = [...pages].filter(([page]) => page !== rep.page).map(([page, ms]) => ({ page, sessions: [...new Set(ms.map((m) => m.session))], viewports: [...new Set(ms.map((m) => `${m.environment.viewport.width}x${m.environment.viewport.height}`))] }));
     const vps = new Map<string, Viewport>();
     const browsers = new Set<BrowserName>();
     for (const m of members) {
@@ -52,7 +77,8 @@ export function clusterFindings(raw: RawFinding[]): Cluster[] {
       for (const w of widths ?? []) vps.set(`${w}x${m.environment.viewport.height}`, { width: w, height: m.environment.viewport.height });
     }
     clusters.push({
-      fingerprint: fp,
+      fingerprint: fingerprintOf(rep),
+      alsoSeen,
       type: rep.type,
       page: rep.page,
       members,

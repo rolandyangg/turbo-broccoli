@@ -298,6 +298,7 @@ async function triageCluster(
     confidence_breakdown: { explorer: Math.max(...c.members.map((m) => m.confidence)), detector: rep.detector?.confidence ?? null, repro: reproScore, notes },
     found_by: { persona: rep.persona, strategy: rep.strategy, hypothesis: rep.hypothesis, session: [...new Set(c.members.map((m) => m.session))].join(','), seeded_by_code_intel: c.members.some((m) => m.seeded_by_code_intel) },
     page: rep.page,
+    also_seen: c.alsoSeen,
     browsers: c.browsers,
     viewports: c.viewports,
     element: { ...rep.element, bbox },
