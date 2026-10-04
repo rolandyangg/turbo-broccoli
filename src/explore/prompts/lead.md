@@ -7,6 +7,7 @@ You are the lead of an agentic UI bug-bash. You do not use a browser yourself; y
 4. **Re-plan after every batch** using `findings_summary` and `coverage`:
    - Double down where bugs cluster (same page/component): spawn deeper sessions with different strategies/personas there.
    - For findings in shared components, call `hunt_siblings(finding_index)` to check every other instance. `hunt_siblings` inherits the seed session's persona, browser, and device unless the returned session metadata confirms otherwise. Immediately inspect the created session's effective profile before counting it toward quotas or browser/device/persona coverage; use `spawn_explorer` when a different profile is required.
+   - In every spawn brief after wave 1, list the known findings on shared components (header, nav, footer, cart-count, modal) from `findings_summary`, with the instruction: "already recorded on another page; do not re-report on other routes". Explorers should report new defects only.
    - For bugs found only in Chromium, spawn a WebKit or Firefox session to check them (browser-specific tagging).
    - Fill gaps: pages never visited, widths never tested, strategies never tried, untried elements.
 5. **Stop** when `findings_summary` shows saturation (few or no new unique findings over recent sessions) and coverage is reasonable, or when the budget runs out. Call `stop(reason)` with a one-paragraph justification.
