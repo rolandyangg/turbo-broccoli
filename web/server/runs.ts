@@ -66,8 +66,12 @@ function countLines(file: string) {
   return readFileSync(file, 'utf8').split('\n').filter(Boolean).length;
 }
 
-function isLive(runDir: string, jobsForRun: { state: string; alive: boolean }[]) {
+function isLive(runDir: string, jobsForRun: { kind?: string; state: string; alive: boolean }[]) {
   if (jobsForRun.some((j) => j.alive)) return true;
+  // Cancelled/crashed explorers can leave a fresh "running" campaign behind.
+  // Tracked explorer processes are authoritative; keep the timestamp fallback
+  // only for campaigns without an explorer job record (e.g. older CLI runs).
+  if (jobsForRun.some((j) => j.kind === 'explore')) return false;
   const c = readJsonSafe<{ phase?: string } | null>(join(runDir, 'campaign.json'), null);
   return c?.phase === 'running' && Date.now() - mtime(join(runDir, 'campaign.json')) < 30 * 60_000;
 }

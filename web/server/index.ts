@@ -1,10 +1,10 @@
 import { serve } from '@hono/node-server';
-import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
-import { existsSync, readFileSync } from 'node:fs';
-import { join, dirname, relative } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app as api } from './app.ts';
+import { mountFrontend } from './frontend.ts';
 import { initWorkspaces, workspaces } from './workspaces.ts';
 
 initWorkspaces(process.argv.slice(2));
@@ -18,9 +18,7 @@ const root = new Hono();
 root.route('/', api);
 if (prod) {
   if (!existsSync(dist)) throw new Error('web/dist not found; run `npm run build` in web/ first.');
-  root.use('/*', serveStatic({ root: relative(process.cwd(), dist) }));
-  const index = readFileSync(join(dist, 'index.html'), 'utf8');
-  root.get('*', (c) => c.html(index)); // SPA fallback
+  mountFrontend(root, dist);
 }
 
 serve({ fetch: root.fetch, port, hostname: '127.0.0.1' }, (info) => {

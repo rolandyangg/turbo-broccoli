@@ -313,14 +313,14 @@ export interface FixRunDefaults {
  * Start a fix job in continue mode (pick up `branch` where it stopped: re-verify, more attempts only if needed,
  * commit, then publish) or retry mode (start over on a fresh branch). Pushing always needs fresh confirmation.
  */
-export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title, submitLabel, onClose }: { ws: string; run: string; ids: string[]; mode: 'continue' | 'retry' | 'verify' | 'publish-anyway'; branch?: string | null; defaults?: FixRunDefaults; title?: string; submitLabel?: string; onClose: () => void }) {
+export function FixRunDialog({ manualPublish = false, ws, run, ids, mode, branch, defaults = {}, title, submitLabel, onClose }: { manualPublish?: boolean; ws: string; run: string; ids: string[]; mode: 'continue' | 'retry' | 'verify' | 'publish-anyway'; branch?: string | null; defaults?: FixRunDefaults; title?: string; submitLabel?: string; onClose: () => void }) {
   const nav = useNavigate();
   const toast = useToast();
   const opts = defaults;
   const anyway = mode === 'publish-anyway';
   const [pr, setPr] = useState(anyway || !!opts.pr);
   const [confirmPush, setConfirmPush] = useState(false);
-  const [confirmUnverified, setConfirmUnverified] = useState(false);
+  const [confirmUnverified, setConfirmUnverified] = useState(manualPublish);
   // Publishing anyway: keep the before/after pictures the person just reviewed (otherwise a pre-publish re-check replaces them).
   const [keepEvidence, setKeepEvidence] = useState(true);
   const [attempts, setAttempts] = useState(Math.min(5, Math.max(1, opts.maxAttempts ?? 3)));
@@ -341,10 +341,10 @@ export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title,
           maxAttempts: attempts,
           confirmPush: pr ? confirmPush : undefined,
           instructions: instructions.trim() || undefined,
-          ...(anyway ? { publishUnverified: true, confirmUnverified, keepEvidence } : {}),
+          ...(anyway ? { publishUnverified: true, confirmUnverified, keepEvidence, manualReview: manualPublish } : {}),
         },
       });
-      toast(mode === 'verify' ? 'Re-verifying the fix' : anyway ? 'Publishing the unverified fix' : mode === 'continue' ? 'Continuing the fix' : 'Retrying the fix');
+      toast(mode === 'verify' ? 'Re-verifying the fix' : manualPublish ? 'Creating PR for the manually verified fix' : anyway ? 'Publishing the unverified fix' : mode === 'continue' ? 'Continuing the fix' : 'Retrying the fix');
       onClose();
       nav(`/jobs/${j.id}`);
     } catch (e) {
@@ -357,14 +357,14 @@ export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title,
     <Dialog
       open
       onClose={onClose}
-      title={title ?? (mode === 'verify' ? `Re-verify ${ids.join(', ')}` : anyway ? `Publish ${ids.join(', ')} without full verification` : mode === 'continue' ? `Continue ${ids.join(', ')}` : `Retry ${ids.join(', ')}`)}
+      title={title ?? (mode === 'verify' ? `Re-verify ${ids.join(', ')}` : manualPublish ? `Create PR for ${ids.join(', ')} (manually verified)` : anyway ? `Publish ${ids.join(', ')} without full verification` : mode === 'continue' ? `Continue ${ids.join(', ')}` : `Retry ${ids.join(', ')}`)}
       footer={
         <>
           <button className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <Chamfer tone={anyway ? 'danger' : 'green'} onClick={start} disabled={blocked}>
-            {busy ? 'Starting…' : mode === 'verify' ? 'Re-verify' : anyway ? 'Publish anyway' : pr && submitLabel ? submitLabel : mode === 'continue' ? 'Continue' : 'Retry'}
+          <Chamfer tone={anyway && !manualPublish ? 'danger' : 'green'} onClick={start} disabled={blocked}>
+            {busy ? 'Starting…' : mode === 'verify' ? 'Re-verify' : manualPublish ? 'Create PR' : anyway ? 'Publish anyway' : pr && submitLabel ? submitLabel : mode === 'continue' ? 'Continue' : 'Retry'}
           </Chamfer>
         </>
       }
@@ -374,6 +374,8 @@ export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title,
           <>
             Re-runs only the checks on <span className="mono">{branch}</span>: detector replays at every affected size and browser, a visual before/after review where detectors can't decide, and new after-fix pictures (and video for behaviour bugs). Nothing is changed, committed or pushed.
           </>
+        ) : manualPublish ? (
+          <>This fix is manually verified and ready for PR. Publishing pushes <span className="mono">{branch}</span> using the reviewed evidence. The PR records your manual verification alongside the automatic results.</>
         ) : anyway ? (
           <>
             This fix is <b>not fully verified</b>. Publishing it anyway pushes <span className="mono">{branch}</span> and opens a PR whose Verification section shows the automatic results and, under 👤 Manual verification, that you approved publishing it anyway.
@@ -389,7 +391,8 @@ export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title,
       {(mode === 'continue' || mode === 'retry') && (
         <label className="field">
           <span className="label">Instructions for the fix agent (optional)</span>
-          <textarea className="input" rows={3} value={instructions} onChange={(e) => setInstructions(e.target.value)} placeholder='e.g. "Keep the 1024px breakpoint; fix it inside the carousel instead"' />
+          <textarea className="input" rows={3} maxLength={4000} value={instructions} onChange={(e) => setInstructions(e.target.value)} placeholder="e.g. The previous fix missed the mobile layout. Check the shared carousel component and keep the existing breakpoint." />
+          <span className="small muted">Add context, expected behavior, or constraints to guide the fix. Up to 4,000 characters.</span>
         </label>
       )}
       {mode !== 'verify' && !anyway && (
@@ -409,7 +412,7 @@ export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title,
       )}
       {anyway && (
         <label className="check">
-          <input type="checkbox" checked={keepEvidence} onChange={(e) => setKeepEvidence(e.target.checked)} />{' '}
+          <input type="checkbox" disabled={manualPublish} checked={keepEvidence} onChange={(e) => setKeepEvidence(e.target.checked)} />{' '}
           <span>
             Publish with the current before/after pictures
             <span className="small muted" style={{ display: 'block' }}>
@@ -418,7 +421,7 @@ export function FixRunDialog({ ws, run, ids, mode, branch, defaults = {}, title,
           </span>
         </label>
       )}
-      {anyway && (
+      {anyway && !manualPublish && (
         <label className="check" style={{ color: 'var(--err)' }}>
           <input type="checkbox" checked={confirmUnverified} onChange={(e) => setConfirmUnverified(e.target.checked)} /> <span>I've checked the before/after myself and want to publish this unverified fix</span>
         </label>

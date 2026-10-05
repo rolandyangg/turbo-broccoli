@@ -15,7 +15,7 @@ interface SettingsView {
 }
 
 const CHANNELS: { id: Channel; label: string; help: string }[] = [
-  { id: 'macos', label: 'macOS notifications', help: 'Shown by Notification Center. Install terminal-notifier (brew install terminal-notifier) to make clicking one open the page here.' },
+  { id: 'macos', label: 'macOS notifications', help: 'Broccoli notifications open the related page when clicked. Allow TurboBrocolli in System Settings → Notifications when prompted.' },
   { id: 'inbox', label: 'In-app inbox', help: 'The bell in the top bar. Kept in ~/.bugbash/notifications.jsonl.' },
   { id: 'slack', label: 'Slack', help: 'Posts to a Slack incoming webhook. The URL is stored only on this machine (~/.bugbash/settings.json) and never shown again in full.' },
 ];

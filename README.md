@@ -44,6 +44,9 @@ The dashboard lives in `web/`; the underlying CLI is called **`bugbash`**. You c
 | Git | Create branches and worktrees for fixes |
 | GitHub CLI (`gh`), signed in | Optional: push fix branches and open pull requests |
 | `ffmpeg` | Optional: produce MP4, GIF, and filmstrip evidence |
+| Xcode or its Command Line Tools (macOS) | Optional: compile the native notification helper once; notifications use a 🥦 icon and open the related job when clicked |
+
+macOS notifications create a cached TurboBrocolli app under `~/.bugbash/macos-notifier`. Allow its first notification permission prompt (or enable TurboBrocolli in System Settings → Notifications). Keep the web app URL in dashboard settings pointed at your running dashboard.
 
 Install and sign in to the provider you intend to use before starting an agent job. Provider and model availability depend on your CLI installation and account.
 

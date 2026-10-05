@@ -6,6 +6,7 @@ import { ago, targetName } from '../lib/format.ts';
 import { Chamfer, Chip, Dialog, ErrorBox, Loading, Stat, Tabs, useToast } from '../components/ui.tsx';
 import { DataTable } from '../components/Charts.tsx';
 import { ImprovementPrList } from '../components/ImprovementPrList.tsx';
+import { groupImprovementBacklog } from '../lib/improvementBacklog.ts';
 
 type Kind = 'lesson' | 'prior' | 'detector' | 'tweak';
 interface Proposal {
@@ -69,7 +70,7 @@ const APPROVE_EFFECT: Record<Kind, string> = {
   detector: 'Approving puts it on the backlog. Code only changes if you implement it on a branch and merge it.',
   tweak: 'Approving puts it on the backlog. Code only changes if you implement it on a branch and merge it.',
 };
-type Tab = 'pending' | 'backlog' | 'prs' | 'knowledge' | 'bench' | 'history';
+type Tab = 'pending' | 'backlog' | 'archive' | 'prs' | 'knowledge' | 'bench' | 'history';
 const pct = (x: number | null | undefined) => (x == null ? '—' : `${Math.round(x * 100)}%`);
 
 export function Improvements() {
@@ -80,7 +81,7 @@ export function Improvements() {
   if (!data) return <Loading what="Loading improvements" />;
   const all = data.runs.flatMap((r) => r.proposals.map((p) => ({ p, r })));
   const approved = all.filter(({ p }) => p.status === 'approved').length;
-  const openBacklog = data.backlog.filter((b) => b.status !== 'closed' && b.status !== 'implemented' && b.status !== 'merged').length;
+  const { openCount, backlog, archive } = groupImprovementBacklog(data.backlog);
   const regressed = data.bench.some((v) => v.regression);
   const prOpen = new Set(data.backlog.filter((b) => b.pr_url && b.status === 'implemented').map((b) => b.pr_url)).size;
   return (
@@ -98,7 +99,7 @@ export function Improvements() {
         <Stat n={data.pending} label="Waiting for review" />
         <Stat n={approved} label="Approved" />
         <Stat n={data.rejected} label="Rejected" sub="remembered" />
-        <Stat n={openBacklog} label="Backlog" sub="code changes to implement" />
+        <Stat n={openCount} label="Backlog" sub="open code changes to implement" />
         <Stat n={data.priors.length} label="Strategy priors" />
         <Stat n={data.bench.length ? pct(data.bench[data.bench.length - 1].best_recall) : '—'} label="Bench recall" sub={regressed ? 'a version lowered recall' : 'latest agent version'} color={regressed ? 'var(--err)' : undefined} />
       </div>
@@ -106,8 +107,9 @@ export function Improvements() {
         <Tabs<Tab>
           tabs={[
             { id: 'pending', label: `Pending (${data.pending})` },
-            { id: 'backlog', label: `Backlog (${data.backlog.length})` },
+            { id: 'backlog', label: `Backlog (${openCount})` },
             { id: 'prs', label: `Pull requests${prOpen ? ` (${prOpen} open)` : ''}` },
+            { id: 'archive', label: `Archive (${archive.length})` },
             { id: 'knowledge', label: 'Approved knowledge' },
             { id: 'bench', label: 'Benchmark gate' },
             { id: 'history', label: 'History' },
@@ -118,7 +120,8 @@ export function Improvements() {
       </div>
       <div style={{ marginTop: 20 }}>
         {tab === 'pending' && <Pending runs={data.runs} reload={reload} />}
-        {tab === 'backlog' && <Backlog items={data.backlog} runs={data.runs} reload={reload} />}
+        {tab === 'backlog' && <Backlog key="backlog" items={backlog} runs={data.runs} reload={reload} />}
+        {tab === 'archive' && <Backlog key="archive" items={archive} runs={data.runs} reload={reload} archived />}
         {tab === 'prs' && <ImprovementPrList onChanged={reload} />}
         {tab === 'knowledge' && <Knowledge data={data} />}
         {tab === 'bench' && <Bench data={data} />}
@@ -346,14 +349,14 @@ function Evidence({ p, ws }: { p: Proposal; ws: string }) {
 
 const STATUS_TONE: Record<BacklogItem['status'], string> = { open: 'outline', implementing: 'green live', implemented: 'mint', merged: 'mint', failed: 'sev-critical dot', closed: 'outline' };
 
-function Backlog({ items, runs, reload }: { items: BacklogItem[]; runs: RunGroup[]; reload: () => void }) {
+function Backlog({ items, runs, reload, archived = false }: { items: BacklogItem[]; runs: RunGroup[]; reload: () => void; archived?: boolean }) {
   const [impl, setImpl] = useState<{ ws: string; ids: string[]; all: boolean } | null>(null);
   const [sel, setSel] = useState<string[]>([]); // "ws/id"
-  if (!items.length) return <div className="empty">The backlog is empty. Approved detector suggestions and prompt/config tweaks land here.</div>;
+  if (!items.length) return <div className="empty">{archived ? 'No archived improvements yet. Merged and closed items move here automatically.' : 'The backlog is empty. Approved detector suggestions and prompt/config tweaks land here.'}</div>;
   const open = items.filter((b) => b.status === 'open' || b.status === 'failed');
   const openByWs = new Map<string, BacklogItem[]>();
   for (const b of open) openByWs.set(b.ws, [...(openByWs.get(b.ws) ?? []), b]);
-  const selected = sel.map((k) => items.find((b) => `${b.ws}/${b.id}` === k)).filter(Boolean) as BacklogItem[];
+  const selected = open.filter((b) => sel.includes(`${b.ws}/${b.id}`));
   const selWs = [...new Set(selected.map((b) => b.ws))];
   const toggle = (b: BacklogItem, on: boolean) => setSel((cur) => (on ? [...cur, `${b.ws}/${b.id}`] : cur.filter((k) => k !== `${b.ws}/${b.id}`)));
   return (

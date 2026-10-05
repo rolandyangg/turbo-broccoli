@@ -95,6 +95,8 @@
   right: 8px;
   bottom: 8px;
 }
+.bug-card.bug-fix-fixing { --fix-accent: #245ba8; --fix-bg: #deebff; }
+.bug-card.bug-fix-unverified { --fix-accent: #a12622; --fix-bg: #ffe0de; }
 .bug-card.bug-fix-review { --fix-accent: #9a5800; --fix-bg: #fff0ce; }
 .bug-card.bug-fix-draft { --fix-accent: #575757; --fix-bg: #eeeeee; }
 .bug-card.bug-fix-raised { --fix-accent: #0d6a48; --fix-bg: #c5ffd6; }
@@ -1863,3 +1865,21 @@
   border-bottom: 1px dashed var(--line);
   background: var(--panel);
 }
+
+.attach-dialog {
+  margin: auto;
+  padding: 0;
+  color: var(--ink);
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+}
+.attach-dialog::backdrop { background: var(--overlay); }
+
+.regression-item { border: 1px solid var(--line, #ccc); margin-top: 8px; }
+.regression-item summary { cursor: pointer; padding: 10px 12px; }
+.regression-item summary span + span { margin-left: 12px; }
+.regression-item summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.regression-body { padding: 0 12px 12px; }
+.regression-body img { display: block; width: 100%; max-height: 420px; object-fit: contain; }
+.regression-selector { display: block; overflow-wrap: anywhere; margin-top: 10px; }

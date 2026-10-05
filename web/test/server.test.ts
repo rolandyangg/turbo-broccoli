@@ -461,6 +461,17 @@ describe('run deletion', () => {
     expect((await remove('delete-campaign')).status).toBe(409);
     expect(existsSync(campaign)).toBe(true);
   });
+  it.each(['cancelled', 'failed', 'succeeded', 'crashed'])('allows deletion after an explorer is %s despite a fresh running campaign', async (state) => {
+    const run = `delete-stale-${state}`;
+    const dir = makeRun(run);
+    writeFileSync(join(dir, 'campaign.json'), JSON.stringify({ phase: 'running' }));
+    const history = join(jobsDir, run);
+    mkdirSync(history, { recursive: true });
+    writeFileSync(join(history, 'status.json'), JSON.stringify({ id: run, kind: 'explore', run_dir: dir, state: state === 'crashed' ? 'running' : state, pid: 2147483647, finding_ids: [], started_at: 'now' }));
+    const runs = await (await get('/runs')).json();
+    expect(runs.find((r: { run: string }) => r.run === run).live).toBe(false);
+    expect((await remove(run)).status).toBe(200);
+  });
   it('rejects traversal and symlinked run directories', async () => {
     const { symlinkSync, existsSync } = await import('node:fs');
     const other = makeRun('delete-symlink-target');
@@ -477,5 +488,26 @@ describe('publish anyway with the current pictures', () => {
     expect((await fix({ ids: ['BB-0001'], mode: 'continue', keepEvidence: true })).status).toBe(400);
     expect((await fix({ ids: ['BB-0001'], mode: 'verify', pr: true, confirmPush: true, publishUnverified: true, confirmUnverified: true, keepEvidence: true })).status).toBe(400);
     expect((await fix({ ids: ['BB-0001'], mode: 'continue', pr: true, confirmPush: true, publishUnverified: true, confirmUnverified: true, keepEvidence: true, instructions: 'change it' })).status).toBe(400);
+  });
+});
+
+
+describe('optional fix guidance', () => {
+  const fix = (body: unknown) => app.request(`/api/runs/${wsId}/${RUN}/fix`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  it.each(['new', 'retry', 'continue'])('validates guidance for %s jobs before launching', async (mode) => {
+    for (const instructions of [42, {}, 'x'.repeat(4001)]) {
+      const response = await fix({ ids: ['BB-0001'], mode, instructions });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toContain('instructions must be text');
+    }
+    // Valid optional guidance reaches the repository check; this fixture has no repo.
+    for (const instructions of [undefined, '', '   ', 'Check the shared carousel', 'x'.repeat(4000)]) {
+      expect((await fix({ ids: ['BB-0001'], mode, instructions })).status).toBe(409);
+    }
+  });
+  it('rejects non-text guidance before checking whether pictures can be kept', async () => {
+    const response = await fix({ ids: ['BB-0001'], mode: 'continue', pr: true, confirmPush: true, publishUnverified: true, confirmUnverified: true, keepEvidence: true, instructions: 42 });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain('instructions must be text');
   });
 });

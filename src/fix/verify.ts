@@ -210,13 +210,17 @@ export function evidenceSteps(f: Finding): { steps: Step[]; browser: BrowserName
 }
 
 /** High-confidence detector candidates on a page at a few widths (for regression comparison). */
-export async function pageSnapshot(path: string, o: { baseUrl: string; guardrails: Config['guardrails']; pool: BrowserPool; widths?: number[] }): Promise<Map<string, Candidate>> {
+export async function pageSnapshot(path: string, o: { baseUrl: string; guardrails: Config['guardrails']; pool: BrowserPool; widths?: number[]; onCandidate?: (key: string, candidate: Candidate, page: import('playwright').Page) => Promise<void> }): Promise<Map<string, Candidate>> {
   const out = new Map<string, Candidate>();
   for (const w of o.widths ?? [320, 768, 1280]) {
     const { driver } = await replay([{ action: 'resize', width: w, height: 800 }, { action: 'goto', url: path }], { baseUrl: o.baseUrl, browser: 'chromium', initialViewport: { width: w, height: 800 }, guardrails: o.guardrails, pool: o.pool });
     try {
       await settle(driver.page, 300);
-      for (const c of await runDetectors(driver.page).catch(() => [] as Candidate[])) if (c.confidence >= 0.6) out.set(`${w}|${c.type}|${c.selector}`, c);
+      for (const c of await runDetectors(driver.page).catch(() => [] as Candidate[])) if (c.confidence >= 0.6) {
+        const key = `${w}|${c.type}|${c.selector}`;
+        out.set(key, c);
+        await o.onCandidate?.(key, c, driver.page);
+      }
     } finally {
       await driver.close();
     }

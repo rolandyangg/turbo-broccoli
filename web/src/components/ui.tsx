@@ -14,11 +14,7 @@ export const Arrow = () => (
   </svg>
 );
 export const Logo = ({ size = 28 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
-    <path d="M16 2 29 9.5v13L16 30 3 22.5v-13Z" style={{ fill: 'var(--ink)' }} />
-    <path d="M16 9l7 4v6l-7 4-7-4v-6Z" fill="#28E99F" />
-    <path d="M16 9v14M9 13l14 6" style={{ stroke: 'var(--ink)' }} strokeWidth="1.4" />
-  </svg>
+  <span aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, fontSize: size, lineHeight: 1, flexShrink: 0 }}>🥦</span>
 );
 
 type Theme = 'dark' | 'light' | 'system';

@@ -268,7 +268,7 @@ export function Run() {
               >
                 <div className="grid-2">
                   {g.shown.map((x) => (
-                    <BugCard key={x.id} f={x} ws={ws} run={run} prs={prData?.prs} selected={sel.includes(x.id)} onSelect={(on) => setSel((cur) => (on ? [...cur, x.id] : cur.filter((y) => y !== x.id)))} onWorkflow={reload} />
+                    <BugCard key={x.id} f={x} ws={ws} run={run} prs={prData?.prs} jobs={data.jobs} selected={sel.includes(x.id)} onSelect={(on) => setSel((cur) => (on ? [...cur, x.id] : cur.filter((y) => y !== x.id)))} onWorkflow={reload} />
                   ))}
                 </div>
               </Section>

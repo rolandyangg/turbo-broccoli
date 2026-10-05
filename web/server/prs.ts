@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFindings, allFindings } from '../../src/store/store.ts';
+import { setWorkflow } from '../../src/store/workflow.ts';
 import { listAllRuns, type RunSummary } from './runs.ts';
 import { listJobs } from './jobs.ts';
 
@@ -90,6 +91,14 @@ const repoOf = (url: string) => url.match(/github\.com\/([^/]+\/[^/]+)\/pull\//)
 export async function listPRs(scope: { ws: string; run: string } | null, fresh = false) {
   const runs: RunSummary[] = listAllRuns().filter((r) => !scope || (r.ws === scope.ws && r.run === scope.run));
   const rows = new Map<string, PrRow>();
+  const associations = new Map<string, Map<string, Set<string>>>();
+  const associate = (url: string, dir: string, id: string) => {
+    let runs = associations.get(url);
+    if (!runs) associations.set(url, runs = new Map());
+    let ids = runs.get(dir);
+    if (!ids) runs.set(dir, ids = new Set());
+    ids.add(id);
+  };
   for (const r of runs) {
     const dir = join(r.ws_path, 'runs', r.run);
     const ff = r.triaged ? readFindings(dir) : null;
@@ -107,6 +116,7 @@ export async function listPRs(scope: { ws: string; run: string } | null, fresh =
     for (const f of fs) {
       if (!f.fix?.pr_url) continue;
       const e = row(f.fix.pr_url, f.fix.branch);
+      associate(e.url, dir, f.id);
       if (!e.bugs.some((b) => b.id === f.id)) e.bugs.push({ id: f.id, title: f.title, severity: f.severity, status: f.status, side_effect: /side effect/.test(f.fix.fixed_by ?? ''), verified: !!f.fix.verified && !!f.fix.verification && !(f.fix.flags ?? []).length, flags: f.fix.flags ?? (f.fix.verification ? [] : ['checked before the stricter verification']) });
       if (!e.opened_at || f.fix.at < e.opened_at) e.opened_at = f.fix.at;
     }
@@ -118,9 +128,10 @@ export async function listPRs(scope: { ws: string; run: string } | null, fresh =
       for (const url of urls) {
         const e = row(url, j.branch);
         if (!e.jobs.some((x) => x.id === j.id)) e.jobs.push({ id: j.id, state: j.state, started_at: j.started_at, verified: j.verified });
-        for (const id of j.finding_ids) if (!e.bugs.some((b) => b.id === id)) {
+        for (const id of j.finding_ids) {
           const f = fs.find((x) => x.id === id);
-          if (f) e.bugs.push({ id, title: f.title, severity: f.severity, status: f.status, side_effect: false, verified: !!f.fix?.verified && !!f.fix?.verification && !(f.fix?.flags ?? []).length, flags: f.fix?.flags ?? [] });
+          if (f) associate(url, dir, id);
+          if (f && !e.bugs.some((b) => b.id === id)) e.bugs.push({ id, title: f.title, severity: f.severity, status: f.status, side_effect: false, verified: !!f.fix?.verified && !!f.fix?.verification && !(f.fix?.flags ?? []).length, flags: f.fix?.flags ?? [] });
         }
       }
     }
@@ -135,6 +146,17 @@ export async function listPRs(scope: { ws: string; run: string } | null, fresh =
         row.status_error = s.error;
       }),
     );
+  // Persist completion for every associated run, including bugs linked only by a fix job.
+  for (const row of list) {
+    if (row.status?.state !== 'MERGED') continue;
+    for (const [dir, ids] of associations.get(row.url) ?? []) {
+      const findings = readFindings(dir);
+      if (!findings) continue;
+      const pending = allFindings(findings).filter((f) => ids.has(f.id) && f.workflow.state !== 'done');
+      if (pending.length) setWorkflow(dir, pending.map((f) => f.id), { state: 'done' });
+    }
+    for (const bug of row.bugs) bug.status = 'fixed';
+  }
   for (const row of list) row.jobs.sort((a, b) => b.started_at.localeCompare(a.started_at));
   list.sort((a, b) => String(b.status?.updatedAt ?? b.opened_at ?? '').localeCompare(String(a.status?.updatedAt ?? a.opened_at ?? '')));
   const count = (st: string) => list.filter((x) => (st === 'DRAFT' ? x.status?.state === 'OPEN' && x.status.isDraft : st === 'OPEN' ? x.status?.state === 'OPEN' && !x.status.isDraft : x.status?.state === st)).length;

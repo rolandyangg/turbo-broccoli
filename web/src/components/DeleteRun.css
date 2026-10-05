@@ -1,0 +1,7 @@
+.delete-run-dialog { margin: auto; padding: 0; width: min(560px, calc(100vw - 32px)); color: var(--ink); }
+.delete-run-dialog:not([open]) { display: none; }
+.delete-run-dialog::backdrop { background: var(--overlay); }
+.delete-run-dialog h2, .delete-run-dialog p { margin: 0; }
+.delete-run-name { overflow-wrap: anywhere; }
+.delete-run-error { color: var(--err); }
+.delete-run-actions { justify-content: flex-end; flex-wrap: wrap; padding: 12px 16px; border-top: 1px dashed var(--line); background: var(--panel); }

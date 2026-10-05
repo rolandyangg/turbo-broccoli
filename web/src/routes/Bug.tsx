@@ -1,4 +1,5 @@
 import { isFixJob } from '../../../src/jobs/kinds.ts';
+import { AttachSession } from '../components/AttachSession.tsx';
 import { MarkdownDescription } from '../components/MarkdownPreview.tsx';
 import { BugPullRequest } from '../components/PrList.tsx';
 import { ReproCapture } from '../components/ReproCapture.tsx';
@@ -82,16 +83,16 @@ export function Bug() {
         <div className="stack" style={{ ['--gap' as string]: '22px', minWidth: 0 }}>
           <MediaPanel f={f} ws={ws} run={run} m={m} setM={setMedia} chapters={chapters} seek={seek} afterShot={data.after_shot} onChapter={(c) => setActiveStep(c?.kind === 'step' ? c.step_index : null)} />
 
-          <BugPullRequest key={`${ws}/${run}/${f.id}`} ws={ws} run={run} id={f.id} url={existingPrUrl} body={data.pr_body} branch={f.fix?.branch ?? latestJob?.branch ?? null} base={f.fix?.base} readyToPublish={canFix && !runningJob && !!f.fix?.verified && f.fix.verification?.result === 'fixed' && !f.fix.flags?.length && !f.fix.blocked} onUpdated={reload} />
+          <BugPullRequest manuallyVerified={data.manually_verified} key={`${ws}/${run}/${f.id}`} ws={ws} run={run} id={f.id} url={existingPrUrl} body={data.pr_body} branch={f.fix?.branch ?? latestJob?.branch ?? null} base={f.fix?.base} readyToPublish={canFix && !runningJob && (!!data.manually_verified || (!!f.fix?.verified && f.fix.verification?.result === 'fixed' && !f.fix.flags?.length && !f.fix.blocked))} onUpdated={reload} />
 
-          <FixVerification f={f} ws={ws} run={run} branch={f.fix?.branch ?? latestJob?.branch ?? null} afterShot={data.after_shot} running={!!runningJob} prUrl={f.fix?.pr_url ?? latestJob?.pr_url ?? null} reproducing={!!liveRepro} onReproduceStarted={(job) => setReproJob(job.id)} />
+          <FixVerification groupBlockers={data.group_blockers} manuallyVerified={data.manually_verified} onUpdated={reload} regressions={data.regressions} f={f} ws={ws} run={run} branch={f.fix?.branch ?? latestJob?.branch ?? null} afterShot={data.after_shot} running={!!runningJob} prUrl={f.fix?.pr_url ?? latestJob?.pr_url ?? null} reproducing={!!liveRepro} onReproduceStarted={(job) => setReproJob(job.id)} />
 
           <Box head="Reproduction" chip={<Chip tone={f.reproduction.rate === '3/3' ? 'mint' : 'outline'}>{f.reproduction.rate ? `${f.reproduction.rate} replays` : 'visual only'}</Chip>}>
             <Repro f={f} chapters={chapters} activeStep={activeStep} onStep={seekStep} spec={data.spec} ws={ws} run={run} />
           </Box>
 
           <Box head="Details">
-            <Details f={f} />
+            <Details f={f} manuallyVerified={!!data.manually_verified} />
           </Box>
 
           <Transcript base={base} session={f.found_by.session} />
@@ -109,6 +110,7 @@ export function Bug() {
                 {liveRepro ? 'Reproduction window open' : '▶ Reproduce in a new window'}
               </Chamfer>
               {liveRepro && <ReproStatus id={liveRepro} onEnd={() => setReproJob(null)} onSaved={() => void reload()} />}
+              {canFix && <AttachSession base={base} />}
               {canFix ? (
                 <>
                   <Chamfer tone="green" onClick={() => setFixScope({ ids: [f.id], title: f.title })} disabled={!!runningJob}>
@@ -365,7 +367,7 @@ function Repro({ f, chapters, activeStep, onStep, spec, ws, run }: { f: Finding;
 }
 
 // ---------------- details ----------------
-function Details({ f }: { f: Finding }) {
+function Details({ f, manuallyVerified = false }: { f: Finding; manuallyVerified?: boolean }) {
   const b = f.confidence_breakdown;
   const parts = (['explorer', 'reviewer', 'detector', 'repro'] as const).filter((k) => b[k] != null);
   return (
@@ -489,8 +491,10 @@ function Details({ f }: { f: Finding }) {
             <dd className="mono">{f.fix.branch}</dd>
             <dt>Base</dt>
             <dd className="mono">{f.fix.base ?? '—'}</dd>
-            <dt>Verified</dt>
-            <dd>{f.fix.verified ? 'yes' : 'no'}</dd>
+            <dt>Automatic verification</dt>
+            <dd>{f.fix.verified ? 'yes' : 'incomplete'}</dd>
+            <dt>Manual verification</dt>
+            <dd>{manuallyVerified ? 'verified; ready for PR' : 'not recorded'}</dd>
             <dt>Fixed by</dt>
             <dd className="mono">{f.fix.fixed_by ?? '—'}</dd>
             <dt>PR</dt>

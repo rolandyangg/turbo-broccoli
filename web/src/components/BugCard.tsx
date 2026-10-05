@@ -4,13 +4,13 @@ import { fileUrl } from '../lib/api.ts';
 import { widthRange } from '../lib/format.ts';
 import { Arrow, BugGlyph, Chip, ConfidenceBar, FileIcon, SevChip, StatusChip } from './ui.tsx';
 import { WorkflowControls } from './Workflow.tsx';
-import { bugFixStatus, type BugPr } from '../lib/bugFixStatus.ts';
+import { bugFixStatus, type BugPr, type BugFixJob } from '../lib/bugFixStatus.ts';
 
 /** Greptile-style square card: mono header strip + tag chip, badge row + title, gray footer bar. */
-export function BugCard({ f, ws, run, prs, selected, onSelect, onWorkflow }: { f: Finding; ws: string; run: string; prs?: readonly BugPr[]; selected?: boolean; onSelect?: (on: boolean) => void; onWorkflow?: () => void }) {
+export function BugCard({ f, ws, run, prs, jobs, selected, onSelect, onWorkflow }: { f: Finding; ws: string; run: string; prs?: readonly BugPr[]; jobs?: readonly BugFixJob[]; selected?: boolean; onSelect?: (on: boolean) => void; onWorkflow?: () => void }) {
   const href = `/runs/${ws}/${encodeURIComponent(run)}/bugs/${f.id}`;
   const thumb = f.screenshots.crop ?? f.screenshots.annotated;
-  const fixStatus = bugFixStatus(f, prs);
+  const fixStatus = bugFixStatus(f, prs, jobs);
   let fixIcon = '↗';
   if (fixStatus?.kind === 'merged') fixIcon = '✓';
   if (fixStatus?.kind === 'closed') fixIcon = '×';

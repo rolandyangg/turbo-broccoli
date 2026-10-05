@@ -125,6 +125,13 @@ export const ConfidenceBreakdown = z.object({
   notes: z.array(z.string()).default([]),
 });
 
+export const LayoutRegression = z.object({
+  page: z.string(), width: z.number(), type: z.string(), selector: z.string().nullable(),
+  message: z.string(), text: z.string().default(''),
+  preview: z.string().nullable().default(null),
+});
+export type LayoutRegression = z.infer<typeof LayoutRegression>;
+
 export const Finding = z.object({
   id: z.string(), // BB-0007
   root_cause_id: z.string().nullable().default(null),
@@ -216,6 +223,7 @@ export const Finding = z.object({
       flags: z.array(z.string()).default([]),
       /** Publishing was held back because the fix isn't fully verified. */
       blocked: z.boolean().default(false),
+      manual_review: z.object({ head_commit: z.string(), evidence_at: z.string(), dismissed: z.array(z.string()), verified_at: z.string().nullable() }).nullable().optional(),
       /** Screenshot chosen by the person from a live fixed-version reproduction. */
       manual_after: z.object({ path: z.string(), at: z.string(), job_id: z.string(), url: z.string(), viewport: z.object({ width: z.number(), height: z.number() }).nullable() }).nullable().default(null),
       /** How the fix was checked, and the after-fix evidence (paths relative to the run dir). */
@@ -227,6 +235,7 @@ export const Finding = z.object({
           checks: z.array(z.object({ browser: z.string(), width: z.number(), height: z.number(), present: z.boolean().nullable(), error: z.string().nullable(), gesture: z.object({ present: z.boolean().nullable(), reason: z.string(), page_moved_px: z.number(), container_moved_px: z.number(), reachable: z.boolean(), over: z.string().nullable() }).nullable().optional() })).default([]),
           review: z.object({ fixed: z.boolean(), confidence: z.number(), reasoning: z.string() }).nullable().default(null),
           after: z.object({ annotated: z.string().nullable(), crop: z.string().nullable(), full: z.string().nullable(), element_found: z.boolean() }).nullable().default(null),
+          regressions: z.array(LayoutRegression).optional(),
           after_video: z.object({ mp4: z.string().nullable(), gif: z.string().nullable(), filmstrip: z.string().nullable() }).nullable().default(null),
           at: z.string(),
         })

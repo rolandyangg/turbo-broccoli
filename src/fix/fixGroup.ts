@@ -1,3 +1,6 @@
+import { manualReviewValid } from './manualReview.js';
+import { annotateDefect } from '../triage/annotate.js';
+import type { LayoutRegression } from '../store/schema.js';
 import { fixJobKind } from '../jobs/kinds.js';
 import { existsSync, mkdirSync, copyFileSync, symlinkSync, writeFileSync, readFileSync, realpathSync, readdirSync } from 'node:fs';
 import { join, basename, dirname, relative } from 'node:path';
@@ -206,12 +209,15 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     let feedback = '';
     let after: VerifyResult[] = [];
     let regressions: string[] = [];
+    let regressionDetails: LayoutRegression[] = [];
     let agentSummary = '';
     let attempt = 0;
     // Continue: check the branch as it stands first; only bring the agent back if the bug is still there.
     let skipAgent = false;
     if (keep) {
       after = selected.map((f) => savedResult(f));
+      regressionDetails = selected.flatMap((f) => f.fix?.verification?.regressions ?? []);
+      regressions = [...new Set(regressionDetails.map((r) => `${r.page} @${r.width}px: new ${r.type} on ${r.selector} — ${r.message}`))];
       skipAgent = true;
       agentSummary = (await git(worktree, ['log', '-1', '--format=%B', branch])).stdout.trim();
       say('verify:continue', `Saved verification: ${after.map((a) => `${a.id}=${label(a)}`).join(' ')}`, 'info', { after });
@@ -258,14 +264,28 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       after = [];
       for (const f of selected) after.push(await verifyFinding(f, reviewed(attempt)));
       regressions = [];
+      regressionDetails = [];
       for (const p of touchedPages) {
-        const snap = await pageSnapshot(p, vo);
-        for (const [k, c] of snap) if (!baselineSnap.get(p)!.has(k)) regressions.push(`${p} @${k.split('|')[0]}px: new ${c.type} on ${c.selector} — ${c.message}`);
+        await pageSnapshot(p, { ...vo, onCandidate: async (key, candidate, page) => {
+          if (baselineSnap.get(p)!.has(key)) return;
+          const width = Number(key.split('|')[0]);
+          regressions.push(`${p} @${width}px: new ${candidate.type} on ${candidate.selector} — ${candidate.message}`);
+          const stem = join(assetsDir, `regression-${attempt}-${regressionDetails.length + 1}`);
+          let preview: string | null = null;
+          try {
+            await annotateDefect(page, { selector: candidate.selector, relatedSelector: candidate.related?.selector,
+              fallbackBBox: candidate.bbox, label: candidate.message,
+              files: { annotated: `${stem}.png`, crop: `${stem}-crop.png`, full: `${stem}-full.png` } });
+            preview = relative(o.runDir, `${stem}-crop.png`);
+          } catch { /* Keep the description even when a screenshot cannot be captured. */ }
+          regressionDetails.push({ page: p, width, type: candidate.type, selector: candidate.selector,
+            message: candidate.message, text: candidate.text, preview });
+        } });
       }
       const still = after.filter((a) => a.present);
       const diff = (await git(worktree, ['diff', '--stat', baseSha])).stdout.trim();
       const ok = !!diff && !still.length && !regressions.length;
-      say(`verify:${attempt}`, `Verify: ${after.map((a) => `${a.id}=${label(a)}`).join(' ')}; regressions: ${regressions.length}; diff: ${diff.split('\n').pop() || 'none'}`, ok && after.every((a) => a.present === false) ? 'success' : 'warn', { after, regressions, diff_stat: diff });
+      say(`verify:${attempt}`, `Verify: ${after.map((a) => `${a.id}=${label(a)}`).join(' ')}; regressions: ${regressions.length}; diff: ${diff.split('\n').pop() || 'none'}`, ok && after.every((a) => a.present === false) ? 'success' : 'warn', { after, regressions, regression_details: regressionDetails, diff_stat: diff });
       for (const a of after) if (a.review) say(`verify:${attempt}`, `Visual review of ${a.id}: ${a.review.fixed ? 'looks fixed' : 'still looks broken'} (${Math.round(a.review.confidence * 100)}%): ${a.review.reasoning}`, a.review.fixed ? 'info' : 'warn');
       if (!diff) feedback = 'No files were changed. Make the fix.';
       else if (still.length || regressions.length)
@@ -277,7 +297,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       else break;
     }
     // Verified means every check shows the bug gone; "couldn't tell" never counts as fixed.
-    const verified = after.length > 0 && after.every((a) => a.present === false) && regressions.length === 0;
+    const verified = keep ? selected.every((f) => f.fix?.verified) : after.length > 0 && after.every((a) => a.present === false) && regressions.length === 0;
     const inconclusive = after.filter((a) => a.present === null).map((a) => a.id);
     if (inconclusive.length) say('verify', `Couldn't confirm ${inconclusive.join(', ')} automatically: compare the before/after on the bug page, or reproduce it on the fixed version`, 'warn');
     const diff = (await git(worktree, ['diff', '--stat', baseSha])).stdout.trim();
@@ -311,6 +331,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         checks: a.checks,
         review: a.review,
         after: shot ? { annotated: rel(shotFile), crop: rel(shotFile.replace(/\.png$/, '-crop.png')), full: rel(shotFile.replace(/\.png$/, '-full.png')), element_found: shot.found } : null,
+        regressions: regressionDetails,
         after_video: video,
         at: new Date().toISOString(),
       });
@@ -318,7 +339,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
     if (!keep) say('evidence', `Captured after-fix evidence${[...evidence.values()].some((e) => e.after_video) ? ' (stills and video)' : ''}`, 'info', { after: Object.fromEntries(evidence) });
 
     // Anything that keeps this fix from being fully trusted, in words a reviewer can act on.
-    const flags = verificationFlags(selected, after, evidence, regressions);
+    const flags = keep ? [...new Set(selected.flatMap((f) => f.fix?.flags ?? []))] : verificationFlags(selected, after, evidence, regressions);
     if (flags.length) say('verify', `Flags:\n${flags.map((x) => `- ${x}`).join('\n')}`, 'warn', { flags });
 
     if (mode === 'verify') {
@@ -363,6 +384,8 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       if (c.exitCode !== 0) throw new Error(`git commit failed: ${c.stderr || c.stdout}`);
     }
     const sha = (await git(worktree, ['rev-parse', 'HEAD'])).stdout.trim();
+    const manualVerified = keep && selected.every((f) => manualReviewValid(f, sha));
+    if (keep && selected.some((f) => f.fix?.manual_review?.verified_at) && !manualVerified) throw new Error('Manual approval is outdated. Review the latest commit and evidence before publishing.');
     say('commit', `${skipAgent ? 'Fix already committed' : 'Committed'} ${sha.slice(0, 8)} on ${branch}`, 'success', { sha, message: commitMsg.split('\n')[0] });
     const touched = (await git(worktree, ['diff', '--name-only', baseSha, 'HEAD'])).stdout.split('\n').filter(Boolean);
     const overlap = touched.filter((f) => dirty.includes(f));
@@ -383,7 +406,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       // GitHub itself once the branch is pushed (see attachImages below).
       let images: Map<string, string> | null = null;
       const bodyFile = join(assetsDir, 'pr-body.md');
-      const writeBody = () => writeFileSync(bodyFile, prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images, attempts: attempt, flags, manualOverride: !!o.publishUnverified && !verified, evidenceAt: Object.fromEntries([...evidence].map(([id, ev]) => [id, ev.at])) }));
+      const writeBody = () => writeFileSync(bodyFile, prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images, attempts: attempt, flags, manualVerified, manualOverride: !!o.publishUnverified && !verified, evidenceAt: Object.fromEntries([...evidence].map(([id, ev]) => [id, ev.at])) }));
       writeBody();
       const prArgs = ['pr', 'create', '--base', baseBranch, '--head', branch, '--title', `fix(ui): ${clip(title, 90)}`, '--body-file', bodyFile, ...(o.draft ? ['--draft'] : [])];
       // Publishing can fail for reasons unrelated to the fix (network, auth, GitHub limits). The verified commit is
@@ -418,7 +441,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
         o.keepWorktree = true;
       }
     } else {
-      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images: null, attempts: attempt, flags, manualOverride: !!o.publishUnverified && !verified, evidenceAt: Object.fromEntries([...evidence].map(([id, ev]) => [id, ev.at])) }));
+      writeFileSync(join(assetsDir, 'pr-body.md'), prBody({ selected, groups: [...groups.values()], alsoFixed, before, after, regressions, verified, technical, runId: info.run_id, images: null, attempts: attempt, flags, manualVerified, manualOverride: !!o.publishUnverified && !verified, evidenceAt: Object.fromEntries([...evidence].map(([id, ev]) => [id, ev.at])) }));
       say('commit', `Not pushed (no PR requested). PR description draft saved.`, 'info', { pr_body: relative(o.runDir, join(assetsDir, 'pr-body.md')) });
     }
 
@@ -430,7 +453,7 @@ async function fixInner(o: FixOptions, rep: JobReporter, say: Say) {
       const isAlso = alsoFixed.includes(f.id);
       if (!isSel && !isAlso) continue;
       f.status = 'fixing';
-      f.fix = { branch, base: baseBranch, pr_url: prUrl, verified: isSel ? verified : true, fixed_by: isSel ? scopeLabel : `${scopeLabel} (side effect)`, job_id: rep.status.id, at: now, verification: evidence.get(f.id) ?? null, flags: isSel ? flags.filter((x) => x.startsWith(`${f.id}:`) || !/^BB-\d+:/.test(x)) : [], blocked: isSel && blocked, manual_after: keep ? (f.fix?.manual_after ?? null) : null };
+      f.fix = { branch, base: baseBranch, pr_url: prUrl, verified: isSel ? verified : true, fixed_by: isSel ? scopeLabel : `${scopeLabel} (side effect)`, job_id: rep.status.id, at: now, verification: evidence.get(f.id) ?? null, flags: isSel ? flags.filter((x) => x.startsWith(`${f.id}:`) || !/^BB-\d+:/.test(x)) : [], blocked: isSel && blocked, manual_review: keep ? (f.fix?.manual_review ?? null) : null, manual_after: keep ? (f.fix?.manual_after ?? null) : null };
       memory.setBugStatus(f.fingerprint, 'fixing', info.run_id, f.id);
     }
     writeFindings(o.runDir, { run_id: fresh.run_id, target: fresh.target, generated_at: fresh.generated_at, groups: fresh.groups });

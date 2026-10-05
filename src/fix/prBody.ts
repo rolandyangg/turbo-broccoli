@@ -1,3 +1,4 @@
+import { candidateKey } from './manualReview.js';
 import type { Finding, RootCauseGroup } from '../store/schema.js';
 import type { VerifyResult } from './verify.js';
 
@@ -25,7 +26,10 @@ export function prBody(d: { selected: Finding[]; groups: RootCauseGroup[]; alsoF
   if (d.alsoFixed.length) lines.push(`## Also resolved (same root cause)`, '', d.alsoFixed.map((x) => `- ${x}`).join('\n'), '');
   const g = d.groups.map((x) => `- ${x.id}: ${x.summary}${x.fix_plan ? ` — plan: ${x.fix_plan}` : ''}`).join('\n');
   lines.push(`## Root-cause group`, '', g, '');
-  lines.push(...verificationSection(d, fullyVerified));
+  const dismissedCandidates = d.manualVerified ? [...new Set(d.selected.flatMap((f) => (f.fix?.verification?.regressions ?? [])
+    .filter((r) => f.fix?.manual_review?.dismissed.includes(candidateKey(r)))
+    .map((r) => `${r.page} @${r.width}px: ${r.message}`)))] : [];
+  lines.push(...verificationSection({ ...d, dismissedCandidates }, fullyVerified));
   lines.push(`Found and fixed by bugbash (run \`${d.runId}\`).`, '', '🤖 Generated with [Claude Code](https://claude.com/claude-code)');
   return lines.join('\n');
 }
@@ -38,7 +42,7 @@ export const MANUAL_TAG = '👤';
  * The Verification section, always in this shape: automatic results first, then (when the person confirmed it) their
  * manual verification, then (when it applies) the note that publishing was manually approved despite incomplete checks.
  */
-export function verificationSection(d: { verified: boolean; flags: string[]; regressions: string[]; attempts: number; manualVerified?: boolean; manualOverride?: boolean }, fullyVerified = d.verified && d.flags.length === 0): string[] {
+export function verificationSection(d: { verified: boolean; flags: string[]; regressions: string[]; attempts: number; manualVerified?: boolean; manualOverride?: boolean; dismissedCandidates?: string[] }, fullyVerified = d.verified && d.flags.length === 0): string[] {
   const out = ['## Verification', '', `### ${AUTO_TAG} Automated verification`, ''];
   if (fullyVerified) out.push(`✅ Every bug checked out as fixed (detector replays at each affected size and browser, or a visual before/after review where noted), and the touched pages have no new layout defects ${d.attempts > 0 ? `(${d.attempts} attempt${d.attempts > 1 ? 's' : ''})` : '(latest saved verification)'}.`, '');
   else {
@@ -49,6 +53,7 @@ export function verificationSection(d: { verified: boolean; flags: string[]; reg
   if (d.manualVerified || d.manualOverride) {
     out.push(`### ${MANUAL_TAG} Manual verification`, '');
     if (d.manualVerified) out.push('✅ The user reports manually verifying the fix (they reviewed the before/after) and approved noting it here.', '');
+    if (d.manualVerified && d.dismissedCandidates?.length) out.push('Layout candidate warnings explicitly reviewed and dismissed by the user:', ...d.dismissedCandidates.map((r) => `- ${r}`), '');
     if (d.manualOverride) out.push('⚠️ Published despite incomplete automatic verification, with the user\'s explicit approval.', '');
   }
   return out;

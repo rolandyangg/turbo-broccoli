@@ -1,3 +1,4 @@
+import { FixRunDialog } from './Actions.tsx';
 import { MarkdownDescription } from './MarkdownPreview.tsx';
 import { BranchPanel, OpenPullRequestButton } from './Jobs.tsx';
 import { useState } from 'react';
@@ -211,7 +212,8 @@ function UpdatePrBody({ p, onUpdated }: { p: PrRow; onUpdated: () => Promise<voi
 }
 
 /** Existing PR details belong beside the bug evidence, outside the action sidebar. */
-export function BugPullRequest({ ws, run, id, url, body, branch, base, readyToPublish = false, onUpdated }: { ws: string; run: string; id: string; url: string | null; body: string | null; branch: string | null; base?: string | null; readyToPublish?: boolean; onUpdated: () => Promise<void> }) {
+export function BugPullRequest({ manuallyVerified = false, ws, run, id, url, body, branch, base, readyToPublish = false, onUpdated }: { manuallyVerified?: boolean; ws: string; run: string; id: string; url: string | null; body: string | null; branch: string | null; base?: string | null; readyToPublish?: boolean; onUpdated: () => Promise<void> }) {
+  const [manualPublishOpen, setManualPublishOpen] = useState(false);
   const { data, error, reload } = useApi<PrData>(`/prs?ws=${encodeURIComponent(ws)}&run=${encodeURIComponent(run)}`, { pollMs: 60_000 });
   const p = data?.prs.find((p) => p.url === url || (!url && p.bugs.some((b) => b.id === id)));
   if (!p && !url) {
@@ -219,8 +221,9 @@ export function BugPullRequest({ ws, run, id, url, body, branch, base, readyToPu
     return (
       <Box head="Pull request" chip={<Chip tone="mint">Ready to publish</Chip>}>
         <div className="stack" style={{ ['--gap' as string]: '12px' }}>
-          <p className="small muted" style={{ margin: 0 }}>The fix is verified. Open a pull request to re-check the fix, commit changes, and push the branch.</p>
-          <div><OpenPullRequestButton ws={ws} run={run} ids={[id]} branch={branch} base={base} /></div>
+          <p className="small muted" style={{ margin: 0 }}>{manuallyVerified ? 'Manually verified and ready for PR. Creating the PR preserves the evidence you reviewed.' : 'The fix is verified. Open a pull request to re-check the fix, commit changes, and push the branch.'}</p>
+          <div>{manuallyVerified ? <Chamfer small tone="green" onClick={() => setManualPublishOpen(true)}>Create PR</Chamfer> : <OpenPullRequestButton ws={ws} run={run} ids={[id]} branch={branch} base={base} />}</div>
+          {manualPublishOpen && <FixRunDialog manualPublish ws={ws} run={run} ids={[id]} branch={branch} mode="publish-anyway" defaults={{ base, draft: true }} onClose={() => setManualPublishOpen(false)} />}
         </div>
       </Box>
     );

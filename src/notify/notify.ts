@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { execa } from 'execa';
+import { sendMacNotification } from './macos.js';
 import { z } from 'zod';
 
 /**
@@ -111,7 +111,8 @@ export async function notify(n: NotifyInput, opts: { only?: ('macos' | 'inbox' |
   if (muted()) return { muted: true, result };
   const s = readSettings();
   if (!opts.force && !s.events[n.event]) return { muted: false, result: { event: 'off' } };
-  const full: Notification = { id: `N-${Date.now().toString(36)}-${randomBytes(2).toString('hex')}`, at: new Date().toISOString(), event: n.event, level: n.level ?? 'info', title: n.title.slice(0, 200), body: n.body.slice(0, 1200), path: n.path ?? null, read: false };
+  const path = process.env.BUGBASH_JOB_ID ? `/jobs/${encodeURIComponent(process.env.BUGBASH_JOB_ID)}` : n.path ?? null;
+  const full: Notification = { id: `N-${Date.now().toString(36)}-${randomBytes(2).toString('hex')}`, at: new Date().toISOString(), event: n.event, level: n.level ?? 'info', title: n.title.slice(0, 200), body: n.body.slice(0, 1200), path, read: false };
   const url = full.path ? s.web_url.replace(/\/$/, '') + full.path : null;
   const want = (c: 'macos' | 'inbox' | 'slack') => (!opts.only || opts.only.includes(c)) && (opts.force ? true : s.channels[c]);
 
@@ -127,16 +128,10 @@ export async function notify(n: NotifyInput, opts: { only?: ('macos' | 'inbox' |
 
   if (want('macos')) {
     if (process.platform !== 'darwin') result.macos = 'not macOS';
-    else {
-      // terminal-notifier (if installed) makes the notification open the link; osascript can't.
-      const tn = await execa('terminal-notifier', ['-title', 'TurboBrocolli', '-subtitle', full.title, '-message', full.body.slice(0, 240) || ' ', ...(url ? ['-open', url] : []), '-group', `bugbash-${full.event}`], { reject: false, timeout: 5000 }).catch(() => null);
-      if (tn && tn.exitCode === 0) result.macos = 'sent';
-      else {
-        const esc = (x: string) => x.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        const r = await execa('osascript', ['-e', `display notification "${esc(full.body.slice(0, 240))}" with title "TurboBrocolli" subtitle "${esc(full.title)}"`], { reject: false, timeout: 5000 }).catch((e) => ({ exitCode: 1, stderr: String(e) }));
-        result.macos = r.exitCode === 0 ? 'sent' : `osascript failed: ${String(r.stderr).slice(0, 120)}`;
-      }
-    }
+    else result.macos = await sendMacNotification(home(), {
+      id: full.id, title: full.title, body: full.body.slice(0, 240),
+      url: url ?? s.web_url.replace(/\/$/, '') + '/jobs',
+    });
   } else result.macos = 'off';
 
   if (want('slack')) {

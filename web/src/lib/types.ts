@@ -98,6 +98,9 @@ export interface RunDetail {
 }
 
 export interface BugDetail {
+  group_blockers?: import('../../../src/fix/groupBlockers.ts').GroupFixBlocker[];
+  manually_verified?: boolean;
+  regressions?: import('../../../src/store/schema.ts').LayoutRegression[];
   finding: Finding;
   group: Omit<RootCauseGroup, 'findings'> & { findings: Pick<Finding, 'id' | 'title' | 'status' | 'severity' | 'type' | 'page'>[] };
   groups: { id: string; summary: string; count: number }[];

@@ -1,4 +1,8 @@
+import { groupFixBlockers } from '../../src/fix/groupBlockers.ts';
+import { layoutCandidates, reviewHead, saveManualReview } from './manualReview.ts';
+import { manualReviewValid } from '../../src/fix/manualReview.ts';
 import { isFixJob, fixJobKind } from '../../src/jobs/kinds.ts';
+import { attachment, launchAttachment } from './attach.ts';
 import { randomUUID } from 'node:crypto';
 import { readCapture } from '../../src/repro/capture.ts';
 import { updatePrBody } from './prBody.ts';
@@ -90,7 +94,7 @@ app.post('/runs/:ws/:run/rename', async (c) => {
   return c.json({ run: info.run_id, name: info.name ?? null });
 });
 
-app.get('/runs/:ws/:run/bugs/:id', (c) => {
+app.get('/runs/:ws/:run/bugs/:id', async (c) => {
   const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
   const id = c.req.param('id').toUpperCase();
   const ff = readFindings(dir);
@@ -100,7 +104,15 @@ app.get('/runs/:ws/:run/bugs/:id', (c) => {
   const fixDir = hit.finding.fix?.branch ? join('fixes', hit.finding.fix.branch.replace(/\//g, '__')) : null;
   const afterShot = fixDir && existsSync(join(dir, fixDir, `${id}-after.png`)) ? join(fixDir, `${id}-after.png`) : null;
   const prBody = fixDir && existsSync(join(dir, fixDir, 'pr-body.md')) ? readFileSync(join(dir, fixDir, 'pr-body.md'), 'utf8') : null;
+  const regressions = layoutCandidates(dir, hit.finding);
+  const manualVerified = hit.finding.fix?.manual_review?.verified_at ? await reviewHead(dir, hit.finding).then((head) => manualReviewValid(hit.finding, head)).catch(() => false) : false;
+  const branchFindings = ff!.groups.flatMap((g) => g.findings);
+  const reviewCommit = branchFindings.some((f) => f.fix?.branch === hit.finding.fix?.branch && f.fix?.manual_review) ? await reviewHead(dir, hit.finding).catch(() => undefined) : undefined;
+  const groupBlockers = groupFixBlockers(hit.finding, branchFindings, reviewCommit);
   return c.json({
+    group_blockers: groupBlockers,
+    regressions,
+    manually_verified: manualVerified,
     finding: hit.finding,
     group: { ...hit.group, findings: hit.group.findings.map((f) => ({ id: f.id, title: f.title, status: f.status, severity: f.severity, type: f.type, page: f.page })) },
     groups: ff!.groups.map((g) => ({ id: g.id, summary: g.summary, count: g.findings.length })),
@@ -113,9 +125,29 @@ app.get('/runs/:ws/:run/bugs/:id', (c) => {
   });
 });
 
+app.post('/runs/:ws/:run/bugs/:id/manual-review', async (c) => {
+  return c.json(await saveManualReview(runDirOf(c.req.param('ws'), c.req.param('run')), c.req.param('id').toUpperCase(), await c.req.json()));
+});
+
 app.get('/runs/:ws/:run/bugs/:id/transcript', (c) => {
   const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
   return c.json(transcriptFor(dir, findFinding(dir, c.req.param('id').toUpperCase())));
+});
+
+app.get('/runs/:ws/:run/bugs/:id/attach', async (c) => {
+  return c.json(await attachment(runDirOf(c.req.param('ws'), c.req.param('run')), c.req.param('id').toUpperCase()));
+});
+
+app.post('/runs/:ws/:run/bugs/:id/attach', async (c) => {
+  const origin = c.req.header('origin');
+  if (!origin || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(origin).hostname) || c.req.header('sec-fetch-site') === 'cross-site') {
+    throw new HttpError(403, 'Terminal launch requires a local browser origin.');
+  }
+  const body = await c.req.json<{ commands?: string }>();
+  const plan = await attachment(runDirOf(c.req.param('ws'), c.req.param('run')), c.req.param('id').toUpperCase());
+  if (body.commands !== plan.commands) throw new HttpError(409, 'The branch or worktree changed. Close and reopen Attach to session to review the updated commands.');
+  await launchAttachment(plan.commands);
+  return c.json({ launched: true });
 });
 
 app.get('/runs/:ws/:run/sessions/:session/tail', (c) => {
@@ -132,12 +164,21 @@ app.get('/runs/:ws/:run/files/*', (c) => {
 // ---------- actions ----------
 app.post('/runs/:ws/:run/fix', async (c) => {
   const dir = runDirOf(c.req.param('ws'), c.req.param('run'));
-  const b = await c.req.json<{ ids: string[]; pr?: boolean; draft?: boolean; base?: string; maxAttempts?: number; keepWorktree?: boolean; confirmPush?: boolean; mode?: string; branch?: string; instructions?: string; publishUnverified?: boolean; confirmUnverified?: boolean; keepEvidence?: boolean }>();
+  const b = await c.req.json<{ ids: string[]; pr?: boolean; draft?: boolean; base?: string; maxAttempts?: number; keepWorktree?: boolean; confirmPush?: boolean; mode?: string; branch?: string; instructions?: string; publishUnverified?: boolean; confirmUnverified?: boolean; keepEvidence?: boolean; manualReview?: boolean }>();
+  if (b.instructions !== undefined && (typeof b.instructions !== 'string' || b.instructions.length > 4000)) throw new HttpError(400, 'instructions must be text (4000 characters max)');
+  if (b.manualReview) {
+    if (!(b.pr && b.keepEvidence && b.publishUnverified && b.confirmUnverified && b.mode === 'continue')) throw new HttpError(400, 'Manual publishing must keep the reviewed evidence');
+    const ff = readFindings(dir);
+    for (const id of b.ids ?? []) {
+      const f = ff && findById(ff, id)?.finding;
+      if (!f || f.fix?.branch !== b.branch || !manualReviewValid(f, await reviewHead(dir, f))) throw new HttpError(409, 'Manual approval is missing or outdated. Review this fix again');
+    }
+    if (!b.ids?.length) throw new HttpError(400, 'Choose a reviewed finding');
+  }
   if (b.publishUnverified && !(b.pr && b.confirmUnverified)) throw new HttpError(400, 'Publishing an unverified fix needs pr and an explicit confirmUnverified');
   if (b.keepEvidence && !(b.publishUnverified && b.mode === 'continue')) throw new HttpError(400, 'keepEvidence only applies when publishing a continued fix anyway');
   if (b.keepEvidence && b.instructions?.trim()) throw new HttpError(400, "Instructions change the fix, so its pictures can't be kept");
   if (b.mode !== undefined && !['new', 'retry', 'continue', 'verify'].includes(b.mode)) throw new HttpError(400, 'mode must be new, retry, continue or verify');
-  if (b.instructions !== undefined && (typeof b.instructions !== 'string' || b.instructions.length > 4000)) throw new HttpError(400, 'instructions must be text (4000 characters max)');
   if (b.branch !== undefined && !/^bugbash\/[\w./-]+$/.test(b.branch)) throw new HttpError(400, 'Bad branch (must be a bugbash/… branch)');
   const ids = (b.ids ?? []).map((x) => String(x).toUpperCase());
   if (!ids.length || !ids.every((x) => ID.test(x))) throw new HttpError(400, 'ids must be BB-/RC- ids');
@@ -483,6 +524,7 @@ app.post('/jobs/:id/captures/:capture/replace-after', (c) => {
   if (listJobs({ runDir: j.run_dir }).some((job) => isFixJob(job) && job.alive && job.branch === j.branch)) throw new HttpError(409, 'Wait for the fix or verification job to finish');
   if (!existsSync(safePath(j.run_dir, capture.path))) throw new HttpError(409, 'The screenshot is no longer available');
   f.fix.manual_after = { ...capture, job_id: j.id };
+  f.fix.manual_review = null;
   writeFindings(j.run_dir, ff!);
   return c.json({ saved: true });
 });

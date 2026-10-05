@@ -122,7 +122,7 @@ export function launchJob(kind: JobKind, args: string[], init: Partial<JobStatus
     cwd: REPO_ROOT,
     detached: true,
     stdio: ['ignore', logFd, logFd],
-    env: { ...process.env, BUGBASH_JOB_DIR: WEB_JOBS, BUGBASH_MODEL_SELECTION: join(dir, 'model-selection.json'), FORCE_COLOR: '0' },
+    env: { ...process.env, BUGBASH_JOB_DIR: WEB_JOBS, BUGBASH_JOB_ID: id, BUGBASH_MODEL_SELECTION: join(dir, 'model-selection.json'), FORCE_COLOR: '0' },
   });
   closeSync(logFd);
   placeholder.pid = child.pid ?? 0;
@@ -143,7 +143,7 @@ export function followupJob(id: string, text: string): JobView {
   const logFd = openSync(join(job.dir, 'log.txt'), 'a');
   const child = spawn(process.execPath, ['--import', 'tsx', join(here, 'jobConversation.ts'), job.dir], {
     cwd: REPO_ROOT, detached: true, stdio: ['ignore', logFd, logFd],
-    env: { ...process.env, BUGBASH_JOB_DIR: dirname(job.dir), BUGBASH_INBOX: join(job.dir, 'messages.jsonl'), BUGBASH_MODEL_SELECTION: join(job.dir, 'model-selection.json'), FORCE_COLOR: '0' },
+    env: { ...process.env, BUGBASH_JOB_DIR: dirname(job.dir), BUGBASH_JOB_ID: id, BUGBASH_INBOX: join(job.dir, 'messages.jsonl'), BUGBASH_MODEL_SELECTION: join(job.dir, 'model-selection.json'), FORCE_COLOR: '0' },
   });
   closeSync(logFd);
   status.pid = child.pid ?? 0;
